@@ -9,7 +9,7 @@ class AppConfig {
   /// running the browser, which is the same machine in local development.
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:5000/api',
+    defaultValue: 'http://10.0.0.28:5000/api',
   );
 
   /// Brand colors taken from the main Legal Services app.

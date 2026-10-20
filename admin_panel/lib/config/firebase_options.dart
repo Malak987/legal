@@ -38,23 +38,24 @@ class DefaultFirebaseOptions {
   //  TODO: Replace the placeholder values below with YOUR project's
   //  values from the Firebase Console (Project Settings > General).
   // ---------------------------------------------------------------
+
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'YOUR_WEB_API_KEY',
-    appId: 'YOUR_WEB_APP_ID',
-    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
-    projectId: 'YOUR_PROJECT_ID',
-    authDomain: 'YOUR_PROJECT_ID.firebaseapp.com',
-    storageBucket: 'YOUR_PROJECT_ID.appspot.com',
+    apiKey: 'AIzaSyD73nJA-v9JhmVLE_MUhr-LNCZ9WYdDPwo',
+    appId: '1:248056839217:web:ee1094553c01a51eefe910',
+    messagingSenderId: '248056839217',
+    projectId: 'legal-102026',
+    authDomain: 'legal-102026.firebaseapp.com',
+    storageBucket: 'legal-102026.firebasestorage.app',
+    measurementId: 'G-0S9CQPJRE5',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'YOUR_ANDROID_API_KEY',
-    appId: 'YOUR_ANDROID_APP_ID',
-    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
-    projectId: 'YOUR_PROJECT_ID',
-    storageBucket: 'YOUR_PROJECT_ID.appspot.com',
+    apiKey: 'AIzaSyBlx1JNfFQ0o6pZmYo1bwf4ENAQ0Bu_6_U',
+    appId: '1:248056839217:android:1bb803c519e5648cefe910',
+    messagingSenderId: '248056839217',
+    projectId: 'legal-102026',
+    storageBucket: 'legal-102026.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'YOUR_IOS_API_KEY',
     appId: 'YOUR_IOS_APP_ID',

@@ -20,7 +20,7 @@ class ApiClient {
   /// - Physical device   -> use your computer's LAN IP, e.g. http://192.168.1.10:5000/api
   static const _defaultBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:5000/api',
+    defaultValue: 'http://10.0.0.28:5000/api',
   );
 
   final String baseUrl;
