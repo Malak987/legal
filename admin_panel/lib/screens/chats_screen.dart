@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../widgets/common.dart';
 
 /// Simple chat log viewer (read-only messages list).
@@ -24,7 +25,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   Future<List<dynamic>> _fetch() async {
     final res = await AuthProvider.of(context).api.get('chats');
-    return (res['data'] as List).cast<dynamic>();
+    return listDataOf(res);
   }
 
   void _reload() => setState(() => _future = _fetch());
@@ -112,35 +113,78 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 }
 
-class _MessagesPane extends StatelessWidget {
+class _MessagesPane extends StatefulWidget {
   const _MessagesPane({required this.chatId});
+
   final String chatId;
 
   @override
+  State<_MessagesPane> createState() => _MessagesPaneState();
+}
+
+class _MessagesPaneState extends State<_MessagesPane> {
+  late Future<Map<String, dynamic>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _fetch();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MessagesPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Re-request only when the conversation actually changes. The future is
+    // cached otherwise, so an unrelated rebuild (auth state, resize, parent
+    // rebuild) cannot fire a duplicate HTTP request - previously the call was
+    // created inline inside build() and re-issued on every single frame.
+    if (oldWidget.chatId != widget.chatId) {
+      _future = _fetch();
+    }
+  }
+
+  Future<Map<String, dynamic>> _fetch() async {
+    final res =
+        await AuthProvider.of(context).api.get('chats/${widget.chatId}');
+    return objectDataOf(res);
+  }
+
+  void _reload() => setState(() => _future = _fetch());
+
+  @override
   Widget build(BuildContext context) {
-    return FutureBuilder<dynamic>(
-      future: AuthProvider.of(context).api.get('chats/$chatId'),
+    // Non-listening read: used to align the bubbles with the signed-in admin.
+    final myUid = AuthProvider.of(context).session?.uid;
+
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _future,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const LoadingView();
+          return const LoadingView(message: 'Loading messages...');
         }
         if (snapshot.hasError) {
-          return ErrorBanner(message: '${snapshot.error}');
+          return ErrorBanner(message: '${snapshot.error}', onRetry: _reload);
         }
-        final data = snapshot.data['data'] as Map<String, dynamic>;
-        final messages = (data['messages'] as List).cast<Map<String, dynamic>>();
+
+        final data = snapshot.data ?? const <String, dynamic>{};
+        final messages = (data['messages'] as List? ?? const [])
+            .whereType<Map>()
+            .map(Map<String, dynamic>.from)
+            .toList();
+
         if (messages.isEmpty) {
           return const EmptyState(icon: Icons.chat, message: 'No messages yet');
         }
+
         return Column(
           children: [
             Container(
               width: double.infinity,
               color: AppTheme.primary,
               padding: const EdgeInsets.all(16),
-              child: Text(
+              child: const Text(
                 'Conversation',
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
                 ),
@@ -152,7 +196,9 @@ class _MessagesPane extends StatelessWidget {
                 itemCount: messages.length,
                 itemBuilder: (context, i) {
                   final m = messages[i];
-                  final mine = m['senderId'] == 'client-001';
+                  // Compare against the signed-in admin's uid instead of a
+                  // hardcoded demo id, so bubbles align for the real account.
+                  final mine = myUid != null && m['senderId'] == myUid;
                   return Align(
                     alignment:
                         mine ? Alignment.centerRight : Alignment.centerLeft,

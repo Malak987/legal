@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../widgets/common.dart';
 
 /// Manage users with a sortable data table.
@@ -16,6 +18,9 @@ class UsersScreen extends StatefulWidget {
 class _UsersScreenState extends State<UsersScreen> {
   late Future<List<AppUser>> _future;
   String _search = '';
+
+  /// Debounces search input so one keystroke does not equal one request.
+  Timer? _searchDebounce;
   String? _roleFilter;
 
   @override
@@ -24,16 +29,20 @@ class _UsersScreenState extends State<UsersScreen> {
     _future = _fetch();
   }
 
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
   Future<List<AppUser>> _fetch() async {
     final res = await AuthProvider.of(context).api.get('users', query: {
       'page': '1',
-      'limit': '300',
+      'limit': '$kMaxPageSize',
       if (_search.isNotEmpty) 'search': _search,
       if (_roleFilter != null && _roleFilter!.isNotEmpty) 'role': _roleFilter!,
     });
-    final data = res['data'] as Map<String, dynamic>;
-    final items = (data['items'] as List).cast<Map<String, dynamic>>();
-    return items.map(AppUser.fromJson).toList();
+    return itemsOf(res).map(AppUser.fromJson).toList();
   }
 
   void _reload() => setState(() => _future = _fetch());
@@ -85,7 +94,9 @@ class _UsersScreenState extends State<UsersScreen> {
                   hint: 'Search by name, email or phone...',
                   onChanged: (v) {
                     _search = v;
-                    _reload();
+                    _searchDebounce?.cancel();
+                    _searchDebounce =
+                        Timer(const Duration(milliseconds: 350), _reload);
                   },
                 ),
               ),

@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../widgets/common.dart';
 
 /// Manage lawyers (list, create, update, delete).
@@ -17,6 +19,9 @@ class _LawyersScreenState extends State<LawyersScreen> {
   late Future<List<Lawyer>> _future;
   String _search = '';
 
+  /// Debounces search input so one keystroke does not equal one request.
+  Timer? _searchDebounce;
+
   @override
   void initState() {
     super.initState();
@@ -26,12 +31,10 @@ class _LawyersScreenState extends State<LawyersScreen> {
   Future<List<Lawyer>> _fetch() async {
     final res = await AuthProvider.of(context).api.get('lawyers', query: {
       'page': '1',
-      'limit': '200',
+      'limit': '$kMaxPageSize',
       if (_search.isNotEmpty) 'search': _search,
     });
-    final data = res['data'] as Map<String, dynamic>;
-    final items = (data['items'] as List).cast<Map<String, dynamic>>();
-    return items.map(Lawyer.fromJson).toList();
+    return itemsOf(res).map(Lawyer.fromJson).toList();
   }
 
   void _reload() => setState(() => _future = _fetch());
@@ -91,7 +94,9 @@ class _LawyersScreenState extends State<LawyersScreen> {
                   hint: 'Search lawyers...',
                   onChanged: (v) {
                     _search = v;
-                    _reload();
+                    _searchDebounce?.cancel();
+                    _searchDebounce =
+                        Timer(const Duration(milliseconds: 350), _reload);
                   },
                 ),
               ),
@@ -217,6 +222,7 @@ class _LawyerDialogState extends State<LawyerDialog> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _name.dispose();
     _specialty.dispose();
     _price.dispose();

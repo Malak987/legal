@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../widgets/common.dart';
 
 /// Dashboard with key metrics and a bookings chart.
@@ -33,9 +34,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
     try {
       final res = await AuthProvider.of(context).api.get('dashboard/stats');
-      final data = (res is Map && res['data'] is Map)
-          ? res['data'] as Map<String, dynamic>
-          : (res as Map<String, dynamic>);
+      final data = objectDataOf(res);
       if (mounted) {
         setState(() {
           _stats = DashboardStats.fromJson(data);

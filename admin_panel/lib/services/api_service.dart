@@ -128,3 +128,48 @@ class ApiException implements Exception {
   @override
   String toString() => message;
 }
+
+/// The API clamps `limit` to 100 (see `parseListQuery` in the backend).
+/// Asking for more silently truncates the list, so clients must not.
+const int kMaxPageSize = 100;
+
+/// Safely reads the `data` object from a paginated list response.
+///
+/// The backend wraps lists as `{ success, message, data: { items, total,
+/// page, limit, totalPages } }`. Guarding the shape here turns an obscure
+/// `TypeError` into an actionable message.
+Map<String, dynamic> listPageOf(dynamic res) {
+  final data = res is Map ? res['data'] : null;
+  if (data is! Map) {
+    throw ApiException('Unexpected response from the server.', 0);
+  }
+  return Map<String, dynamic>.from(data as Map);
+}
+
+/// Safely reads `data.items` from a paginated list response and normalises
+/// every entry to `Map<String, dynamic>` before the models parse it.
+List<Map<String, dynamic>> itemsOf(dynamic res) {
+  final items = listPageOf(res)['items'];
+  if (items is! List) {
+    throw ApiException('Unexpected response from the server.', 0);
+  }
+  return items.whereType<Map>().map(Map<String, dynamic>.from).toList();
+}
+
+/// Safely reads `data` when the endpoint returns a bare list.
+List<dynamic> listDataOf(dynamic res) {
+  final data = res is Map ? res['data'] : null;
+  if (data is! List) {
+    throw ApiException('Unexpected response from the server.', 0);
+  }
+  return data;
+}
+
+/// Safely reads `data` when the endpoint returns a single object.
+Map<String, dynamic> objectDataOf(dynamic res) {
+  final data = res is Map ? res['data'] : null;
+  if (data is! Map) {
+    throw ApiException('Unexpected response from the server.', 0);
+  }
+  return Map<String, dynamic>.from(data as Map);
+}
