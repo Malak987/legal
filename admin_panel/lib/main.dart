@@ -1,4 +1,5 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -18,12 +19,18 @@ Future<void> main() async {
 }
 
 class AdminApp extends StatelessWidget {
-  const AdminApp({super.key});
+  const AdminApp({super.key, this.authProvider});
+
+  /// Optional pre-built [AuthProvider], used by tests to run the app without
+  /// a live Firebase project. When omitted, the real [AuthService] is used and
+  /// the persisted session is restored on start.
+  @visibleForTesting
+  final AuthProvider? authProvider;
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => AuthProvider(AuthService())..restore(),
+      create: (_) => authProvider ?? (AuthProvider(AuthService())..restore()),
       child: MaterialApp(
         title: 'Legal Services Admin',
         debugShowCheckedModeBanner: false,
@@ -40,7 +47,9 @@ class AuthGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final auth = AuthProvider.of(context);
+    // Listening on purpose: AuthGate must rebuild when the auth status
+    // changes so it can swap between splash / login / admin shell.
+    final auth = AuthProvider.watchOf(context);
 
     switch (auth.status) {
       case AuthStatus.unknown:

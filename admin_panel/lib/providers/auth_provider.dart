@@ -25,8 +25,21 @@ class AuthProvider extends ChangeNotifier {
 
   ApiService get api => _authService.api;
 
-  /// Convenience accessor for the nearest [AuthProvider] in the tree.
+  /// Non-listening accessor for the nearest [AuthProvider] in the tree.
+  ///
+  /// Use this from event handlers (`onPressed`, `onTap`), `initState`,
+  /// `_fetch`-style async methods, and anywhere else that is **not** the
+  /// `build()` method. It does not register a rebuild dependency, so it is
+  /// safe outside the widget tree (e.g. from a button callback).
   static AuthProvider of(BuildContext context) =>
+      context.read<AuthProvider>();
+
+  /// Listening accessor for the nearest [AuthProvider] in the tree.
+  ///
+  /// **Only** call this from `build()`. It registers a rebuild dependency so
+  /// the widget rebuilds whenever [status], [isLoading] or [error] change.
+  /// Calling it from an event handler throws a [FlutterError].
+  static AuthProvider watchOf(BuildContext context) =>
       context.watch<AuthProvider>();
 
   /// Tries to restore a previously signed-in session at app start.

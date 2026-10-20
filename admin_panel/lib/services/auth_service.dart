@@ -72,7 +72,12 @@ class AuthService {
     );
   }
 
-  /// Returns the current user (if any) by restoring the token.
+  /// Returns the current administrator (if any) by restoring the token.
+  ///
+  /// Mirrors the role enforcement in [signIn]: a signed-in Firebase account
+  /// whose Firestore `role` is not `admin` must never be treated as an
+  /// administrator, otherwise a restored `client`/`lawyer` session would be
+  /// able to enter the admin dashboard.
   Future<AdminSession?> currentUser() async {
     final firebaseUser = _auth.currentUser;
     if (firebaseUser == null) return null;
@@ -80,6 +85,14 @@ class AuthService {
     final doc = await _db.collection('users').doc(firebaseUser.uid).get();
     final data = doc.data() ?? {};
     final role = (data['role'] ?? 'client').toString();
+
+    if (role != 'admin') {
+      // Consistent with signIn(): never leave a non-admin session active here.
+      await _auth.signOut();
+      _api.token = null;
+      return null;
+    }
+
     final idToken = await firebaseUser.getIdToken();
     _api.token = idToken;
 
