@@ -80,7 +80,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                               backgroundColor: AppTheme.primary,
                               child: Icon(Icons.person, color: Colors.white),
                             ),
-                            title: Text('$title'),
+                            title: Text(title),
                             subtitle: Text(
                               '${c['lastMessage'] ?? 'No messages'}',
                               maxLines: 1,

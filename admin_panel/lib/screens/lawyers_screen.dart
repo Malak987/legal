@@ -45,6 +45,7 @@ class _LawyersScreenState extends State<LawyersScreen> {
   }
 
   Future<void> _delete(Lawyer lawyer) async {
+    final api = AuthProvider.of(context).api;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -64,7 +65,7 @@ class _LawyersScreenState extends State<LawyersScreen> {
     );
     if (confirm != true) return;
     try {
-      await AuthProvider.of(context).api.delete('lawyers/${lawyer.id}');
+      await api.delete('lawyers/${lawyer.id}');
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Lawyer deleted')));

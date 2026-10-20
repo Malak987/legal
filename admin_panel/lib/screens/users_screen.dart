@@ -39,6 +39,7 @@ class _UsersScreenState extends State<UsersScreen> {
   void _reload() => setState(() => _future = _fetch());
 
   Future<void> _delete(AppUser user) async {
+    final api = AuthProvider.of(context).api;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -58,7 +59,7 @@ class _UsersScreenState extends State<UsersScreen> {
     );
     if (confirm != true) return;
     try {
-      await AuthProvider.of(context).api.delete('users/${user.id}');
+      await api.delete('users/${user.id}');
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('User deleted')));

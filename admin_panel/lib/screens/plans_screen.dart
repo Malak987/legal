@@ -42,6 +42,7 @@ class _PlansScreenState extends State<PlansScreen> {
   }
 
   Future<void> _delete(Plan p) async {
+    final api = AuthProvider.of(context).api;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -61,7 +62,7 @@ class _PlansScreenState extends State<PlansScreen> {
     );
     if (confirm != true) return;
     try {
-      await AuthProvider.of(context).api.delete('plans/${p.id}');
+      await api.delete('plans/${p.id}');
       if (mounted) _reload();
     } catch (e) {
       if (mounted) {

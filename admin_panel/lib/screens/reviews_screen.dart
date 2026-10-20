@@ -34,6 +34,7 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
   void _reload() => setState(() => _future = _fetch());
 
   Future<void> _delete(Review r) async {
+    final api = AuthProvider.of(context).api;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -53,7 +54,7 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
     );
     if (confirm != true) return;
     try {
-      await AuthProvider.of(context).api.delete('reviews/${r.id}');
+      await api.delete('reviews/${r.id}');
       if (mounted) _reload();
     } catch (e) {
       if (mounted) {

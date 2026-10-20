@@ -45,6 +45,7 @@ class _CasesScreenState extends State<CasesScreen> {
   }
 
   Future<void> _delete(CaseItem item) async {
+    final api = AuthProvider.of(context).api;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -64,7 +65,7 @@ class _CasesScreenState extends State<CasesScreen> {
     );
     if (confirm != true) return;
     try {
-      await AuthProvider.of(context).api.delete('cases/${item.id}');
+      await api.delete('cases/${item.id}');
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Case deleted')));
