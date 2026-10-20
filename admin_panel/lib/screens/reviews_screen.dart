@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../widgets/common.dart';
 
 /// Manage reviews submitted by clients.
@@ -25,10 +26,8 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
   Future<List<Review>> _fetch() async {
     final res = await AuthProvider.of(context)
         .api
-        .get('reviews', query: {'page': '1', 'limit': '200'});
-    final data = res['data'] as Map<String, dynamic>;
-    final items = (data['items'] as List).cast<Map<String, dynamic>>();
-    return items.map(Review.fromJson).toList();
+        .get('reviews', query: {'page': '1', 'limit': '$kMaxPageSize'});
+    return itemsOf(res).map(Review.fromJson).toList();
   }
 
   void _reload() => setState(() => _future = _fetch());

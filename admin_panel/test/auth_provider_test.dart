@@ -1,10 +1,16 @@
-// Unit tests for AuthProvider: sign-in outcomes and session restoration.
+// Unit tests for AuthProvider: sign-in outcomes, session restoration, and the
+// guards that prevent the login -> logout -> login redirect loop.
 //
 // These are pure Dart — no widgets — and use FakeAuthService / FakeApiService
 // from test/fakes.dart, so they need no Firebase project and no network.
 
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:legal_admin/providers/auth_provider.dart';
+import 'package:legal_admin/services/api_service.dart';
+import 'package:legal_admin/services/auth_service.dart';
 
 import 'fakes.dart';
 
@@ -26,7 +32,8 @@ void main() {
       expect(service.lastEmail, 'admin@legalapp.com');
     });
 
-    test('invalid credentials surface a readable error and leave loading', () async {
+    test('invalid credentials surface a readable error and leave loading',
+        () async {
       final api = FakeApiService();
       final service = FakeAuthService(
         api: api,
@@ -48,9 +55,7 @@ void main() {
       final api = FakeApiService();
       final service = FakeAuthService(
         api: api,
-        signInError: Exception(
-          'This account is not an administrator (role: client).',
-        ),
+        signInError: NotAdminException('client'),
       );
       final provider = AuthProvider(service);
 
@@ -75,6 +80,164 @@ void main() {
 
       expect(provider.error, 'No account found with this email.');
       expect(provider.isLoading, isFalse);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  //  Redirect-loop regressions
+  // ------------------------------------------------------------------
+
+  group('AuthProvider state guards', () {
+    test('a late restore() cannot overwrite a newer successful signIn()',
+        () async {
+      // The exact race behind the redirect loop: restore() starts a slow
+      // Firestore read, the user signs in, then the stale restore lands and
+      // must NOT reset the status back to unauthenticated.
+      final gate = Completer<AdminSession?>();
+      final service = FakeAuthService(
+        api: FakeApiService(),
+        restoredSession: null,
+        currentUserGate: gate,
+        session: adminSession(),
+      );
+      final provider = AuthProvider(service);
+
+      final restoreFuture = provider.restore();
+      await Future<void>.delayed(Duration.zero);
+
+      final ok = await provider.signIn('admin@legalapp.com', 'pw');
+      expect(ok, isTrue, reason: 'signIn must not be blocked by restore()');
+      expect(provider.status, AuthStatus.authenticated);
+
+      gate.complete(null); // the stale restore finally resolves
+      await restoreFuture;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        provider.status,
+        AuthStatus.authenticated,
+        reason: 'a stale restore must never clobber a newer sign-in',
+      );
+      expect(provider.session?.role, 'admin');
+    });
+
+    test('a transient profile read failure never signs the user out', () async {
+      final service = FakeAuthService(
+        api: FakeApiService(),
+        currentUserError: ProfileReadException(
+          'Could not read your admin profile from the server (unavailable). '
+          'Check your connection and your Firestore security rules, then retry.',
+        ),
+      );
+      final provider = AuthProvider(service);
+
+      await provider.restore();
+
+      // Not bounced to the login screen, and the session is preserved.
+      expect(provider.status, AuthStatus.unknown);
+      expect(provider.error, contains('Could not read your admin profile'));
+      expect(provider.error, contains('Firestore security rules'));
+      expect(
+        service.signOutCalls,
+        0,
+        reason: 'a transient failure must never destroy a valid session',
+      );
+    });
+
+    test('retry() recovers once the transient failure clears', () async {
+      final service = FakeAuthService(
+        api: FakeApiService(),
+        currentUserError: ProfileReadException('offline'),
+      );
+      final provider = AuthProvider(service);
+
+      await provider.restore();
+      expect(provider.status, AuthStatus.unknown);
+
+      service.currentUserError = null;
+      service.restoredSession = adminSession();
+      await provider.retry();
+
+      expect(provider.status, AuthStatus.authenticated);
+      expect(provider.error, isNull);
+    });
+
+    test('restore() is a no-op once an admin session is held', () async {
+      final service = FakeAuthService(
+        api: FakeApiService(),
+        restoredSession: adminSession(),
+      );
+      final provider = AuthProvider(service);
+
+      await provider.restore();
+      final callsBefore = service.currentUserCalls;
+
+      await provider.restore();
+      await provider.restore();
+
+      expect(service.currentUserCalls, callsBefore);
+      expect(provider.status, AuthStatus.authenticated);
+    });
+
+    test('signIn() ignores a double submit', () async {
+      final completer = Completer<AdminSession>();
+      final service = _GatedSignInService(completer);
+      final provider = AuthProvider(service);
+
+      final first = provider.signIn('a@b.c', 'pw');
+      await Future<void>.delayed(Duration.zero);
+      final second = provider.signIn('a@b.c', 'pw');
+
+      completer.complete(adminSession());
+      await first;
+      final secondResult = await second;
+
+      expect(secondResult, isFalse);
+      expect(service.signInCalls, 1);
+    });
+  });
+
+  group('AuthProvider auth-state listener', () {
+    test('is created only once, so restoration cannot be repeated', () async {
+      final service = FakeAuthService(
+        api: FakeApiService(),
+        restoredSession: null,
+      );
+      final provider = AuthProvider(service);
+
+      provider.bindAuthState();
+      provider.bindAuthState();
+      provider.bindAuthState();
+
+      service.emitAuthState(null);
+      await Future<void>.delayed(Duration.zero);
+
+      // A single listener signs out once; it does not restart restoration.
+      expect(service.currentUserCalls, 0);
+      expect(provider.status, AuthStatus.unauthenticated);
+      expect(provider.error, contains('session has ended'));
+
+      provider.dispose();
+    });
+
+    test('a server-side sign-out clears the admin session', () async {
+      final service = FakeAuthService(
+        api: FakeApiService(),
+        restoredSession: adminSession(),
+      );
+      final provider = AuthProvider(service);
+      await provider.restore();
+      expect(provider.status, AuthStatus.authenticated);
+
+      provider.bindAuthState();
+      service.emitAuthState(null);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(provider.status, AuthStatus.unauthenticated);
+      expect(provider.session, isNull);
+      expect(provider.isAuthenticated, isFalse);
+
+      provider.dispose();
     });
   });
 
@@ -103,13 +266,28 @@ void main() {
       expect(provider.session, isNull);
     });
 
-    test('a restored non-admin session is not treated as an admin', () async {
-      // Regression guard: AuthService.currentUser() must apply the same
-      // `role == 'admin'` check as signIn(). AuthProvider itself only reports
-      // what the service returns, so this asserts the provider stays
-      // unauthenticated whenever the service declines to return a session.
+    test('a missing profile is reported with an actionable message', () async {
       final provider = AuthProvider(
-        FakeAuthService(api: FakeApiService(), restoredSession: null),
+        FakeAuthService(
+          api: FakeApiService(),
+          currentUserError: AdminProfileMissingException('admin-uid'),
+        ),
+      );
+
+      await provider.restore();
+
+      expect(provider.status, AuthStatus.unauthenticated);
+      expect(provider.isAuthenticated, isFalse);
+      expect(provider.error, contains('No user profile found'));
+      expect(provider.error, contains('users/admin-uid'));
+    });
+
+    test('a restored non-admin is rejected', () async {
+      final provider = AuthProvider(
+        FakeAuthService(
+          api: FakeApiService(),
+          currentUserError: NotAdminException('client'),
+        ),
       );
 
       await provider.restore();
@@ -117,20 +295,7 @@ void main() {
       expect(provider.status, AuthStatus.unauthenticated);
       expect(provider.isAuthenticated, isFalse);
       expect(provider.session, isNull);
-    });
-
-    test('errors while restoring fall back to unauthenticated', () async {
-      final provider = AuthProvider(
-        FakeAuthService(
-          api: FakeApiService(),
-          currentUserError: Exception('network unavailable'),
-        ),
-      );
-
-      await provider.restore();
-
-      expect(provider.status, AuthStatus.unauthenticated);
-      expect(provider.session, isNull);
+      expect(provider.error, contains('not an administrator'));
     });
   });
 
@@ -148,7 +313,72 @@ void main() {
 
       expect(provider.status, AuthStatus.unauthenticated);
       expect(provider.session, isNull);
+      expect(provider.error, isNull);
       expect(service.signOutCalls, 1);
     });
   });
+
+  group('ApiService token handling', () {
+    test('uses a fresh token from the provider when available', () async {
+      final api = FakeApiService();
+      api.token = 'stale-token';
+      api.tokenProvider = () async => 'fresh-token';
+
+      await api.get('users');
+
+      expect(api.lastAuthHeader, 'Bearer fresh-token');
+    });
+
+    test('falls back to the stored token when no provider is set', () async {
+      final api = FakeApiService();
+      api.token = 'stored-token';
+
+      await api.get('users');
+
+      expect(api.lastAuthHeader, 'Bearer stored-token');
+    });
+
+    test('sends no Authorization header when there is no token', () async {
+      final api = FakeApiService();
+
+      await api.get('users');
+
+      expect(api.lastAuthHeader, isNull);
+    });
+  });
+}
+
+/// An [AuthService] whose signIn() blocks on a completer, so the double-submit
+/// guard can be exercised.
+class _GatedSignInService implements AuthService {
+  _GatedSignInService(this._gate, {this.session});
+
+  final Completer<AdminSession> _gate;
+  final AdminSession? session;
+
+  @override
+  final ApiService api = FakeApiService();
+
+  int signInCalls = 0;
+
+  @override
+  Stream<User?> get authStateChanges => const Stream<User?>.empty();
+
+  @override
+  User? get currentFirebaseUser => null;
+
+  @override
+  Future<String?> freshToken() async => 't';
+
+  @override
+  Future<AdminSession> signIn(String email, String password) async {
+    signInCalls++;
+    return _gate.future;
+  }
+
+  @override
+  Future<AdminSession?> currentUser() async => session;
+
+  @override
+  Future<void> signOut() async {}
 }

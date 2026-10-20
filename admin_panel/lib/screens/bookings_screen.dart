@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../widgets/common.dart';
 
 /// Manage bookings (appointments) and update their status.
@@ -26,13 +27,11 @@ class _BookingsScreenState extends State<BookingsScreen> {
   Future<List<Booking>> _fetch() async {
     final res = await AuthProvider.of(context).api.get('bookings', query: {
       'page': '1',
-      'limit': '200',
+      'limit': '$kMaxPageSize',
       if (_statusFilter != null && _statusFilter!.isNotEmpty)
         'status': _statusFilter!,
     });
-    final data = res['data'] as Map<String, dynamic>;
-    final items = (data['items'] as List).cast<Map<String, dynamic>>();
-    return items.map(Booking.fromJson).toList();
+    return itemsOf(res).map(Booking.fromJson).toList();
   }
 
   void _reload() => setState(() => _future = _fetch());

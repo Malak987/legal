@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../widgets/common.dart';
 
 /// Manage notifications: view, create, mark as read, delete.
@@ -25,10 +26,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<List<NotificationItem>> _fetch() async {
     final res = await AuthProvider.of(context)
         .api
-        .get('notifications', query: {'page': '1', 'limit': '200'});
-    final data = res['data'] as Map<String, dynamic>;
-    final items = (data['items'] as List).cast<Map<String, dynamic>>();
-    return items.map(NotificationItem.fromJson).toList();
+        .get('notifications', query: {'page': '1', 'limit': '$kMaxPageSize'});
+    return itemsOf(res).map(NotificationItem.fromJson).toList();
   }
 
   void _reload() => setState(() => _future = _fetch());

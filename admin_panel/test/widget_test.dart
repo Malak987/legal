@@ -21,22 +21,26 @@ Future<void> pumpApp(WidgetTester tester, AuthProvider provider) async {
   await tester.pump();
 }
 
-/// Canned `/api/dashboard/stats` payload (flat form is accepted by
-/// DashboardScreen, which falls back to the root map when `data` is absent).
+/// Canned `/api/dashboard/stats` payload, in the backend's real envelope
+/// `{ success, message, data }` (see `ok()` in backend/src/utils/response.js).
 Map<String, dynamic> dashboardPayload() => <String, dynamic>{
-      'users': 1,
-      'lawyers': 2,
-      'cases': 3,
-      'bookings': 4,
-      'reviews': 5,
-      'plans': 3,
-      'subscriptions': 0,
-      'bookingsByStatus': <String, dynamic>{
-        'active': 1,
-        'completed': 2,
-        'cancelled': 1,
+      'success': true,
+      'message': 'OK',
+      'data': <String, dynamic>{
+        'users': 1,
+        'lawyers': 2,
+        'cases': 3,
+        'bookings': 4,
+        'reviews': 5,
+        'plans': 3,
+        'subscriptions': 0,
+        'bookingsByStatus': <String, dynamic>{
+          'active': 1,
+          'completed': 2,
+          'cancelled': 1,
+        },
+        'totalWalletBalance': 0,
       },
-      'totalWalletBalance': 0,
     };
 
 void main() {
