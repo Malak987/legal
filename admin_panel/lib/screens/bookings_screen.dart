@@ -55,6 +55,7 @@ class _BookingsScreenState extends State<BookingsScreen> {
   }
 
   Future<void> _delete(Booking b) async {
+    final api = AuthProvider.of(context).api;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -74,7 +75,7 @@ class _BookingsScreenState extends State<BookingsScreen> {
     );
     if (confirm != true) return;
     try {
-      await AuthProvider.of(context).api.delete('bookings/${b.id}');
+      await api.delete('bookings/${b.id}');
       if (mounted) _reload();
     } catch (e) {
       if (mounted) {

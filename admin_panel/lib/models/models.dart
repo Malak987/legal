@@ -1,5 +1,6 @@
 /// Plain Dart models used by the admin panel.
 /// All models can be created from the JSON returned by the backend API.
+library;
 
 class Lawyer {
   final String id;
