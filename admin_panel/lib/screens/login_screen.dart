@@ -26,12 +26,22 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+
+    // Non-listening read on purpose: _submit runs from an onPressed handler,
+    // where context.watch() would throw "Tried to listen to a value exposed
+    // with provider, from outside of the widget tree".
+    // It is read BEFORE the await so no BuildContext crosses the async gap.
     final auth = AuthProvider.of(context);
+
     final ok = await auth.signIn(
       _emailController.text.trim(),
       _passwordController.text,
     );
-    if (!ok && mounted) {
+
+    // The widget may have been disposed while sign-in was in flight.
+    if (!mounted) return;
+
+    if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(auth.error ?? 'Sign-in failed')),
       );
@@ -40,7 +50,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final auth = AuthProvider.of(context);
+    // Listening on purpose: the button/spinner depends on auth.isLoading.
+    final auth = AuthProvider.watchOf(context);
 
     return Scaffold(
       backgroundColor: AppTheme.background,
