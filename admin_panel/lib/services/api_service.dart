@@ -22,7 +22,10 @@ class ApiService {
   /// Firebase ID tokens expire after one hour. Supplying a provider lets the
   /// client refresh the token before every request instead of sending a stale
   /// one and getting 401 forever.
-  final Future<String?> Function()? tokenProvider;
+  ///
+  /// Not `final`: `AuthService` wires this to its own token refresher after
+  /// construction, because the service and the client are created together.
+  Future<String?> Function()? tokenProvider;
 
   /// Builds the request headers, refreshing the bearer token when a provider
   /// is available. Falls back to the last known token if a refresh fails.

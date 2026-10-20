@@ -18,7 +18,25 @@ app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests with no origin (mobile apps, curl, server-to-server)
-      if (!origin || env.corsOrigins.includes(origin)) return callback(null, true);
+      if (!origin) return callback(null, true);
+      if (env.corsOrigins.includes(origin)) return callback(null, true);
+
+      // Local development only: `flutter run -d chrome` starts the web dev
+      // server on a RANDOM port on every launch, so an exact-origin allowlist
+      // cannot be kept in sync. Accept any port on the loopback interface
+      // while NODE_ENV is not production. Production relies on CORS_ORIGINS
+      // only, so no public origin is ever opened up.
+      if (env.nodeEnv !== 'production') {
+        try {
+          const { hostname } = new URL(origin);
+          if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            return callback(null, true);
+          }
+        } catch (_err) {
+          // Unparseable origin — fall through and reject it.
+        }
+      }
+
       return callback(new Error(`Origin "${origin}" not allowed by CORS`));
     },
     credentials: true,

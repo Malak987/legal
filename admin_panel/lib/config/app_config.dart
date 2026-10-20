@@ -2,14 +2,24 @@
 class AppConfig {
   /// Base URL of the backend API (Express + Firestore).
   ///
-  /// - For local development:  http://localhost:5000/api
-  /// - For a deployed backend:  https://your-domain.com/api
+  /// The default targets the loopback interface, which is correct whenever the
+  /// browser and the backend run on the same machine (the normal local
+  /// development setup). A hard-coded LAN IP such as 10.0.0.28 breaks as soon
+  /// as the machine's DHCP lease changes — the symptom is
+  /// `ClientException: Failed to fetch`.
   ///
-  /// NOTE: Flutter Web running in Chrome treats "localhost" as the machine
-  /// running the browser, which is the same machine in local development.
+  /// For any other target, pass the URL at build/run time instead of editing
+  /// this file:
+  ///
+  ///     flutter run -d chrome --dart-define=API_BASE_URL=http://10.74.140.190:5000/api
+  ///     flutter build web  --dart-define=API_BASE_URL=https://api.example.com/api
+  ///
+  /// NOTE: Flutter Web running in Chrome treats "localhost"/"127.0.0.1" as the
+  /// machine running the browser, which is the same machine in local
+  /// development.
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.0.28:5000/api',
+    defaultValue: 'http://127.0.0.1:5000/api',
   );
 
   /// Brand colors taken from the main Legal Services app.
