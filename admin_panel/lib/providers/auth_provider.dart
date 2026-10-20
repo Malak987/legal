@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:provider/provider.dart';
 
@@ -16,6 +18,19 @@ class AuthProvider extends ChangeNotifier {
   AdminSession? _session;
   String? _error;
   bool _loading = false;
+
+  /// Monotonic counter guarding every async state write.
+  ///
+  /// `restore()` performs a Firestore read that can take seconds on a cold
+  /// start. Without this guard, a slow `restore()` finishing *after* a
+  /// successful `signIn()` would overwrite `authenticated` with
+  /// `unauthenticated` and bounce the user back to the login screen — the
+  /// redirect loop. Every new operation bumps the counter, and a stale
+  /// operation checks it before writing.
+  int _generation = 0;
+
+  /// The single Firebase auth-state subscription (null until bound).
+  StreamSubscription? _authSub;
 
   AuthStatus get status => _status;
   AdminSession? get session => _session;
@@ -42,47 +57,143 @@ class AuthProvider extends ChangeNotifier {
   static AuthProvider watchOf(BuildContext context) =>
       context.watch<AuthProvider>();
 
-  /// Tries to restore a previously signed-in session at app start.
-  Future<void> restore() async {
-    try {
-      _session = await _authService.currentUser();
-      _status =
-          _session != null ? AuthStatus.authenticated : AuthStatus.unauthenticated;
-    } catch (_) {
-      _status = AuthStatus.unauthenticated;
-    }
+  /// Subscribes to Firebase auth state.
+  ///
+  /// Idempotent: calling it more than once never creates a second
+  /// subscription, so session restoration cannot be triggered repeatedly.
+  void bindAuthState() {
+    if (_authSub != null) return;
+
+    _authSub = _authService.authStateChanges.listen((user) {
+      if (user == null) {
+        // Genuine end of session: explicit sign-out, revoked refresh token,
+        // disabled account, or a rejected non-admin profile.
+        _applySignedOut('Your session has ended. Please sign in again.');
+      } else if (_status != AuthStatus.authenticated) {
+        // Firebase restored a user we have not verified a profile for yet.
+        // restore() is a no-op when an admin session is already held, so this
+        // cannot loop.
+        unawaited(restore());
+      }
+    });
+  }
+
+  void _applySignedOut(String? message) {
+    _generation++; // invalidate anything still in flight
+    _session = null;
+    _status = AuthStatus.unauthenticated;
+    _loading = false;
+    if (message != null) _error = message;
     notifyListeners();
   }
 
+  bool _isCurrent(int generation) => generation == _generation;
+
+  /// Tries to restore a previously signed-in session at app start.
+  ///
+  /// Safe to call more than once: it returns immediately when a verified
+  /// admin session is already held.
+  Future<void> restore() async {
+    if (_status == AuthStatus.authenticated && _session != null) return;
+
+    final generation = ++_generation;
+
+    // Deliberately does NOT touch _loading: `AuthStatus.unknown` already
+    // renders the splash gate, and flipping _loading here would make the
+    // double-submit guard in signIn() reject a legitimate sign-in that
+    // happens while restoration is still in flight.
+    try {
+      final session = await _authService.currentUser();
+      if (!_isCurrent(generation)) return; // superseded by signIn/signOut
+
+      _session = session;
+      _status = session != null
+          ? AuthStatus.authenticated
+          : AuthStatus.unauthenticated;
+      _error = null;
+    } on ProfileReadException catch (e) {
+      if (!_isCurrent(generation)) return;
+
+      // Transient: the Firebase session is still valid, so do NOT sign out
+      // and do NOT fall back to the login screen. Stay put and let the user
+      // retry with an actionable message.
+      _session = null;
+      _status = AuthStatus.unknown;
+      _error = e.message;
+    } catch (e) {
+      if (!_isCurrent(generation)) return;
+
+      // Confirmed rejection (missing profile / not an admin) or a real
+      // Firebase error. The session has already been ended by AuthService.
+      _session = null;
+      _status = AuthStatus.unauthenticated;
+      _error = _humanize(e);
+    }
+
+    _loading = false;
+    notifyListeners();
+  }
+
+  /// Re-runs [restore()] after a transient failure.
+  Future<void> retry() => restore();
+
   Future<bool> signIn(String email, String password) async {
+    if (_loading) return false; // ignore double submits
+
+    final generation = ++_generation;
     _loading = true;
     _error = null;
     _status = AuthStatus.authenticating;
     notifyListeners();
 
     try {
-      _session = await _authService.signIn(email, password);
+      final session = await _authService.signIn(email, password);
+      if (!_isCurrent(generation)) return false;
+
+      _session = session;
       _status = AuthStatus.authenticated;
-      _loading = false;
-      notifyListeners();
-      return true;
-    } catch (e) {
-      _error = _humanize(e);
+      _error = null;
+    } on ProfileReadException catch (e) {
+      if (!_isCurrent(generation)) return false;
+
+      // Credentials were accepted but the role could not be verified.
+      // Keep the Firebase session so the user can retry without re-typing
+      // their password, and show a clear message.
+      _session = null;
       _status = AuthStatus.unauthenticated;
-      _loading = false;
-      notifyListeners();
-      return false;
+      _error = e.message;
+    } catch (e) {
+      if (!_isCurrent(generation)) return false;
+
+      _session = null;
+      _status = AuthStatus.unauthenticated;
+      _error = _humanize(e);
     }
+
+    _loading = false;
+    notifyListeners();
+    return _status == AuthStatus.authenticated;
   }
 
   Future<void> signOut() async {
-    await _authService.signOut();
+    _generation++; // discard any in-flight restore/signIn
+    try {
+      await _authService.signOut();
+    } catch (_) {
+      // Still clear local state even if the network call failed.
+    }
     _session = null;
     _status = AuthStatus.unauthenticated;
+    _loading = false;
+    _error = null;
     notifyListeners();
   }
 
   String _humanize(Object e) {
+    if (e is NotAdminException) return e.toString();
+    if (e is AdminProfileMissingException) return e.toString();
+    if (e is ProfileReadException) return e.message;
+
     final msg = e.toString().replaceFirst('Exception: ', '');
     if (msg.contains('wrong-password') || msg.contains('invalid-credential')) {
       return 'Incorrect email or password.';
@@ -92,6 +203,16 @@ class AuthProvider extends ChangeNotifier {
     if (msg.contains('too-many-requests')) {
       return 'Too many attempts. Please try again later.';
     }
+    if (msg.contains('network-request-failed') || msg.contains('network')) {
+      return 'Network error. Check your connection and try again.';
+    }
     return msg;
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    _authSub = null;
+    super.dispose();
   }
 }

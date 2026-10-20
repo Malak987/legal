@@ -33,19 +33,13 @@ class _LoginScreenState extends State<LoginScreen> {
     // It is read BEFORE the await so no BuildContext crosses the async gap.
     final auth = AuthProvider.of(context);
 
-    final ok = await auth.signIn(
+    await auth.signIn(
       _emailController.text.trim(),
       _passwordController.text,
     );
 
-    // The widget may have been disposed while sign-in was in flight.
-    if (!mounted) return;
-
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(auth.error ?? 'Sign-in failed')),
-      );
-    }
+    // Failures are rendered by the persistent banner in build(), which reads
+    // auth.error. No BuildContext is touched after the await.
   }
 
   @override
@@ -94,6 +88,41 @@ class _LoginScreenState extends State<LoginScreen> {
                         style: TextStyle(color: Colors.grey),
                       ),
                       const SizedBox(height: 28),
+                      // Persistent, actionable message. This is what replaces
+                      // the old silent bounce back to the login screen: if
+                      // session restoration rejected the account, the user is
+                      // told exactly why.
+                      if (auth.error != null) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.red.shade200),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.error_outline,
+                                color: Colors.red.shade700,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  auth.error!,
+                                  style: TextStyle(
+                                    color: Colors.red.shade800,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                      ],
                       TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,

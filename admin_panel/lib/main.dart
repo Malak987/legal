@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -12,10 +14,19 @@ import 'services/auth_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Firebase is initialized exactly once, before any service touches it.
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  runApp(const AdminApp());
+
+  // One AuthProvider for the whole app, with a single auth-state listener.
+  // Building it outside the widget tree guarantees `create:` below is not the
+  // thing that starts session restoration, so it cannot happen twice.
+  final authProvider = AuthProvider(AuthService())..bindAuthState();
+  unawaited(authProvider.restore());
+
+  runApp(AdminApp(authProvider: authProvider));
 }
 
 class AdminApp extends StatelessWidget {
@@ -30,7 +41,8 @@ class AdminApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => authProvider ?? (AuthProvider(AuthService())..restore()),
+      create: (_) =>
+          authProvider ?? (AuthProvider(AuthService())..bindAuthState()),
       child: MaterialApp(
         title: 'Legal Services Admin',
         debugShowCheckedModeBanner: false,
@@ -53,6 +65,12 @@ class AuthGate extends StatelessWidget {
 
     switch (auth.status) {
       case AuthStatus.unknown:
+        // `unknown` + an error means a transient failure that must NOT bounce
+        // the user to the login screen: show the reason and offer a retry.
+        return _SplashGate(
+          message: auth.error,
+          onRetry: auth.error == null ? null : auth.retry,
+        );
       case AuthStatus.authenticating:
         return const _SplashGate();
       case AuthStatus.unauthenticated:
@@ -64,28 +82,66 @@ class AuthGate extends StatelessWidget {
 }
 
 class _SplashGate extends StatelessWidget {
-  const _SplashGate();
+  const _SplashGate({this.message, this.onRetry});
+
+  final String? message;
+  final Future<void> Function()? onRetry;
 
   @override
   Widget build(BuildContext context) {
+    final error = message;
+    final retry = onRetry;
+
     return Scaffold(
       backgroundColor: AppTheme.primary,
       body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            CircleAvatar(
-              radius: 42,
-              backgroundColor: Colors.amber,
-              child: Icon(Icons.gavel, color: Colors.white, size: 44),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircleAvatar(
+                  radius: 42,
+                  backgroundColor: Colors.amber,
+                  child: Icon(Icons.gavel, color: Colors.white, size: 44),
+                ),
+                const SizedBox(height: 24),
+                if (error == null) ...[
+                  const SizedBox(
+                    height: 30,
+                    width: 30,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 3,
+                    ),
+                  ),
+                ] else ...[
+                  Icon(
+                    Icons.cloud_off_outlined,
+                    color: Colors.amber.shade200,
+                    size: 40,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    error,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 15),
+                  ),
+                  const SizedBox(height: 20),
+                  OutlinedButton.icon(
+                    onPressed: retry == null ? null : () => retry(),
+                    icon: const Icon(Icons.refresh, color: Colors.white),
+                    label: const Text(
+                      'Retry',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ],
+              ],
             ),
-            SizedBox(height: 24),
-            SizedBox(
-              height: 30,
-              width: 30,
-              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
-            ),
-          ],
+          ),
         ),
       ),
     );
