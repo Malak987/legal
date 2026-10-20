@@ -1,0 +1,88 @@
+import 'package:flutter/material.dart';
+
+import '../providers/auth_provider.dart';
+import '../widgets/app_scaffold.dart';
+import 'bookings_screen.dart';
+import 'cases_screen.dart';
+import 'chats_screen.dart';
+import 'dashboard_screen.dart';
+import 'lawyers_screen.dart';
+import 'notifications_screen.dart';
+import 'plans_screen.dart';
+import 'reviews_screen.dart';
+import 'users_screen.dart';
+
+/// The main admin layout: a persistent navigation list + the active screen.
+class HomeShell extends StatefulWidget {
+  const HomeShell({super.key});
+
+  @override
+  State<HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends State<HomeShell> {
+  late final List<NavItem> _items;
+  NavItem? _current;
+
+  @override
+  void initState() {
+    super.initState();
+    _items = [
+      NavItem(
+        title: 'Dashboard',
+        icon: Icons.dashboard,
+        screen: DashboardScreen(onNavigate: _selectByTitle),
+      ),
+      NavItem(title: 'Lawyers', icon: Icons.gavel, screen: const LawyersScreen()),
+      NavItem(title: 'Users', icon: Icons.people, screen: const UsersScreen()),
+      NavItem(title: 'Cases', icon: Icons.folder_copy, screen: const CasesScreen()),
+      NavItem(
+        title: 'Bookings',
+        icon: Icons.event_available,
+        screen: const BookingsScreen(),
+      ),
+      NavItem(title: 'Reviews', icon: Icons.star, screen: const ReviewsScreen()),
+      NavItem(
+        title: 'Plans',
+        icon: Icons.subscriptions,
+        screen: const PlansScreen(),
+      ),
+      NavItem(
+        title: 'Notifications',
+        icon: Icons.notifications,
+        screen: const NotificationsScreen(),
+      ),
+      NavItem(title: 'Chats', icon: Icons.message, screen: const ChatsScreen()),
+    ];
+    _current = _items.first;
+  }
+
+  void _select(NavItem item) => setState(() => _current = item);
+
+  void _selectByTitle(String title) {
+    final item = _items.firstWhere(
+      (e) => e.title == title,
+      orElse: () => _items.first,
+    );
+    _select(item);
+  }
+
+  void _logout() => AuthProvider.of(context).signOut();
+
+  @override
+  Widget build(BuildContext context) {
+    return AdminNav(
+      items: _items,
+      current: _current!,
+      select: _select,
+      logout: _logout,
+      child: AppScaffold(
+        title: _current!.title,
+        body: KeyedSubtree(
+          key: ValueKey(_current!.title),
+          child: _current!.screen,
+        ),
+      ),
+    );
+  }
+}

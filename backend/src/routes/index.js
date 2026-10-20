@@ -1,0 +1,36 @@
+import { Router } from 'express';
+import lawyers from './lawyers.js';
+import users from './users.js';
+import cases from './cases.js';
+import bookings from './bookings.js';
+import tasks from './tasks.js';
+import wallet from './wallet.js';
+import reviews from './reviews.js';
+import chats from './chats.js';
+import plans from './plans.js';
+import subscriptions from './subscriptions.js';
+import notifications from './notifications.js';
+import earnings from './earnings.js';
+import availability from './availability.js';
+import favorites from './favorites.js';
+import dashboard from './dashboard.js';
+
+const router = Router();
+
+router.use('/lawyers', lawyers);
+router.use('/users', users);
+router.use('/cases', cases);
+router.use('/bookings', bookings);
+router.use('/tasks', tasks);
+router.use('/wallet', wallet);
+router.use('/reviews', reviews);
+router.use('/chats', chats);
+router.use('/plans', plans);
+router.use('/subscriptions', subscriptions);
+router.use('/notifications', notifications);
+router.use('/earnings', earnings);
+router.use('/availability', availability);
+router.use('/favorites', favorites);
+router.use('/dashboard', dashboard);
+
+export default router;
