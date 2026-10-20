@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getDb, admin } from '../config/firebase.js';
+import { getDb } from '../config/firebase.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { ok } from '../utils/response.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -68,7 +68,7 @@ router.get(
         cancelled: cancelledBookings,
       },
       totalWalletBalance,
-      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      generatedAt: new Date().toISOString(),
     });
   }),
 );

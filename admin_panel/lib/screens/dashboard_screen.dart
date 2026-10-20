@@ -1,6 +1,7 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
+import '../config/app_config.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
@@ -44,11 +45,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = _describeError(e);
           _loading = false;
         });
       }
     }
+  }
+
+  /// Turns a failure into an actionable message instead of a raw exception.
+  ///
+  /// Network failures, expired tokens and a missing admin role need completely
+  /// different fixes, so they must not all render as the same sentence.
+  String _describeError(Object e) {
+    if (e is ApiException) {
+      switch (e.statusCode) {
+        case 0:
+          return 'Cannot reach the API at ${AppConfig.apiBaseUrl}. '
+              'Start the backend and make sure that address is correct, then retry.';
+        case 401:
+          return 'The server rejected the request (401 Unauthorized). Your '
+              'session may have expired — sign out and sign in again.';
+        case 403:
+          return 'This account is not an administrator (403 Forbidden). The '
+              'Firestore document users/<your-uid> must have role: "admin".';
+        default:
+          return 'Request failed (${e.statusCode}): ${e.message}';
+      }
+    }
+    return e.toString();
   }
 
   @override
