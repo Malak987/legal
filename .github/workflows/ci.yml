@@ -76,7 +76,37 @@ jobs:
         run: flutter pub get
 
       - name: Analyze
-        run: flutter analyze
+        shell: bash
+        # `pipefail` keeps flutter's exit status authoritative while the output
+        # is also captured for the annotation step below.
+        run: |
+          set -o pipefail
+          flutter analyze 2>&1 | tee "$RUNNER_TEMP/analyze.log"
+
+      # Raw job logs are served from results-receiver.actions.githubusercontent.com
+      # and blob storage, which some review environments cannot reach. On
+      # failure, the analyzer findings are therefore also published as check-run
+      # annotations (served directly by api.github.com) so the exact list is
+      # readable without the log archive. Purely diagnostic: it runs only after
+      # a failure and never changes the job's outcome.
+      - name: Publish analyzer findings as annotations
+        if: failure()
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/analyze.log"
+          if [ ! -f "$log" ]; then
+            echo "::error title=flutter analyze::no analyzer output was captured"
+            exit 0
+          fi
+          findings="$(grep -E '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]' "$log" | head -50 || true)"
+          if [ -z "$findings" ]; then
+            findings="$(tail -40 "$log")"
+          fi
+          # One annotation can carry the whole list if newlines are encoded.
+          encoded="$(printf '%s\n' "$findings" | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'NF { printf "%s%%0A", $0 }')"
+          echo "::error title=flutter analyze findings::${encoded}"
+          echo "----- raw analyzer output (last 80 lines) -----"
+          tail -80 "$log"
 
       - name: Test
         run: flutter test
