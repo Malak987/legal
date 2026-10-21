@@ -41,6 +41,8 @@ const fx = () => (globalThis.__fx ??= {
   failWritesTo: null, // collection name whose writes throw (failure injection)
   versions: {},      // "collection/id" -> monotonic write counter (MVCC)
   txAttempts: 0,     // transactions attempted, including retries
+  authUpdates: [],   // calls to auth.updateUser (email synchronisation)
+  failAuthUpdates: null, // message thrown by auth.updateUser, when set
 });
 
 let sequence = 0;
@@ -287,6 +289,13 @@ export function getAuth() {
       };
     },
     deleteUser: async () => {},
+    // Mirrors admin.auth().updateUser(uid, properties); the route uses it to
+    // keep the Firebase sign-in email in step with the profile document.
+    updateUser: async (uid, properties = {}) => {
+      if (fx().failAuthUpdates) throw new Error(fx().failAuthUpdates);
+      fx().authUpdates.push({ uid, ...properties });
+      return { uid, ...properties };
+    },
   };
 }
 export const admin = {
@@ -363,6 +372,8 @@ export function reset({ collections = {}, user = null } = {}) {
     failWritesTo: null,
     versions: {},
     txAttempts: 0,
+    authUpdates: [],
+    failAuthUpdates: null,
   };
 }
 
@@ -391,7 +402,9 @@ export function users(...keys) {
     id: PEOPLE[key].uid,
     uid: PEOPLE[key].uid,
     name: PEOPLE[key].name,
-    email: `${PEOPLE[key].uid}@example.com`,
+    // Matches the addresses the fixtures send to `PUT /users/:id`, so a
+    // profile update that keeps the same email is a genuine no-op.
+    email: `${key}@example.com`,
     role: PEOPLE[key].role,
   }));
 }
@@ -417,6 +430,16 @@ export function setFailure(error) {
 /** Reads the live in-memory collection (to assert nothing was written). */
 export function docs(collectionName) {
   return (globalThis.__fx.collections[collectionName] ?? []).map((d) => ({ ...d }));
+}
+
+/** Makes `auth.updateUser` throw, to prove the profile is not written. */
+export function failAuthUpdates(message = 'auth update failed') {
+  globalThis.__fx.failAuthUpdates = message;
+}
+
+/** Firebase Auth mutations requested since the last reset (email sync). */
+export function authUpdates() {
+  return globalThis.__fx.authUpdates.map((u) => ({ ...u }));
 }
 
 /** Every query the routes issued since the last reset. */

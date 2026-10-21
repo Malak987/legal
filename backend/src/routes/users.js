@@ -7,7 +7,7 @@ import {
   isAdmin,
   forbidden,
 } from '../middleware/auth.js';
-import { ok, created, notFound, parseListQuery, cleanObject } from '../utils/response.js';
+import { ok, created, notFound, badRequest, parseListQuery, cleanObject } from '../utils/response.js';
 import { validate, userSchema, userRoleSchema } from '../utils/validators.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { listDocs, getDocById, createDoc, updateDoc, deleteDoc } from '../utils/firestore.js';
@@ -65,7 +65,56 @@ router.put(
       delete data.userId;
     }
 
-    const updated = await updateDoc(getDb(), COLLECTION, req.params.id, data);
+    const existing = await getDocById(getDb(), COLLECTION, req.params.id);
+    if (!existing) return notFound(res, 'User not found');
+
+    if (!isAdmin(req)) {
+      // Changing the sign-in address from an ordinary session would let
+      // whoever holds a token re-point the account at their own mailbox, and a
+      // typo would lock the user out. Keep the stored address unless an
+      // administrator changes it.
+      if (data.email !== undefined && data.email !== existing.email) {
+        return forbidden(
+          res,
+          'Forbidden. Ask an administrator to change the sign-in email.',
+        );
+      }
+      delete data.email;
+    }
+
+    // Firebase Authentication and the profile must not drift: the email in the
+    // document is what the panel shows, while the email in Auth is what the
+    // user signs in with. Update Auth first, because it is the authority, and
+    // roll it back if the profile write fails.
+    const emailChanged =
+      typeof data.email === 'string' && data.email && data.email !== existing.email;
+
+    if (emailChanged) {
+      try {
+        await getAuth().updateUser(req.params.id, { email: data.email });
+      } catch (error) {
+        console.error('[users] auth email update failed:', error?.message);
+        return badRequest(
+          res,
+          'Could not update the sign-in email. Check the address and try again.',
+        );
+      }
+    }
+
+    let updated;
+    try {
+      updated = await updateDoc(getDb(), COLLECTION, req.params.id, data);
+    } catch (error) {
+      if (emailChanged) {
+        try {
+          await getAuth().updateUser(req.params.id, { email: existing.email });
+        } catch (revertError) {
+          console.error('[users] auth email rollback failed:', revertError?.message);
+        }
+      }
+      throw error;
+    }
+
     if (!updated) return notFound(res, 'User not found');
     ok(res, updated, 'User updated');
   }),

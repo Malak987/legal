@@ -107,6 +107,22 @@ export const reviewSchema = Joi.object({
   comment: Joi.string().trim().max(2000).required(),
 });
 
+/**
+ * A review must point at a lawyer.
+ *
+ * `userId`/`userName` are overwritten from the verified token before this
+ * schema sees the payload, so they cannot be forged.
+ */
+export const reviewCreateSchema = reviewSchema.keys({
+  lawyerId: Joi.string().trim().required(),
+});
+
+/** Admins moderate the content of a review, never its authorship. */
+export const reviewUpdateSchema = Joi.object({
+  rating: Joi.number().min(1).max(5).optional(),
+  comment: Joi.string().trim().max(2000).optional(),
+});
+
 export const planSchema = Joi.object({
   title: Joi.string().trim().min(2).max(80).required(),
   price: Joi.string().trim().max(40).allow('', null),
