@@ -16,12 +16,14 @@ name: CI
 # `continue-on-error`, or a skip would produce a green check that hides a real
 # failure. It is wired up in Phase 5, when that test is replaced with real ones.
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-  workflow_dispatch:
+# Every branch, not only `main`: work in this repository lands on short-lived
+# `arena/*` branches and is merged through pull requests. Limiting `push` to
+# `main` meant a branch push produced no run at all (a workflow file that lives
+# only on a feature branch is not registered on the default branch, so neither
+# `workflow_dispatch` nor the workflow list can reach it either), so the first
+# feedback would arrive only after a PR existed. Running on any push gives the
+# branch that feedback immediately; `pull_request` still covers forks.
+on: [push, pull_request, workflow_dispatch]
 
 permissions:
   contents: read
