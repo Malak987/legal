@@ -6,7 +6,11 @@
 
 import 'dart:async';
 
-import 'package:firebase_auth/firebase_auth.dart';
+// `firebase_auth` re-exports a platform-level `AuthProvider`, which collides
+// with the admin panel's own AuthProvider class and made every `AuthProvider(`
+// call below ambiguous. Only `User` is needed from here, so the colliding name
+// is hidden rather than the whole import dropped.
+import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:legal_admin/providers/auth_provider.dart';
 import 'package:legal_admin/services/api_service.dart';
@@ -351,10 +355,13 @@ void main() {
 /// An [AuthService] whose signIn() blocks on a completer, so the double-submit
 /// guard can be exercised.
 class _GatedSignInService implements AuthService {
-  _GatedSignInService(this._gate, {this.session});
+  _GatedSignInService(this._gate);
 
   final Completer<AdminSession> _gate;
-  final AdminSession? session;
+
+  /// Never supplied by a caller here; kept as a field because
+  /// [currentUser] must return one. Defaults to `null`.
+  AdminSession? session;
 
   @override
   final ApiService api = FakeApiService();

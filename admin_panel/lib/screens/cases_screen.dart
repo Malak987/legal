@@ -28,6 +28,14 @@ class _CasesScreenState extends State<CasesScreen> {
     _future = _fetch();
   }
 
+  @override
+  void dispose() {
+    // The timer lives on this State, so it is cancelled here — a pending
+    // debounce must not fire a request after the screen is gone.
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
   Future<List<CaseItem>> _fetch() async {
     final res = await AuthProvider.of(context).api.get('cases', query: {
       'page': '1',
@@ -196,7 +204,6 @@ class _CaseDialogState extends State<CaseDialog> {
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
     _title.dispose();
     _client.dispose();
     _type.dispose();

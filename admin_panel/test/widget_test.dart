@@ -9,6 +9,7 @@
 //   "Tried to listen to a value exposed with provider, from outside of the
 //    widget tree" — caused by AuthProvider.of() using context.watch().
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:legal_admin/main.dart';
 import 'package:legal_admin/providers/auth_provider.dart';
@@ -18,6 +19,23 @@ import 'fakes.dart';
 /// Mounts [AdminApp] with a pre-built provider and renders the first frames.
 Future<void> pumpApp(WidgetTester tester, AuthProvider provider) async {
   await tester.pumpWidget(AdminApp(authProvider: provider));
+  await tester.pump();
+}
+
+/// Types a password so the login form validates.
+///
+/// `LoginScreen._submit()` returns early when `Form.validate()` fails, and the
+/// password field is required. The email field is pre-filled with the default
+/// admin address, so only the password is missing from a freshly mounted form.
+Future<void> enterPassword(
+  WidgetTester tester, [
+  String password = 'secret-password',
+]) async {
+  final passwordField = find.byWidgetPredicate(
+    (widget) => widget is TextField && widget.obscureText,
+  );
+  expect(passwordField, findsOneWidget);
+  await tester.enterText(passwordField, password);
   await tester.pump();
 }
 
@@ -119,6 +137,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Sign In'), findsOneWidget);
+    await enterPassword(tester);
 
     // If this throws, the test fails — that is the regression signal.
     await tester.tap(find.text('Sign In'));
@@ -145,6 +164,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Sign In'), findsOneWidget);
+    await enterPassword(tester);
 
     await tester.tap(find.text('Sign In'));
     await tester.pump();
@@ -172,6 +192,7 @@ void main() {
     await provider.restore();
     await tester.pump();
 
+    await enterPassword(tester);
     await tester.tap(find.text('Sign In'));
     await tester.pump();
     await tester.pump();

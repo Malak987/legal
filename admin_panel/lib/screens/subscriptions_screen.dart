@@ -59,6 +59,10 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen> {
   }
 
   Future<void> _setStatus(Subscription s, String status) async {
+    // Read the API client before the dialog: touching `context` after an
+    // `await` is a use across an async gap. Same instance, same call below.
+    final api = AuthProvider.of(context).api;
+
     if (status == 'Active') {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -87,9 +91,7 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen> {
     }
 
     try {
-      await AuthProvider.of(context)
-          .api
-          .put('subscriptions/${s.id}', body: {'status': status});
+      await api.put('subscriptions/${s.id}', body: {'status': status});
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Subscription marked as $status')),

@@ -73,7 +73,13 @@ router.put(
   '/:id',
   authenticate,
   asyncHandler(async (req, res) => {
-    const data = validate(taskSchema, req.body, { presence: 'optional' });
+    // `noDefaults` is what stops a partial update from re-applying the schema
+    // defaults (`status: 'To Do'`, `priority: 'Medium'`) over the stored
+    // values. Same root cause as `PUT /api/cases/:id`.
+    const data = validate(taskSchema, req.body, {
+      presence: 'optional',
+      noDefaults: true,
+    });
     const existing = await getDocById(getDb(), COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Task not found');
     if (!isOwner(existing, req)) {

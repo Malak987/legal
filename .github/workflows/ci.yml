@@ -1,0 +1,118 @@
+name: CI
+
+# Phase 0: the two applications the repository can actually verify today.
+#
+#   backend/     Express + Firestore API. Its test suite is self-contained
+#                (in-memory Firestore double, no credentials, no network), so
+#                it runs on every push and pull request.
+#   admin_panel/ Flutter Web admin. `flutter analyze` + `flutter test`; the
+#                tests inject fake auth/API services, so no Firebase project is
+#                needed.
+#
+# NOT GATED YET, DELIBERATELY: legal_app/ (the mobile app) and its stale copy
+# under LegalServicesAppDoc/. The only test in legal_app/test/widget_test.dart
+# is the untouched Flutter counter template (it asserts a '0' counter that this
+# app does not have), so it cannot pass. Adding it here with `|| true`,
+# `continue-on-error`, or a skip would produce a green check that hides a real
+# failure. It is wired up in Phase 5, when that test is replaced with real ones.
+
+# Every branch, not only `main`: work in this repository lands on short-lived
+# `arena/*` branches and is merged through pull requests. Limiting `push` to
+# `main` meant a branch push produced no run at all (a workflow file that lives
+# only on a feature branch is not registered on the default branch, so neither
+# `workflow_dispatch` nor the workflow list can reach it either), so the first
+# feedback would arrive only after a PR existed. Running on any push gives the
+# branch that feedback immediately; `pull_request` still covers forks.
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Runs `node --test "test/**/*.test.js"` (see backend/package.json).
+      # Baseline at the Phase 0 commit: 351 tests, 0 failures.
+      - name: Run backend test suite
+        run: npm test
+
+  admin-panel:
+    name: Admin panel (analyze + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: admin_panel
+    steps:
+      - uses: actions/checkout@v4
+
+      # admin_panel/pubspec.yaml requires Dart >= 3.13.0 / Flutter >= 3.44.0,
+      # so an older pinned SDK would fail `pub get` rather than analyse.
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        shell: bash
+        # `pipefail` keeps flutter's exit status authoritative while the output
+        # is also captured for the diagnostic step below.
+        run: |
+          set -o pipefail
+          flutter analyze 2>&1 | tee "$RUNNER_TEMP/analyze.log"
+
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      # Raw job logs are served from results-receiver.actions.githubusercontent.com
+      # and blob storage, which some review environments cannot reach (the
+      # download returns EOF there, leaving only "Process completed with exit
+      # code 1"). When a step fails, the captured output is therefore also
+      # published as a check-run annotation, which api.github.com serves
+      # directly, so the exact findings are readable without the log archive.
+      #
+      # Diagnostic only: runs after the fact, never changes a job's outcome, and
+      # is never used to soften a gate.
+      - name: Publish failure details as annotations
+        if: failure()
+        shell: bash
+        run: |
+          publish() {  # $1 = log file, $2 = annotation title, $3 = grep pattern
+            local log="$1" title="$2" pattern="$3" body encoded
+            [ -f "$log" ] || return 0
+            body="$(grep -E "$pattern" "$log" | head -60 || true)"
+            [ -n "$body" ] || body="$(tail -40 "$log")"
+            encoded="$(printf '%s\n' "$body" | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'NF { printf "%s%%0A", $0 }')"
+            echo "::error title=${title}::${encoded}"
+            echo "----- ${title} (last 60 lines) -----"
+            tail -60 "$log"
+          }
+          publish "$RUNNER_TEMP/analyze.log" "flutter analyze" \
+            '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
+          publish "$RUNNER_TEMP/test.log" "flutter test" \
+            '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'

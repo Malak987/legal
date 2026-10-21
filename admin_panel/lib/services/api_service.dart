@@ -146,7 +146,7 @@ Map<String, dynamic> listPageOf(dynamic res) {
   if (data is! Map) {
     throw ApiException('Unexpected response from the server.', 0);
   }
-  return Map<String, dynamic>.from(data as Map);
+  return Map<String, dynamic>.from(data);
 }
 
 /// Safely reads `data.items` from a paginated list response and normalises
@@ -174,5 +174,5 @@ Map<String, dynamic> objectDataOf(dynamic res) {
   if (data is! Map) {
     throw ApiException('Unexpected response from the server.', 0);
   }
-  return Map<String, dynamic>.from(data as Map);
+  return Map<String, dynamic>.from(data);
 }
