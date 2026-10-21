@@ -355,10 +355,13 @@ void main() {
 /// An [AuthService] whose signIn() blocks on a completer, so the double-submit
 /// guard can be exercised.
 class _GatedSignInService implements AuthService {
-  _GatedSignInService(this._gate, {this.session});
+  _GatedSignInService(this._gate);
 
   final Completer<AdminSession> _gate;
-  final AdminSession? session;
+
+  /// Never supplied by a caller here; kept as a field because
+  /// [currentUser] must return one. Defaults to `null`.
+  AdminSession? session;
 
   @override
   final ApiService api = FakeApiService();

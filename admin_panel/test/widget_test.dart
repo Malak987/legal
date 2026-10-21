@@ -9,6 +9,7 @@
 //   "Tried to listen to a value exposed with provider, from outside of the
 //    widget tree" — caused by AuthProvider.of() using context.watch().
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:legal_admin/main.dart';
 import 'package:legal_admin/providers/auth_provider.dart';
