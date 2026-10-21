@@ -75,6 +75,17 @@ class AppUser {
   final String avatar;
   final String address;
 
+  /// Whether the source document actually declared a `role`.
+  ///
+  /// [AppUser.fromJson] falls back to `'client'` so that older records still
+  /// render, but that fallback is **not** evidence that the account is a
+  /// client. The backend rejects a case owned by a non-client
+  /// (`CASE_OWNER_ROLES` in `backend/src/routes/cases.js`), so anything that
+  /// offers or accepts a client must check [isClient] rather than [role].
+  ///
+  /// Defaults to `true` for objects built in code, where the role is known.
+  final bool hasExplicitRole;
+
   AppUser({
     required this.id,
     required this.name,
@@ -83,19 +94,25 @@ class AppUser {
     this.role = 'client',
     this.avatar = '',
     this.address = '',
+    this.hasExplicitRole = true,
   });
 
   factory AppUser.fromJson(Map<String, dynamic> json) {
+    final rawRole = json['role'];
     return AppUser(
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
       email: json['email']?.toString() ?? '',
       phone: json['phone']?.toString() ?? '',
-      role: json['role']?.toString() ?? 'client',
+      role: rawRole?.toString() ?? 'client',
       avatar: json['avatar']?.toString() ?? '',
       address: json['address']?.toString() ?? '',
+      hasExplicitRole: rawRole != null && rawRole.toString().isNotEmpty,
     );
   }
+
+  /// True only when the payload explicitly says `role: 'client'`.
+  bool get isClient => hasExplicitRole && role == 'client';
 
   Map<String, dynamic> toJson() => {
         'name': name,

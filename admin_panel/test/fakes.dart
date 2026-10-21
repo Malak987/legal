@@ -11,15 +11,82 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:legal_admin/services/api_service.dart';
 import 'package:legal_admin/services/auth_service.dart';
 
-/// In-memory [ApiService]: records calls and returns a canned payload.
-class FakeApiService implements ApiService {
-  FakeApiService({this.result});
+/// One recorded request, with everything a test may need to assert on.
+class FakeRequest {
+  FakeRequest({
+    required this.method,
+    required this.path,
+    this.query = const <String, String>{},
+    this.body,
+  });
 
-  /// The value returned by every verb. Defaults to an empty list payload.
+  final String method;
+  final String path;
+  final Map<String, String> query;
+  final Object? body;
+
+  /// `GET users` style label, matching the historical `calls` entries.
+  String get label => '$method $path';
+
+  @override
+  String toString() => '$label query=$query body=$body';
+}
+
+/// In-memory [ApiService]: records calls and returns canned payloads.
+///
+/// Backwards compatible with the original single-`result` fake: with no
+/// [resultsByPath], every verb still returns [result]. The additions are
+/// per-path payloads, captured query strings and bodies, and injectable
+/// failures — all needed to test a screen that loads one path and saves
+/// another.
+class FakeApiService implements ApiService {
+  FakeApiService({this.result, Map<String, Object?>? resultsByPath})
+      : _resultsByPath = resultsByPath ?? const <String, Object?>{};
+
+  /// The value returned by every verb that has no entry in [resultsByPath].
   final Object? result;
 
+  /// Payload (or [ApiException]/[Error] to throw) per path, e.g. `'users'`.
+  final Map<String, Object?> _resultsByPath;
+
+  /// Every recorded request, with query parameters and body.
+  final List<FakeRequest> requests = <FakeRequest>[];
+
   /// Every request made, e.g. `GET dashboard/stats`.
+  ///
+  /// Kept for the existing tests, which assert on this shape.
   final List<String> calls = <String>[];
+
+  /// Requests matching [method] and [path], newest last.
+  List<FakeRequest> requestsFor(String method, String path) => requests
+      .where((r) => r.method == method && r.path == path)
+      .toList();
+
+  /// The body of the most recent [method] [path] request, if any.
+  Object? lastBodyFor(String method, String path) {
+    final matches = requestsFor(method, path);
+    return matches.isEmpty ? null : matches.last.body;
+  }
+
+  Object? _resolve(String path) {
+    final entry = _resultsByPath[path];
+    if (entry is Error) throw entry;
+    if (entry is Exception) throw entry;
+    if (_resultsByPath.containsKey(path)) return entry;
+    return result;
+  }
+
+  void _record(String method, String path, Map<String, String> query, Object? body) {
+    calls.add('$method $path');
+    requests.add(
+      FakeRequest(
+        method: method,
+        path: path,
+        query: Map<String, String>.from(query),
+        body: body,
+      ),
+    );
+  }
 
   @override
   String? token;
@@ -32,30 +99,30 @@ class FakeApiService implements ApiService {
 
   @override
   Future<dynamic> get(String path, {Map<String, String>? query}) async {
-    calls.add('GET $path');
+    _record('GET', path, query ?? const <String, String>{}, null);
     await _captureToken();
-    return result;
+    return _resolve(path);
   }
 
   @override
   Future<dynamic> post(String path, {Object? body}) async {
-    calls.add('POST $path');
+    _record('POST', path, const <String, String>{}, body);
     await _captureToken();
-    return result;
+    return _resolve(path);
   }
 
   @override
   Future<dynamic> put(String path, {Object? body}) async {
-    calls.add('PUT $path');
+    _record('PUT', path, const <String, String>{}, body);
     await _captureToken();
-    return result;
+    return _resolve(path);
   }
 
   @override
   Future<dynamic> delete(String path) async {
-    calls.add('DELETE $path');
+    _record('DELETE', path, const <String, String>{}, null);
     await _captureToken();
-    return result;
+    return _resolve(path);
   }
 
   Future<void> _captureToken() async {
