@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { getDb } from '../config/firebase.js';
-import { authenticate } from '../middleware/auth.js';
-import { ok, created, notFound } from '../utils/response.js';
+import {
+  authenticate,
+  requireSelfOrAdmin,
+  isOwner,
+  forbidden,
+} from '../middleware/auth.js';
+import { ok, created, notFound, badRequest } from '../utils/response.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { getDocById, createDoc, deleteDoc } from '../utils/firestore.js';
 
@@ -12,11 +17,9 @@ const COLLECTION = 'favorites';
 router.get(
   '/:userId',
   authenticate,
+  requireSelfOrAdmin('userId'),
   asyncHandler(async (req, res) => {
     const { userId } = req.params;
-    if (req.user.role !== 'admin' && req.user.uid !== userId) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
-    }
     const snap = await getDb()
       .collection(COLLECTION)
       .where('userId', '==', userId)
@@ -26,15 +29,21 @@ router.get(
   }),
 );
 
-// POST /api/favorites  { userId, lawyerId }
+// POST /api/favorites  { lawyerId }
 router.post(
   '/',
   authenticate,
   asyncHandler(async (req, res) => {
-    const { userId, lawyerId } = req.body || {};
-    if (!userId || !lawyerId) {
-      return res.status(400).json({ success: false, message: 'userId and lawyerId are required' });
+    const { lawyerId } = req.body || {};
+    if (!lawyerId) {
+      return badRequest(res, 'lawyerId is required');
     }
+
+    // The owner is always the authenticated user. A `userId` in the body used
+    // to be trusted, which let a client add favourites to somebody else's
+    // list; it is now ignored.
+    const userId = req.user.uid;
+
     const existing = await getDb()
       .collection(COLLECTION)
       .where('userId', '==', userId)
@@ -54,6 +63,12 @@ router.delete(
   '/:id',
   authenticate,
   asyncHandler(async (req, res) => {
+    const existing = await getDocById(getDb(), COLLECTION, req.params.id);
+    if (!existing) return notFound(res, 'Favorite not found');
+    if (!isOwner(existing, req)) {
+      return forbidden(res, 'Forbidden. You can only remove your own favorites.');
+    }
+
     const deleted = await deleteDoc(getDb(), COLLECTION, req.params.id);
     if (!deleted) return notFound(res, 'Favorite not found');
     ok(res, { id: req.params.id }, 'Removed from favorites');

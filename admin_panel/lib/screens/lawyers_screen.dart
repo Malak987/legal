@@ -82,6 +82,12 @@ class _LawyersScreenState extends State<LawyersScreen> {
   }
 
   @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Column(
       children: [
@@ -199,6 +205,7 @@ class _LawyerDialogState extends State<LawyerDialog> {
   late final TextEditingController _name;
   late final TextEditingController _specialty;
   late final TextEditingController _price;
+  late final TextEditingController _priceValue;
   late final TextEditingController _location;
   late final TextEditingController _image;
   late double _rating;
@@ -213,6 +220,7 @@ class _LawyerDialogState extends State<LawyerDialog> {
     _name = TextEditingController(text: l?.name ?? '');
     _specialty = TextEditingController(text: l?.specialty ?? '');
     _price = TextEditingController(text: l?.price ?? '');
+    _priceValue = TextEditingController(text: _formatRate(l?.priceValue));
     _location = TextEditingController(text: l?.location ?? '');
     _image = TextEditingController(text: l?.image ?? '');
     _rating = l?.rating ?? 4.5;
@@ -222,13 +230,21 @@ class _LawyerDialogState extends State<LawyerDialog> {
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
     _name.dispose();
     _specialty.dispose();
     _price.dispose();
+    _priceValue.dispose();
     _location.dispose();
     _image.dispose();
     super.dispose();
+  }
+
+  /// Shows a rate without a pointless trailing `.0`.
+  static String _formatRate(double? value) {
+    if (value == null) return '';
+    return value == value.roundToDouble()
+        ? value.toStringAsFixed(0)
+        : value.toString();
   }
 
   Future<void> _save() async {
@@ -238,11 +254,38 @@ class _LawyerDialogState extends State<LawyerDialog> {
       );
       return;
     }
+
+    // The booking API prices a booking as `priceValue * hours`. A lawyer with
+    // no rate cannot be booked, so a new lawyer must have one. On edit an
+    // empty field means "keep the stored rate" — omitting the key is what
+    // stops this dialog from erasing a price that is already configured.
+    final rateText = _priceValue.text.trim();
+    double? rate;
+    if (rateText.isNotEmpty) {
+      rate = double.tryParse(rateText);
+      if (rate == null || !rate.isFinite || rate <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Hourly rate must be a positive number (e.g. 150)'),
+          ),
+        );
+        return;
+      }
+    } else if (widget.lawyer == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Hourly rate is required so clients can book this lawyer'),
+        ),
+      );
+      return;
+    }
+
     setState(() => _saving = true);
-    final body = {
+    final body = <String, dynamic>{
       'name': _name.text.trim(),
       'specialty': _specialty.text.trim(),
       'price': _price.text.trim(),
+      if (rate != null) 'priceValue': rate,
       'location': _location.text.trim(),
       'image': _image.text.trim(),
       'rating': _rating,
@@ -289,6 +332,17 @@ class _LawyerDialogState extends State<LawyerDialog> {
               TextField(
                 controller: _price,
                 decoration: const InputDecoration(labelText: 'Price (e.g. \$150/hr)'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _priceValue,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: 'Hourly rate (number only, e.g. 150)',
+                  helperText: widget.lawyer == null
+                      ? 'Required: bookings are priced as rate x hours'
+                      : 'Leave empty to keep the current rate',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(

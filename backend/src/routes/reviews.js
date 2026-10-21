@@ -44,8 +44,9 @@ router.post(
   asyncHandler(async (req, res) => {
     const data = validate(reviewSchema, {
       ...req.body,
-      userId: req.body.userId || req.user.uid,
-      userName: req.body.userName || req.user.name,
+      // A review is attributed to its author, never to a client-supplied id.
+      userId: req.user.uid,
+      userName: req.user.name,
     });
     const createdDoc = await createDoc(getDb(), COLLECTION, data);
     created(res, createdDoc, 'Review created');

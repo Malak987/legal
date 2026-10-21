@@ -45,11 +45,20 @@ router.get(
   }),
 );
 
-// POST /api/lawyers  (admin/lawyer only)
+// POST /api/lawyers  (admin only)
+//
+// WHY NOT `lawyer` ANY MORE: a lawyer document carries no reference to the
+// account that owns it. `seed.js` creates them with auto-generated ids
+// (`collection('lawyers').doc()`), the document schema has no `uid`/`userId`
+// field, and `req.params.id` is therefore NOT a Firebase uid. Without that
+// link there is no way to tell "my profile" from "somebody else's profile",
+// so the previous `requireRole('admin','lawyer')` let any lawyer create or
+// rewrite any other lawyer's public record — including `rating`, `isTop` and
+// `isPopular`. Until an ownership link is designed, mutations are admin-only.
 router.post(
   '/',
   authenticate,
-  requireRole('admin', 'lawyer'),
+  requireRole('admin'),
   asyncHandler(async (req, res) => {
     const data = validate(lawyerSchema, req.body);
     const createdDoc = await createDoc(getDb(), COLLECTION, data);
@@ -57,11 +66,11 @@ router.post(
   }),
 );
 
-// PUT /api/lawyers/:id
+// PUT /api/lawyers/:id  (admin only)
 router.put(
   '/:id',
   authenticate,
-  requireRole('admin', 'lawyer'),
+  requireRole('admin'),
   asyncHandler(async (req, res) => {
     const data = validate(lawyerSchema, req.body, { presence: 'optional' });
     const updated = await updateDoc(getDb(), COLLECTION, req.params.id, data);

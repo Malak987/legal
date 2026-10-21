@@ -1,8 +1,14 @@
 import { Router } from 'express';
 import { getDb, getAuth } from '../config/firebase.js';
-import { authenticate, requireRole } from '../middleware/auth.js';
+import {
+  authenticate,
+  requireRole,
+  requireSelfOrAdmin,
+  isAdmin,
+  forbidden,
+} from '../middleware/auth.js';
 import { ok, created, notFound, parseListQuery, cleanObject } from '../utils/response.js';
-import { validate, userSchema } from '../utils/validators.js';
+import { validate, userSchema, userRoleSchema } from '../utils/validators.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { listDocs, getDocById, createDoc, updateDoc, deleteDoc } from '../utils/firestore.js';
 
@@ -31,10 +37,8 @@ router.get(
 router.get(
   '/:id',
   authenticate,
+  requireSelfOrAdmin('id'),
   asyncHandler(async (req, res) => {
-    if (req.user.role !== 'admin' && req.user.uid !== req.params.id) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
-    }
     const user = await getDocById(getDb(), COLLECTION, req.params.id);
     if (!user) return notFound(res, 'User not found');
     ok(res, user);
@@ -42,17 +46,57 @@ router.get(
 );
 
 // PUT /api/users/:id  (admin, or the user themselves)
+//
+// Only profile fields are writable: `role` is not part of `userSchema`, so a
+// `role` sent in the body is stripped by Joi and never reaches Firestore.
+// That is what blocks self-escalation to `admin`.
 router.put(
   '/:id',
   authenticate,
+  requireSelfOrAdmin('id'),
   asyncHandler(async (req, res) => {
-    if (req.user.role !== 'admin' && req.user.uid !== req.params.id) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
-    }
     const data = validate(userSchema, req.body, { presence: 'optional' });
+
+    // Defence in depth: even if the schema changes later, a non-admin can
+    // never write a role or take over another identity.
+    if (!isAdmin(req)) {
+      delete data.role;
+      delete data.uid;
+      delete data.userId;
+    }
+
     const updated = await updateDoc(getDb(), COLLECTION, req.params.id, data);
     if (!updated) return notFound(res, 'User not found');
     ok(res, updated, 'User updated');
+  }),
+);
+
+// PATCH /api/users/:id/role  (admin only)
+//
+// Role changes are deliberately separate from the profile update above so the
+// privilege boundary is explicit and auditable.
+router.patch(
+  '/:id/role',
+  authenticate,
+  requireRole('admin'),
+  asyncHandler(async (req, res) => {
+    const { role } = validate(userRoleSchema, req.body);
+
+    const existing = await getDocById(getDb(), COLLECTION, req.params.id);
+    if (!existing) return notFound(res, 'User not found');
+
+    const updated = await updateDoc(getDb(), COLLECTION, req.params.id, { role });
+    if (!updated) return notFound(res, 'User not found');
+
+    // Audit trail for a sensitive change. Ids only — never profile contents.
+    // TODO(persistence): move this to a dedicated `audit_logs` collection once
+    // that collection is provisioned, so the trail survives a restart.
+    console.log(
+      `[audit] role_change actor=${req.user.uid} target=${req.params.id} ` +
+        `from=${existing.role ?? 'unset'} to=${role} at=${new Date().toISOString()}`,
+    );
+
+    ok(res, updated, `Role updated to ${role}`);
   }),
 );
 
@@ -62,6 +106,12 @@ router.delete(
   authenticate,
   requireRole('admin'),
   asyncHandler(async (req, res) => {
+    // Guard against an administrator removing their own account and locking
+    // themselves (and the admin panel) out.
+    if (req.params.id === req.user.uid) {
+      return forbidden(res, 'You cannot delete your own account.');
+    }
+
     const deleted = await deleteDoc(getDb(), COLLECTION, req.params.id);
     if (!deleted) return notFound(res, 'User not found');
     try {

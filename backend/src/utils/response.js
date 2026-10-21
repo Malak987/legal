@@ -19,6 +19,15 @@ export function notFound(res, message = 'Not found') {
 }
 
 /**
+ * 409 — the request is valid but conflicts with the current state of the
+ * resource (duplicate idempotency key with a different payload, currency
+ * mismatch, illegal status transition on an already-finalised record).
+ */
+export function conflict(res, message = 'Conflict', details = null) {
+  return res.status(409).json({ success: false, message, ...(details ? { details } : {}) });
+}
+
+/**
  * Parses common list query params: page, limit, search, sort, order.
  */
 export function parseListQuery(req, defaultLimit = 20, maxLimit = 100) {

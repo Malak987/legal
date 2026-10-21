@@ -20,13 +20,31 @@ export const lawyerSchema = Joi.object({
   isTop: Joi.boolean().optional(),
 });
 
+/**
+ * Fields a user may change on their own profile.
+ *
+ * `role` is deliberately NOT part of this schema. It used to be accepted
+ * here, and because `PUT /api/users/:id` allows the caller to edit their own
+ * document, any signed-in user could escalate themselves to `admin` with a
+ * single request. Joi runs with `stripUnknown`, so a `role` in the request
+ * body is now silently dropped instead of being written.
+ *
+ * Changing a role goes through `userRoleSchema` on the admin-only route.
+ */
 export const userSchema = Joi.object({
   name: Joi.string().trim().min(2).max(120).required(),
   email: Joi.string().email().required(),
   phone: Joi.string().trim().max(40).allow('', null),
-  role: Joi.string().valid('client', 'lawyer', 'admin').default('client'),
   avatar: Joi.string().trim().allow('', null),
   address: Joi.string().trim().max(300).allow('', null),
+});
+
+/**
+ * Role change payload — admin-only, and restricted to real roles.
+ * `admin` is included so administrators can promote other administrators.
+ */
+export const userRoleSchema = Joi.object({
+  role: Joi.string().valid('client', 'lawyer', 'admin').required(),
 });
 
 export const caseSchema = Joi.object({
@@ -54,17 +72,31 @@ export const taskSchema = Joi.object({
     .default('To Do'),
 });
 
+export const BOOKING_STATUSES = ['Pending', 'Active', 'Completed', 'Cancelled'];
+
+/**
+ * Booking payload.
+ *
+ * `totalPrice` is NOT accepted: the server derives it from the lawyer's
+ * configured hourly rate (`lawyers.priceValue`) and the requested `hours`.
+ * It is still returned in responses so existing clients keep working.
+ */
 export const bookingSchema = Joi.object({
   userId: Joi.string().trim().allow('', null),
   lawyerId: Joi.string().trim().allow('', null),
   lawyerName: Joi.string().trim().allow('', null),
   date: Joi.string().trim().allow('', null),
   time: Joi.string().trim().allow('', null),
-  hours: Joi.number().min(1).max(12).optional(),
-  totalPrice: Joi.number().min(0).optional(),
+  hours: Joi.number().integer().min(1).max(12).optional(),
   status: Joi.string()
-    .valid('Pending', 'Active', 'Completed', 'Cancelled')
+    .valid(...BOOKING_STATUSES)
     .default('Pending'),
+});
+
+/** Creation requires a lawyer and a billable number of hours. */
+export const bookingCreateSchema = bookingSchema.keys({
+  lawyerId: Joi.string().trim().required(),
+  hours: Joi.number().integer().min(1).max(12).required(),
 });
 
 export const reviewSchema = Joi.object({
@@ -84,11 +116,19 @@ export const planSchema = Joi.object({
   isPopular: Joi.boolean().optional(),
 });
 
+export const SUBSCRIPTION_STATUSES = ['Pending', 'Active', 'Expired', 'Cancelled'];
+
+/**
+ * Subscription payload.
+ *
+ * `Pending` is the starting state: an account cannot activate a paid plan by
+ * creating it. Only an administrator may move a subscription to `Active`.
+ */
 export const subscriptionSchema = Joi.object({
   userId: Joi.string().trim().allow('', null),
   planId: Joi.string().trim().allow('', null),
   planTitle: Joi.string().trim().allow('', null),
-  status: Joi.string().valid('Active', 'Expired', 'Cancelled').default('Active'),
+  status: Joi.string().valid(...SUBSCRIPTION_STATUSES).default('Pending'),
 });
 
 export const notificationSchema = Joi.object({
@@ -99,9 +139,16 @@ export const notificationSchema = Joi.object({
   read: Joi.boolean().optional(),
 });
 
+/**
+ * Chat message payload.
+ *
+ * `senderId` and `senderName` are deliberately NOT accepted here: the sender
+ * is derived on the server from the verified token (`req.user`). A client that
+ * sends them has the values stripped, so a participant can no longer post a
+ * message that appears to come from an administrator or from another member of
+ * the conversation.
+ */
 export const messageSchema = Joi.object({
-  senderId: Joi.string().trim().allow('', null),
-  senderName: Joi.string().trim().max(120).allow('', null),
   text: Joi.string().trim().min(1).max(4000).required(),
 });
 
@@ -110,6 +157,18 @@ export const availabilitySchema = Joi.object({
   lawyerName: Joi.string().trim().max(120).allow('', null),
   date: Joi.string().trim().allow('', null),
   slots: Joi.array().items(Joi.string()).optional(),
+});
+
+/**
+ * Creation payload for an availability slot.
+ *
+ * `lawyerId` and `date` are required here (they were optional in
+ * `availabilitySchema`, which allowed a slot with no owner and no date).
+ * Updates still use the permissive schema so a single field can be patched.
+ */
+export const availabilityCreateSchema = availabilitySchema.keys({
+  lawyerId: Joi.string().trim().required(),
+  date: Joi.string().trim().required(),
 });
 
 /**

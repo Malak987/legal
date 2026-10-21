@@ -1,6 +1,13 @@
 import { Router } from 'express';
 import { getDb } from '../config/firebase.js';
-import { authenticate } from '../middleware/auth.js';
+import {
+  authenticate,
+  isOwner,
+  forbidden,
+  ownerIdFor,
+  isAdmin,
+  lockOwnerOnUpdate,
+} from '../middleware/auth.js';
 import { ok, created, notFound, parseListQuery, cleanObject } from '../utils/response.js';
 import { validate, caseSchema } from '../utils/validators.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -20,8 +27,10 @@ router.get(
       status: req.query.status,
       priority: req.query.priority,
     });
-    // If a non-admin user requests, restrict to their own cases.
-    if (req.user.role !== 'admin' && !filters.userId) filters.userId = req.user.uid;
+    // A non-admin is always scoped to their own records. The old test only
+    // applied the scope when `?userId=` was absent, so passing somebody
+    // else's id returned their records instead.
+    if (!isAdmin(req)) filters.userId = req.user.uid;
 
     const result = await listDocs(getDb(), COLLECTION, {
       search: q.search,
@@ -41,8 +50,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const item = await getDocById(getDb(), COLLECTION, req.params.id);
     if (!item) return notFound(res, 'Case not found');
-    if (req.user.role !== 'admin' && item.userId && item.userId !== req.user.uid) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
+    if (!isOwner(item, req)) {
+      return forbidden(res);
     }
     ok(res, item);
   }),
@@ -53,7 +62,7 @@ router.post(
   '/',
   authenticate,
   asyncHandler(async (req, res) => {
-    const data = validate(caseSchema, { ...req.body, userId: req.body.userId || req.user.uid });
+    const data = validate(caseSchema, { ...req.body, userId: ownerIdFor(req) });
     const createdDoc = await createDoc(getDb(), COLLECTION, data);
     created(res, createdDoc, 'Case created');
   }),
@@ -67,9 +76,13 @@ router.put(
     const data = validate(caseSchema, req.body, { presence: 'optional' });
     const existing = await getDocById(getDb(), COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Case not found');
-    if (req.user.role !== 'admin' && existing.userId && existing.userId !== req.user.uid) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
+    if (!isOwner(existing, req)) {
+      return forbidden(res);
     }
+    // Ownership is immutable here: `userId` in the body cannot reassign a
+    // record to another account (admin-only operation).
+    lockOwnerOnUpdate(data, existing, req);
+
     const updated = await updateDoc(getDb(), COLLECTION, req.params.id, data);
     ok(res, updated, 'Case updated');
   }),
@@ -82,8 +95,8 @@ router.delete(
   asyncHandler(async (req, res) => {
     const existing = await getDocById(getDb(), COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Case not found');
-    if (req.user.role !== 'admin' && existing.userId && existing.userId !== req.user.uid) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
+    if (!isOwner(existing, req)) {
+      return forbidden(res);
     }
     await deleteDoc(getDb(), COLLECTION, req.params.id);
     ok(res, { id: req.params.id }, 'Case deleted');

@@ -7,6 +7,13 @@ class Lawyer {
   final String name;
   final String specialty;
   final String price;
+
+  /// Numeric hourly rate, in the same currency as the wallet (USD).
+  ///
+  /// The backend prices a booking as `priceValue * hours`, so a lawyer without
+  /// this field cannot be booked at all. `null` means "not configured" (legacy
+  /// records and anything created before the field existed).
+  final double? priceValue;
   final String image;
   final double rating;
   final String location;
@@ -19,6 +26,7 @@ class Lawyer {
     required this.name,
     this.specialty = '',
     this.price = '',
+    this.priceValue,
     this.image = '',
     this.rating = 0,
     this.location = '',
@@ -28,11 +36,13 @@ class Lawyer {
   });
 
   factory Lawyer.fromJson(Map<String, dynamic> json) {
+    final rawPrice = json['priceValue'];
     return Lawyer(
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
       specialty: json['specialty']?.toString() ?? '',
       price: json['price']?.toString() ?? '',
+      priceValue: rawPrice is num ? rawPrice.toDouble() : null,
       image: json['image']?.toString() ?? '',
       rating: (json['rating'] ?? 0).toDouble(),
       location: json['location']?.toString() ?? '',
@@ -46,6 +56,7 @@ class Lawyer {
         'name': name,
         'specialty': specialty,
         'price': price,
+        if (priceValue != null) 'priceValue': priceValue,
         'image': image,
         'rating': rating,
         'location': location,
@@ -271,6 +282,40 @@ class Plan {
         'features': features,
         'isPopular': isPopular,
       };
+}
+
+/// A user's subscription to a plan.
+///
+/// `status` is the only entitlement signal. The backend creates user
+/// subscriptions as `Pending`; only an administrator can move one to `Active`.
+class Subscription {
+  final String id;
+  final String userId;
+  final String planId;
+  final String planTitle;
+  final String status;
+
+  const Subscription({
+    required this.id,
+    this.userId = '',
+    this.planId = '',
+    this.planTitle = '',
+    this.status = 'Pending',
+  });
+
+  factory Subscription.fromJson(Map<String, dynamic> json) {
+    return Subscription(
+      id: json['id']?.toString() ?? '',
+      userId: json['userId']?.toString() ?? '',
+      planId: json['planId']?.toString() ?? '',
+      planTitle: json['planTitle']?.toString() ?? '',
+      status: json['status']?.toString() ?? 'Pending',
+    );
+  }
+
+  /// What to show as the record's name. Never treated as proof of a paid plan.
+  String get displayTitle =>
+      planTitle.isNotEmpty ? planTitle : (planId.isNotEmpty ? planId : 'Subscription');
 }
 
 class NotificationItem {

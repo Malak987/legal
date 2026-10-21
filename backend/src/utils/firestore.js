@@ -10,6 +10,39 @@ import { admin } from '../config/firebase.js';
 
 const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
 
+/**
+ * Normalises a Firestore Timestamp, `Date`, ISO string or epoch-millis value
+ * to milliseconds so records can be ordered in memory.
+ *
+ * Firestore needs a COMPOSITE index to combine a filter with `orderBy` on a
+ * different field, and those indexes are not deployed for this project.
+ * Sorting in memory keeps single-field queries working — the convention this
+ * module already documents above.
+ *
+ * Missing or unparseable values become `0` rather than `NaN`, so documents are
+ * kept in the result set instead of being dropped or poisoning the sort.
+ */
+export function toMillis(value) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  // Serialised Firestore Timestamp ({ _seconds, _nanoseconds }).
+  if (typeof value === 'object' && typeof value._seconds === 'number') {
+    return value._seconds * 1000 + Math.floor((value._nanoseconds ?? 0) / 1e6);
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Sorts documents in place, newest first, by the given timestamp field.
+ * Documents without a usable timestamp sort last.
+ */
+export function sortByDesc(docs, field = 'createdAt') {
+  return docs.sort((a, b) => toMillis(b?.[field]) - toMillis(a?.[field]));
+}
+
 export async function listDocs(db, collection, options = {}) {
   const {
     search = '',
