@@ -46,6 +46,12 @@ class FakeApiService implements ApiService {
   /// The value returned by every verb that has no entry in [resultsByPath].
   final Object? result;
 
+  /// When set, every request waits for this before resolving.
+  ///
+  /// Lets a test hold a response open and assert on a loading state without
+  /// racing the frame in which the widget is first built.
+  Completer<void>? gate;
+
   /// Payload (or [ApiException]/[Error] to throw) per path, e.g. `'users'`.
   final Map<String, Object?> _resultsByPath;
 
@@ -66,6 +72,11 @@ class FakeApiService implements ApiService {
   Object? lastBodyFor(String method, String path) {
     final matches = requestsFor(method, path);
     return matches.isEmpty ? null : matches.last.body;
+  }
+
+  Future<void> _awaitGate() async {
+    final pending = gate;
+    if (pending != null) await pending.future;
   }
 
   Object? _resolve(String path) {
@@ -101,6 +112,7 @@ class FakeApiService implements ApiService {
   Future<dynamic> get(String path, {Map<String, String>? query}) async {
     _record('GET', path, query ?? const <String, String>{}, null);
     await _captureToken();
+    await _awaitGate();
     return _resolve(path);
   }
 
@@ -108,6 +120,7 @@ class FakeApiService implements ApiService {
   Future<dynamic> post(String path, {Object? body}) async {
     _record('POST', path, const <String, String>{}, body);
     await _captureToken();
+    await _awaitGate();
     return _resolve(path);
   }
 
@@ -115,6 +128,7 @@ class FakeApiService implements ApiService {
   Future<dynamic> put(String path, {Object? body}) async {
     _record('PUT', path, const <String, String>{}, body);
     await _captureToken();
+    await _awaitGate();
     return _resolve(path);
   }
 
@@ -122,6 +136,7 @@ class FakeApiService implements ApiService {
   Future<dynamic> delete(String path) async {
     _record('DELETE', path, const <String, String>{}, null);
     await _captureToken();
+    await _awaitGate();
     return _resolve(path);
   }
 

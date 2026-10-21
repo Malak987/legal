@@ -4,6 +4,8 @@
 // for the real admin-only users endpoint, and `POST/PUT cases` assert on the
 // exact payload the panel would send. No Firebase project, no network.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:legal_admin/models/models.dart';
@@ -110,11 +112,14 @@ Future<void> tapSave(WidgetTester tester) async {
 void main() {
   group('client picker: loading and results', () {
     testWidgets('shows a spinner, then the client list', (tester) async {
+      // Held open so the loading state is observable regardless of how many
+      // microtasks a pump happens to flush.
+      final gate = Completer<void>();
       final api = FakeApiService(resultsByPath: {
         'users': listPayload([
           userJson('client-1', 'Sara Ali', email: 'sara@example.com'),
         ]),
-      });
+      })..gate = gate;
 
       final provider = AuthProvider(FakeAuthService(api: api));
       await tester.pumpWidget(
@@ -125,11 +130,13 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
 
-      // First frame of the dialog: the request is in flight.
+      // The dialog is up and the users request has not answered yet.
+      expect(find.text('Search clients'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsWidgets);
 
-      await tester.pump(const Duration(milliseconds: 400));
+      gate.complete();
       await tester.pump();
       await tester.pump();
 
