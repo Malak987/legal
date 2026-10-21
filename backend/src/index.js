@@ -37,7 +37,11 @@ app.use(
         }
       }
 
-      return callback(new Error(`Origin "${origin}" not allowed by CORS`));
+      // A rejected origin is a client-side refusal, not a server failure.
+      // Without an explicit status this surfaced as a 500.
+      const corsError = new Error(`Origin "${origin}" not allowed by CORS`);
+      corsError.status = 403;
+      return callback(corsError);
     },
     credentials: true,
   }),

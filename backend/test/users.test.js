@@ -24,6 +24,8 @@ import {
   stopApp,
   tokenFor,
   users,
+  authUpdates,
+  failAuthUpdates,
 } from './helpers/harness.js';
 
 const BASE = '/api/users';
@@ -288,5 +290,83 @@ describe('users: the fixture admin is really an admin', () => {
 
     assert.equal(res.status, 200);
     assert.equal(res.body.data.id, 'client-1');
+  });
+});
+
+/* =====================================================================
+ * WAVE 1.3 — Firebase Auth and the profile must not drift
+ * ===================================================================*/
+
+describe('users 1.3: email synchronisation', () => {
+  beforeEach(() => reset({ collections: { users: seed() } }));
+
+  it('updates the sign-in email in Firebase Auth when an admin changes it', async () => {
+    signIn('admin1');
+
+    const res = await put(`${BASE}/client-1`, {
+      token: tokenFor('admin1'),
+      body: { name: 'Client One', email: 'new-address@example.com' },
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(docs('users').find((u) => u.id === 'client-1').email, 'new-address@example.com');
+    assert.deepEqual(authUpdates(), [
+      { uid: 'client-1', email: 'new-address@example.com' },
+    ]);
+  });
+
+  it('does not touch Firebase Auth when the email is unchanged', async () => {
+    signIn('admin1');
+
+    const res = await put(`${BASE}/client-1`, {
+      token: tokenFor('admin1'),
+      body: { name: 'Renamed', email: 'client1@example.com' },
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(authUpdates().length, 0);
+  });
+
+  it('denies an ordinary user changing their own sign-in email', async () => {
+    signIn('client1');
+
+    const res = await put(`${BASE}/client-1`, {
+      token: tokenFor('client1'),
+      body: { name: 'Client One', email: 'attacker@example.com' },
+    });
+
+    assert.equal(res.status, 403);
+    assert.equal(docs('users').find((u) => u.id === 'client-1').email, 'client1@example.com');
+    assert.equal(authUpdates().length, 0);
+  });
+
+  it('allows an ordinary user to re-send their current email', async () => {
+    signIn('client1');
+
+    const res = await put(`${BASE}/client-1`, {
+      token: tokenFor('client1'),
+      body: { name: 'Client One', email: 'client1@example.com' },
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(authUpdates().length, 0);
+  });
+
+  it('reports a client error and writes nothing when Auth rejects the address', async () => {
+    signIn('admin1');
+    failAuthUpdates('auth/email-already-exists');
+
+    const res = await put(`${BASE}/client-1`, {
+      token: tokenFor('admin1'),
+      body: { name: 'Client One', email: 'taken@example.com' },
+    });
+
+    assert.equal(res.status, 400);
+    assert.equal(
+      docs('users').find((u) => u.id === 'client-1').email,
+      'client1@example.com',
+      'the profile must not drift from the sign-in address',
+    );
+    assert.equal(authUpdates().length, 0);
   });
 });
