@@ -82,11 +82,9 @@ Future<void> openDialog(
 }) async {
   final provider = AuthProvider(FakeAuthService(api: api));
   await tester.pumpWidget(
-    MaterialApp(
-      home: ChangeNotifierProvider<AuthProvider>.value(
-        value: provider,
-        child: _Launcher(item: item),
-      ),
+    ChangeNotifierProvider<AuthProvider>.value(
+      value: provider,
+      child: MaterialApp(home: _Launcher(item: item)),
     ),
   );
   await tester.tap(find.text('open'));
@@ -120,11 +118,9 @@ void main() {
 
       final provider = AuthProvider(FakeAuthService(api: api));
       await tester.pumpWidget(
-        MaterialApp(
-          home: ChangeNotifierProvider<AuthProvider>.value(
-            value: provider,
-            child: const _Launcher(),
-          ),
+        ChangeNotifierProvider<AuthProvider>.value(
+          value: provider,
+          child: const MaterialApp(home: _Launcher()),
         ),
       );
       await tester.tap(find.text('open'));
