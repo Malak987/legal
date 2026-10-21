@@ -285,13 +285,15 @@ class _LawyerDialogState extends State<LawyerDialog> {
       'name': _name.text.trim(),
       'specialty': _specialty.text.trim(),
       'price': _price.text.trim(),
-      if (rate != null) 'priceValue': rate,
       'location': _location.text.trim(),
       'image': _image.text.trim(),
       'rating': _rating,
       'isPopular': _isPopular,
       'isTop': _isTop,
     };
+    // Added after the literal instead of with a collection-`if`: the stored
+    // rate must simply be absent when the field was left empty on edit.
+    if (rate != null) body['priceValue'] = rate;
     try {
       final api = AuthProvider.of(context).api;
       if (widget.lawyer == null) {

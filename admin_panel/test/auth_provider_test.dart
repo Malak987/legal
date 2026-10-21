@@ -6,7 +6,11 @@
 
 import 'dart:async';
 
-import 'package:firebase_auth/firebase_auth.dart';
+// `firebase_auth` re-exports a platform-level `AuthProvider`, which collides
+// with the admin panel's own AuthProvider class and made every `AuthProvider(`
+// call below ambiguous. Only `User` is needed from here, so the colliding name
+// is hidden rather than the whole import dropped.
+import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:legal_admin/providers/auth_provider.dart';
 import 'package:legal_admin/services/api_service.dart';
