@@ -1034,3 +1034,63 @@ describe('wallet 1.3: a wallet must belong to an existing account', () => {
     assert.equal(balanceOf('fresh-user'), 10);
   });
 });
+
+/* =====================================================================
+ * WAVE 1.3 — negative balances
+ * ===================================================================*/
+
+describe('wallet 1.3: a corrupt negative balance cannot be spent', () => {
+  beforeEach(() =>
+    reset({
+      collections: {
+        users: users('admin1', 'client1'),
+        wallets: [{ id: 'client-1', userId: 'client-1', balance: -50, currency: 'USD' }],
+        wallet_transactions: [],
+      },
+    }),
+  );
+
+  it('refuses a debit against a negative balance without changing it', async () => {
+    signIn('client1');
+
+    const res = await post(`${BASE}/transactions`, {
+      token: tokenFor('client1'),
+      body: { userId: 'client-1', type: 'debit', amount: 1 },
+    });
+
+    assert.equal(res.status, 400);
+    assert.equal(balanceOf('client-1'), -50, 'the stored value is left for an admin to fix');
+    assert.equal(docs('wallet_transactions').length, 0);
+  });
+
+  it('still allows an administrator to credit the account back to positive', async () => {
+    signIn('admin1');
+
+    const res = await post(`${BASE}/transactions`, {
+      token: tokenFor('admin1'),
+      body: { userId: 'client-1', type: 'credit', amount: 60 },
+    });
+
+    assert.equal(res.status, 201);
+    assert.equal(balanceOf('client-1'), 10);
+  });
+
+  it('never lets the arithmetic wrap below zero through a large debit', async () => {
+    reset({
+      collections: {
+        users: users('admin1', 'client1'),
+        wallets: [{ id: 'client-1', userId: 'client-1', balance: 0.01, currency: 'USD' }],
+        wallet_transactions: [],
+      },
+    });
+    signIn('client1');
+
+    const res = await post(`${BASE}/transactions`, {
+      token: tokenFor('client1'),
+      body: { userId: 'client-1', type: 'debit', amount: 0.02 },
+    });
+
+    assert.equal(res.status, 400);
+    assert.equal(balanceOf('client-1'), 0.01);
+  });
+});

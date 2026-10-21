@@ -38,20 +38,27 @@ export async function authenticate(req, res, next) {
       // Firestore lookup is best-effort; fall back to token claims only.
     }
 
+    // The token is the identity. A profile document may carry a `uid` (or an
+    // `email`) left over from a migration or a manual edit; spreading it last
+    // would let that value override the verified caller and silently act as
+    // somebody else. `role` and `name` are profile-owned, so they still come
+    // from the document when present.
     req.user = {
+      ...profile,
       uid: decoded.uid,
-      email: decoded.email || '',
+      email: decoded.email || profile.email || '',
       name: profile.name || decoded.name || '',
       role: profile.role || decoded.role || 'client',
-      ...profile,
     };
 
     next();
   } catch (error) {
+    // Why verification failed (bad signature, wrong project, expired key) is
+    // operational detail. Log it, do not hand it to the caller.
+    console.error('[auth] token verification failed:', error?.message);
     return res.status(401).json({
       success: false,
       message: 'Invalid or expired token.',
-      error: error?.message,
     });
   }
 }
