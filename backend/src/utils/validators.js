@@ -7,6 +7,42 @@ import Joi from 'joi';
 
 export const objectId = Joi.string().trim();
 
+/**
+ * A calendar date in `YYYY-MM-DD` form.
+ *
+ * Joi's built-in `isoDate()` was not enough: it validates the *shape* only, so
+ * `2026-02-30` (not a real date) and full timestamps like
+ * `2026-11-30T10:00:00Z` both passed. A case deadline has no time-of-day, so
+ * the value is kept to a date-only string and checked against the calendar.
+ *
+ * Empty values stay allowed: `dueDate` is optional and clients that have
+ * nothing to set send `""` (see `AppRepository.createCase`).
+ */
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+export const isoCalendarDate = Joi.string()
+  .trim()
+  .allow('', null)
+  .custom((value, helpers) => {
+    if (value === '' || value === null || value === undefined) return value;
+    if (!ISO_DATE_PATTERN.test(value)) return helpers.error('string.isoDate');
+
+    const [year, month, day] = value.split('-').map(Number);
+    // Round-trip through UTC: `Date.UTC(2026, 1, 30)` silently rolls over to
+    // 2 March, so an identical round-trip is what proves the date exists.
+    const date = new Date(Date.UTC(year, month - 1, day));
+    const isReal =
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day;
+
+    return isReal ? value : helpers.error('string.isoDate');
+  }, 'ISO calendar date')
+  .messages({
+    'string.isoDate':
+      '{{#label}} must be a real calendar date in YYYY-MM-DD format (for example 2026-11-30)',
+  });
+
 export const lawyerSchema = Joi.object({
   name: Joi.string().trim().min(2).max(120).required(),
   specialty: Joi.string().trim().max(120).allow('', null),
@@ -47,6 +83,14 @@ export const userRoleSchema = Joi.object({
   role: Joi.string().valid('client', 'lawyer', 'admin').required(),
 });
 
+/**
+ * Case payload (creation).
+ *
+ * `status` and `priority` carry schema defaults, which is correct for a CREATE
+ * and destructive for a partial UPDATE: Joi re-applies a default to any field
+ * the caller omitted. `PUT /api/cases/:id` therefore validates with
+ * `noDefaults: true` — see `routes/cases.js`.
+ */
 export const caseSchema = Joi.object({
   userId: Joi.string().trim().allow('', null),
   title: Joi.string().trim().min(2).max(200).required(),
@@ -57,8 +101,23 @@ export const caseSchema = Joi.object({
   status: Joi.string()
     .valid('Open', 'In Progress', 'Pending', 'Closed')
     .default('Open'),
-  dueDate: Joi.string().trim().allow('', null),
+  dueDate: isoCalendarDate,
 });
+
+/**
+ * Case payload (update).
+ *
+ * `caseSchema` + `presence: 'optional'` is NOT enough for a partial update:
+ * `presence` only supplies a default for keys that do not declare their own,
+ * so an explicit `title.required()` keeps rejecting a body that omits it — and
+ * "change only the status" is a legitimate partial update.
+ *
+ * Derived with `fork` rather than duplicated so the two schemas can never drift
+ * apart. Defaults are suppressed at validation time with `noDefaults: true`.
+ */
+export const caseUpdateSchema = caseSchema.fork(['title'], (schema) =>
+  schema.optional(),
+);
 
 export const taskSchema = Joi.object({
   userId: Joi.string().trim().allow('', null),

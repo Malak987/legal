@@ -6,8 +6,12 @@ export function ok(res, data = null, message = 'OK') {
   return res.json({ success: true, message, data });
 }
 
-export function created(res, data = null, message = 'Created') {
-  return res.status(201).json({ success: true, message, data });
+export function created(res, data = null, message = 'Created', extra = null) {
+  // `extra` is additive: existing callers pass three arguments and still get
+  // exactly the same envelope. It carries optional metadata such as `warnings`.
+  return res
+    .status(201)
+    .json({ success: true, message, data, ...(extra ?? {}) });
 }
 
 export function badRequest(res, message = 'Bad request', errors = null) {
