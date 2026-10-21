@@ -10,6 +10,7 @@ import 'lawyers_screen.dart';
 import 'notifications_screen.dart';
 import 'plans_screen.dart';
 import 'reviews_screen.dart';
+import 'subscriptions_screen.dart';
 import 'users_screen.dart';
 
 /// The main admin layout: a persistent navigation list + the active screen.
@@ -46,6 +47,11 @@ class _HomeShellState extends State<HomeShell> {
         title: 'Plans',
         icon: Icons.subscriptions,
         screen: const PlansScreen(),
+      ),
+      NavItem(
+        title: 'Subscriptions',
+        icon: Icons.card_membership,
+        screen: const SubscriptionsScreen(),
       ),
       NavItem(
         title: 'Notifications',

@@ -1,35 +1,57 @@
 import { Router } from 'express';
 import { getDb } from '../config/firebase.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, isAdmin, forbidden } from '../middleware/auth.js';
 import { ok, created, notFound, badRequest } from '../utils/response.js';
 import { validate, messageSchema } from '../utils/validators.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { getDocById, createDoc, serverTimestamp } from '../utils/firestore.js';
+import {
+  getDocById,
+  serverTimestamp,
+  sortByDesc,
+} from '../utils/firestore.js';
 
 const router = Router();
 const CHATS = 'chats';
 
-/// Normalises a Firestore Timestamp, `Date`, ISO string or epoch-millis value
-/// to milliseconds so the list can be ordered in memory.
+/// Authorization rule shared by every per-conversation route.
 ///
-/// Missing/unparseable values become `0` rather than `NaN`, which keeps those
-/// documents in the result set instead of silently dropping them.
-function toMillis(value) {
-  if (value === null || value === undefined) return 0;
-  if (typeof value.toMillis === 'function') return value.toMillis();
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-  // Serialised Firestore Timestamp ({ _seconds, _nanoseconds }).
-  if (typeof value === 'object' && typeof value._seconds === 'number') {
-    return value._seconds * 1000 + Math.floor((value._nanoseconds ?? 0) / 1e6);
-  }
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? 0 : parsed;
+/// A caller may touch a conversation only when they are one of its
+/// participants. Administrators moderate every conversation but are a
+/// participant in none of them, so they are allowed explicitly.
+function canAccessChat(chat, req) {
+  if (isAdmin(req)) return true;
+  return Array.isArray(chat?.participants) && chat.participants.includes(req.user.uid);
 }
 
-/// Newest conversation first; conversations without a timestamp sort last.
-function byUpdatedAtDesc(a, b) {
-  return toMillis(b.updatedAt) - toMillis(a.updatedAt);
+/// Sender identity is always taken from the verified token, never from the
+/// request body: a participant must not be able to post as somebody else.
+///
+/// The display name falls back to a neutral label rather than the e-mail
+/// address, so no contact detail leaks into a conversation it was not in.
+function senderIdentity(req) {
+  const name = typeof req.user?.name === 'string' ? req.user.name.trim() : '';
+  return { senderId: req.user.uid, senderName: name || 'User' };
+}
+
+/**
+ * Builds the `participantNames` map from the users collection.
+ *
+ * The client used to supply this map itself, and the admin panel renders its
+ * first value as the conversation title — so a client could make their chat
+ * appear as "App Administrator". Names are now read from the trusted profile
+ * documents; a participant with no profile simply has no entry (the panel then
+ * falls back to its generic "Chat" title).
+ */
+async function resolveParticipantNames(participants) {
+  const db = getDb();
+  const entries = await Promise.all(
+    participants.map(async (uid) => {
+      const profile = await getDocById(db, 'users', uid);
+      const name = typeof profile?.name === 'string' ? profile.name.trim() : '';
+      return name ? [uid, name] : null;
+    }),
+  );
+  return Object.fromEntries(entries.filter(Boolean));
 }
 
 // GET /api/chats?userId=  -> list chats the user participates in
@@ -77,7 +99,7 @@ router.get(
 
     const snap = await query.get();
     const chats = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    chats.sort(byUpdatedAtDesc);
+    sortByDesc(chats, 'updatedAt');
 
     ok(res, chats);
   }),
@@ -90,8 +112,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const chat = await getDocById(getDb(), CHATS, req.params.id);
     if (!chat) return notFound(res, 'Chat not found');
-    if (!chat.participants.includes(req.user.uid) && req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
+    if (!canAccessChat(chat, req)) {
+      return forbidden(res, 'Forbidden. You are not a participant of this chat.');
     }
     const msgSnap = await getDb()
       .collection(CHATS)
@@ -104,18 +126,43 @@ router.get(
   }),
 );
 
-// POST /api/chats  { participants: [...], participantNames: {...} }
+// POST /api/chats  { participants: [...] }
 router.post(
   '/',
   authenticate,
   asyncHandler(async (req, res) => {
-    const { participants, participantNames } = req.body || {};
+    const { participants } = req.body || {};
     if (!Array.isArray(participants) || participants.length < 2) {
       return badRequest(res, 'participants (array of >= 2 uids) is required');
     }
+    if (!participants.every((uid) => typeof uid === 'string' && uid.trim())) {
+      return badRequest(res, 'participants must be a list of user ids');
+    }
+
+    // Duplicate ids would make one participant count twice (and a "chat with
+    // yourself" pass the >= 2 check).
+    const uniqueParticipants = [...new Set(participants.map((uid) => uid.trim()))];
+    if (uniqueParticipants.length < 2) {
+      return badRequest(res, 'participants must contain at least 2 distinct users');
+    }
+
+    // The caller must be one of the participants: this stops a client from
+    // opening a conversation they are not part of, or from silently adding
+    // themselves to somebody else's chat by crafting the participants array.
+    // Administrators are exempt — they open conversations on behalf of others.
+    if (!isAdmin(req) && !uniqueParticipants.includes(req.user.uid)) {
+      return forbidden(
+        res,
+        'Forbidden. You must be one of the participants.',
+      );
+    }
+
+    // Display names come from the user profiles, never from the request body.
+    const participantNames = await resolveParticipantNames(uniqueParticipants);
+
     const ref = await getDb().collection(CHATS).add({
-      participants,
-      participantNames: participantNames || {},
+      participants: uniqueParticipants,
+      participantNames,
       lastMessage: '',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -132,13 +179,18 @@ router.post(
   asyncHandler(async (req, res) => {
     const chat = await getDocById(getDb(), CHATS, req.params.id);
     if (!chat) return notFound(res, 'Chat not found');
+    if (!canAccessChat(chat, req)) {
+      return forbidden(res, 'Forbidden. You are not a participant of this chat.');
+    }
 
+    // `senderId` / `senderName` in the body are stripped by the schema; the
+    // stored identity comes from the token instead.
     const data = validate(messageSchema, req.body);
     const ref = await getDb()
       .collection(CHATS)
       .doc(req.params.id)
       .collection('messages')
-      .add({ ...data, createdAt: serverTimestamp() });
+      .add({ ...data, ...senderIdentity(req), createdAt: serverTimestamp() });
 
     await getDb().collection(CHATS).doc(req.params.id).update({
       lastMessage: data.text,
@@ -157,6 +209,9 @@ router.delete(
   asyncHandler(async (req, res) => {
     const chat = await getDocById(getDb(), CHATS, req.params.id);
     if (!chat) return notFound(res, 'Chat not found');
+    if (!canAccessChat(chat, req)) {
+      return forbidden(res, 'Forbidden. You are not a participant of this chat.');
+    }
     await getDb().collection(CHATS).doc(req.params.id).delete();
     ok(res, { id: req.params.id }, 'Chat deleted');
   }),
