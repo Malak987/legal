@@ -22,6 +22,23 @@ Future<void> pumpApp(WidgetTester tester, AuthProvider provider) async {
   await tester.pump();
 }
 
+/// Types a password so the login form validates.
+///
+/// `LoginScreen._submit()` returns early when `Form.validate()` fails, and the
+/// password field is required. The email field is pre-filled with the default
+/// admin address, so only the password is missing from a freshly mounted form.
+Future<void> enterPassword(
+  WidgetTester tester, [
+  String password = 'secret-password',
+]) async {
+  final passwordField = find.byWidgetPredicate(
+    (widget) => widget is TextField && widget.obscureText,
+  );
+  expect(passwordField, findsOneWidget);
+  await tester.enterText(passwordField, password);
+  await tester.pump();
+}
+
 /// Canned `/api/dashboard/stats` payload, in the backend's real envelope
 /// `{ success, message, data }` (see `ok()` in backend/src/utils/response.js).
 Map<String, dynamic> dashboardPayload() => <String, dynamic>{
@@ -120,6 +137,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Sign In'), findsOneWidget);
+    await enterPassword(tester);
 
     // If this throws, the test fails — that is the regression signal.
     await tester.tap(find.text('Sign In'));
@@ -146,6 +164,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Sign In'), findsOneWidget);
+    await enterPassword(tester);
 
     await tester.tap(find.text('Sign In'));
     await tester.pump();
@@ -173,6 +192,7 @@ void main() {
     await provider.restore();
     await tester.pump();
 
+    await enterPassword(tester);
     await tester.tap(find.text('Sign In'));
     await tester.pump();
     await tester.pump();
