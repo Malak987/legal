@@ -1,0 +1,80 @@
+name: CI
+
+# Phase 0: the two applications the repository can actually verify today.
+#
+#   backend/     Express + Firestore API. Its test suite is self-contained
+#                (in-memory Firestore double, no credentials, no network), so
+#                it runs on every push and pull request.
+#   admin_panel/ Flutter Web admin. `flutter analyze` + `flutter test`; the
+#                tests inject fake auth/API services, so no Firebase project is
+#                needed.
+#
+# NOT GATED YET, DELIBERATELY: legal_app/ (the mobile app) and its stale copy
+# under LegalServicesAppDoc/. The only test in legal_app/test/widget_test.dart
+# is the untouched Flutter counter template (it asserts a '0' counter that this
+# app does not have), so it cannot pass. Adding it here with `|| true`,
+# `continue-on-error`, or a skip would produce a green check that hides a real
+# failure. It is wired up in Phase 5, when that test is replaced with real ones.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Runs `node --test "test/**/*.test.js"` (see backend/package.json).
+      # Baseline at the Phase 0 commit: 351 tests, 0 failures.
+      - name: Run backend test suite
+        run: npm test
+
+  admin-panel:
+    name: Admin panel (analyze + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: admin_panel
+    steps:
+      - uses: actions/checkout@v4
+
+      # admin_panel/pubspec.yaml requires Dart >= 3.13.0 / Flutter >= 3.44.0,
+      # so an older pinned SDK would fail `pub get` rather than analyse.
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
