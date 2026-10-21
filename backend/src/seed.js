@@ -1,5 +1,6 @@
 import { initializeFirebase, getAuth, getDb, admin } from './config/firebase.js';
 import env from './config/env.js';
+import { resolveSeedPasswords, SEED_PASSWORD_ENV } from './config/seedCredentials.js';
 
 /**
  * Seeds the Firestore database with initial data that mirrors the UI screens
@@ -14,9 +15,10 @@ function ts() {
   return now;
 }
 
-async function seedUsers(db, auth) {
+async function seedUsers(db, auth, passwords) {
   const users = [
     {
+      account: 'admin',
       uid: 'admin-uid',
       name: 'App Administrator',
       email: 'admin@legalapp.com',
@@ -24,9 +26,10 @@ async function seedUsers(db, auth) {
       role: 'admin',
       avatar: 'images/c3.png',
       address: '100 Justice Ave, London',
-      password: 'Admin@123',
+      // Password: supplied via SEED_PASSWORD_ENV.admin (never hardcoded).
     },
     {
+      account: 'client',
       uid: 'client-001',
       name: 'James Powell',
       email: 'james@example.com',
@@ -34,9 +37,10 @@ async function seedUsers(db, auth) {
       role: 'client',
       avatar: 'images/c3.png',
       address: '22 Baker Street, London',
-      password: 'Client@123',
+      // Password: supplied via SEED_PASSWORD_ENV.client (never hardcoded).
     },
     {
+      account: 'lawyer',
       uid: 'lawyer-001',
       name: 'Maddy Lin',
       email: 'maddy@example.com',
@@ -44,12 +48,14 @@ async function seedUsers(db, auth) {
       role: 'lawyer',
       avatar: 'images/c2.png',
       address: '5 High Court Road, London',
-      password: 'Lawyer@123',
+      // Password: supplied via SEED_PASSWORD_ENV.lawyer (never hardcoded).
     },
   ];
 
   for (const u of users) {
-    const { password, uid, ...profile } = u;
+    // `account` selects the password; it is never written to Firestore.
+    const { account, uid, ...profile } = u;
+    const password = passwords[account];
     try {
       await auth.createUser({ uid, email: profile.email, password, displayName: profile.name });
     } catch (e) {
@@ -283,11 +289,19 @@ async function seedEarnings(db) {
 }
 
 export async function runSeed() {
+  // Resolve credentials FIRST. A missing or unusable password must abort the
+  // run before a single document or Auth account is touched, so a broken
+  // configuration can never leave a half-seeded project behind.
+  const passwords = resolveSeedPasswords();
+  console.log(
+    `[Seed] Credentials read from ${Object.values(SEED_PASSWORD_ENV).join(', ')}`,
+  );
+
   const { firestore: db } = initializeFirebase();
   const auth = getAuth();
 
   console.log('\n===== Seeding Legal Services database =====\n');
-  await seedUsers(db, auth);
+  await seedUsers(db, auth, passwords);
   await seedLawyers(db);
   await seedPlans(db);
   await seedCases(db);

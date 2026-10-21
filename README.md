@@ -77,11 +77,19 @@ npm start                           # http://localhost:5000
 
 Check it is alive: <http://localhost:5000/api/health>
 
-Default admin account created by the seed:
+The seed creates the sample accounts (admin, client, lawyer). Their passwords
+come from the environment and are never stored in this repository:
 
-| Email               | Password    |
-|---------------------|-------------|
-| admin@legalapp.com  | Admin@123   |
+```powershell
+$env:SEED_ADMIN_PASSWORD  = "<choose one>"
+$env:SEED_CLIENT_PASSWORD = "<choose one>"
+$env:SEED_LAWYER_PASSWORD = "<choose one>"
+npm run seed
+```
+
+Each value must be at least 12 characters. If any of them is missing the seed
+stops before writing anything and names the variables it needs. See
+`backend/.env.example` for the variable names.
 
 ### Step C — Fill in the Firebase options
 
@@ -103,7 +111,7 @@ flutter pub get
 flutter run -d chrome
 ```
 
-Sign in with `admin@legalapp.com` / `Admin@123`.
+Sign in with `admin@legalapp.com` and the password you supplied in `SEED_ADMIN_PASSWORD`.
 
 > If the admin panel's API base URL needs changing (e.g. deployed backend):
 > `flutter run -d chrome --dart-define=API_BASE_URL=https://your-domain.com/api`
@@ -176,7 +184,7 @@ See `backend/src/routes/` — each file is a self-contained, documented router.
 - The API verifies the ID token on every protected request and checks the user's role.
 - Firestore should stay in **production mode** (rules locked down) since all access goes
   through the backend / authenticated clients.
-- Change `ADMIN_JWT_SECRET` and the seeded admin password before deploying.
+- Change `ADMIN_JWT_SECRET`, and never deploy with a seed password you have used anywhere else.
 
 ---
 
