@@ -426,6 +426,79 @@ void main() {
     });
   });
 
+  group('SessionController.changePassword', () {
+    late FakeAuthGateway gateway;
+    late ApiClient api;
+
+    SessionController build() {
+      gateway = FakeAuthGateway();
+      api = testApiClient(handler: (_, __) async => jsonOk(profileJson()));
+      return SessionController(auth: AuthService(gateway: gateway, api: api));
+    }
+
+    test('changes the password without ending the session', () async {
+      final session = build();
+      await session.signIn(email: 'sara@example.com', password: 'secret123');
+      await settle();
+
+      await session.changePassword(
+        currentPassword: 'secret123',
+        newPassword: 'n3wSecret!',
+      );
+
+      expect(gateway.changePasswordCalls, 1);
+      expect(gateway.lastCurrentPassword, 'secret123');
+      expect(gateway.lastNewPassword, 'n3wSecret!');
+      // The user keeps working: a password change must not sign them out.
+      expect(session.status, SessionStatus.signedIn);
+      expect(gateway.signOutCalls, 0);
+      session.dispose();
+    });
+
+    test('surfaces the reason a password change was refused', () async {
+      final session = build();
+      await session.signIn(email: 'sara@example.com', password: 'secret123');
+      await settle();
+      gateway.changePasswordError = AuthException(
+        'Please sign in again to finish this action.',
+        code: 'requires-recent-login',
+      );
+
+      await expectLater(
+        session.changePassword(
+          currentPassword: 'wrong',
+          newPassword: 'n3wSecret!',
+        ),
+        throwsA(isA<AuthException>().having(
+          (e) => e.message,
+          'message',
+          'Please sign in again to finish this action.',
+        )),
+      );
+
+      // A failed change leaves the session exactly as it was.
+      expect(session.status, SessionStatus.signedIn);
+      expect(session.profile?.name, 'Sara');
+      session.dispose();
+    });
+
+    test('refuses to change a password with no signed-in account', () async {
+      final session = build();
+
+      await expectLater(
+        session.changePassword(
+          currentPassword: 'secret123',
+          newPassword: 'n3wSecret!',
+        ),
+        throwsA(isA<AuthException>()),
+      );
+
+      // Nothing was sent: the gateway is only reached for a real session.
+      expect(gateway.changePasswordCalls, 0);
+      session.dispose();
+    });
+  });
+
   group('routing gate', () {
     test('only a loaded profile reaches the protected home', () {
       expect(startScreenFor(SessionStatus.signedIn), StartScreen.home);

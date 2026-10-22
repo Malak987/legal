@@ -11,7 +11,6 @@ import '../../widgets/customapp_bar.dart';
 import '../authentication/login_screen.dart';
 import 'ManageAddress/address_book_screeen.dart';
 import 'change_password.dart';
-import 'edit_profile.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -63,14 +62,11 @@ class ProfileScreen extends StatelessWidget {
               },
             ),
             const Divider(),
-            ProfileRow(
-              leadingIcon: Icons.edit,
-              title: 'Edit Profile',
-              onTap: () {
-                Navigator.of(context).push(MaterialPageRoute(
-                    builder: (context) => const EditProfile()));
-              },
-            ),
+            // NOTE: there used to be an "Edit Profile" row here that opened
+            // `edit_profile.dart` - a screen showing the sample name
+            // "John Doe" whose Save button did nothing. "User Information"
+            // above is the real editor (SessionController.updateProfile) and
+            // is now the only way to edit a profile.
             ProfileRow(
               leadingIcon: Icons.logout,
               title: 'Sign Out',

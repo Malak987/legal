@@ -8,7 +8,6 @@ import 'package:legalserviceapp/views/tasks/tasks.dart'; // Ensure correct path
 
 import '../views/authentication/login_screen.dart'; // Ensure correct path
 import '../views/availablitycalendar/avaialblity_calendar.dart'; // Ensure correct path
-import '../views/bookmark/bookmark.dart'; // Ensure correct path
 import '../views/home/homescreen.dart'; // Ensure correct path
 import '../views/order/OrdersHistory/order_history_screen.dart'; // Ensure correct path
 import '../views/profile/profile_screen.dart'; // Ensure correct path
@@ -21,10 +20,8 @@ import '../views/earnings/earnings.dart'; // Ensure correct path
 import '../views/favorites/favorite_screen.dart'; // Ensure correct path
 import '../views/messages/chat_screen.dart'; // Ensure correct path
 import '../views/subscription/subscription.dart'; // Ensure correct path
-import '../views/toplawyers/topcaregivers.dart'; // Ensure correct path (assuming this is Top Lawyers)
 import '../views/wallet/wallet_screen.dart'; // Ensure correct path
 import '../state/session_scope.dart';
-import 'detailstext1.dart'; // Ensure correct path
 
 class DrawerWidget extends StatefulWidget {
   const DrawerWidget({super.key});
@@ -78,6 +75,14 @@ class _DrawerWidgetState extends State<DrawerWidget> {
 
   @override
   Widget build(BuildContext context) {
+    // The header used to show a hardcoded name ("James Powell") for every
+    // account. It now reads the signed-in session, so the name and the
+    // email under it belong to the person actually using the app.
+    final profile = SessionScope.of(context).profile;
+    final displayName =
+        (profile?.displayName ?? '').trim().isEmpty ? 'Guest' : profile!.displayName;
+    final email = profile?.email ?? '';
+
     return Container(
       // Consider setting a max width for larger screens
       // width: MediaQuery.of(context).size.width * 0.75, // Example width constraint
@@ -111,13 +116,21 @@ class _DrawerWidgetState extends State<DrawerWidget> {
                 // Consider using NetworkImage or a placeholder if image might be dynamic
                 child: Image.asset('images/c3.png', width: 50, height: 50, fit: BoxFit.cover),
               ),
-              title: const Text(
-                  'Hey!',
-                  style: TextStyle(fontSize: 14, color: Colors.grey) // Smaller greeting
+              title: Text(
+                displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
               ),
-              subtitle: const Text1(
-                text1: 'James Powell',
-                // Optionally style Text1 if needed, e.g., fontWeight: FontWeight.bold
+              subtitle: Text(
+                email,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
               ),
               contentPadding: EdgeInsets.zero, // Remove default ListTile padding if needed
             ),
@@ -142,7 +155,10 @@ class _DrawerWidgetState extends State<DrawerWidget> {
           buildMenuItem(
             title: "Top Lawyers",
             icon: Icons.workspace_premium_outlined, // Icon for top/premium/verified
-            onTap: () => navigateTo( TopCaregiverListScreen()), // Assuming this is Top Lawyers
+            // Same real directory as "Popular Lawyers", filtered by the
+            // server on `isTop`. It used to open a screen of sample data.
+            onTap: () => navigateTo(
+                const PopularLawyersScreen(onlyTop: true, title: 'Top Lawyers')),
           ),
           buildMenuItem(
             title: "Search", // Moved Search up for discoverability
@@ -202,10 +218,13 @@ class _DrawerWidgetState extends State<DrawerWidget> {
             icon: Icons.favorite_border, // Favorite outline
             onTap: () => navigateTo(const FavoriteScreen()),
           ),
+          // "Bookmarks" and "Favorite Lawyers" are the same concept in this
+          // app. The Bookmark screen only ever rendered sample products, so
+          // this entry opens the real, backend-backed screen instead.
           buildMenuItem(
-            title: "Bookmarks", // Changed title casing
-            icon: Icons.bookmark_border, // Bookmark outline
-            onTap: () => navigateTo(const BookmarkScreen()),
+            title: "Bookmarks",
+            icon: Icons.bookmark_border,
+            onTap: () => navigateTo(const FavoriteScreen()),
           ),
 
           buildMenuItem(
