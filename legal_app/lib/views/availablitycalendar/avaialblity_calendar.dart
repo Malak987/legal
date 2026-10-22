@@ -67,6 +67,14 @@ class AvailabilityCalendarScheduleScreenState
   /// The backend accepts 1–12 hours for one appointment.
   static const int maxHours = 12;
 
+  /// Height reserved for the calendar.
+  ///
+  /// `TableCalendar` is built on a `PageView`, and a `PageView` cannot lay out
+  /// inside a scroll view — it needs a bounded height, otherwise it throws
+  /// "Vertical viewport was given unbounded height" and no day cells exist to
+  /// tap. Room for the header, the weekday row and six weeks of days.
+  static const double calendarHeight = 320;
+
   // ---- chosen lawyer -------------------------------------------------------
   String? _lawyerId;
   String? _lawyerName;
@@ -511,7 +519,10 @@ class AvailabilityCalendarScheduleScreenState
                 ),
               ),
             ),
-          _buildCalendar(firstDay, lastDay),
+          SizedBox(
+            height: calendarHeight,
+            child: _buildCalendar(firstDay, lastDay),
+          ),
           const SizedBox(height: 14),
           _buildSlots(),
         ],
@@ -550,6 +561,13 @@ class AvailabilityCalendarScheduleScreenState
             _hours = 1;
           });
         },
+        rowHeight: 42,
+        daysOfWeekHeight: 20,
+        headerStyle: const HeaderStyle(
+          formatButtonVisible: false,
+          titleCentered: true,
+          headerPadding: EdgeInsets.symmetric(vertical: 8),
+        ),
         onPageChanged: (focusedDay) {
           // Kept in state so the next rebuild does not snap the calendar back
           // to the month it was opened on.

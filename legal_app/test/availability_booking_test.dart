@@ -265,17 +265,23 @@ void _screenTests() {
         of: find.byType(TableCalendar<int>),
         matching: find.text('$day'),
       );
-      if (candidate.evaluate().isEmpty) continue;
+      // A day number can appear more than once in the grid (the neighbouring
+      // months are drawn faintly), and a day without published availability is
+      // deliberately not selectable, so every candidate is tried until one of
+      // them actually changes the selection.
+      final matches = candidate.evaluate().length;
+      for (var i = matches - 1; i >= 0; i--) {
+        final cell = candidate.at(i);
+        await tester.ensureVisible(cell);
+        await tester.pump();
+        await tester.tap(cell, warnIfMissed: false);
+        await tester.pump();
 
-      await tester.ensureVisible(candidate.last);
-      await tester.pump();
-      await tester.tap(candidate.last, warnIfMissed: false);
-      await tester.pump();
-
-      final header = find.textContaining('Available slots for');
-      if (header.evaluate().isNotEmpty) {
-        final label = tester.widget<Text>(header.first).data ?? '';
-        return label.replaceFirst('Available slots for ', '');
+        final header = find.textContaining('Available slots for');
+        if (header.evaluate().isNotEmpty) {
+          final label = tester.widget<Text>(header.first).data ?? '';
+          return label.replaceFirst('Available slots for ', '');
+        }
       }
     }
     fail('no date on the calendar could be selected');
