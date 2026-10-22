@@ -366,6 +366,24 @@ export async function startApp() {
   return bootPromise;
 }
 
+/**
+ * Imports a module from the temporary copy of `src/` that the routes run from.
+ *
+ * Those modules are wired to the in-memory Firestore double, so a test can
+ * drive them directly. Needed for properties that cannot be observed through
+ * HTTP: two booking requests for one slot almost never overlap on the wire, so
+ * the atomicity of the reservation has to be exercised by starting two
+ * transactions in the same tick.
+ *
+ * @param {string} relativePath  path inside `src/`, e.g. `utils/bookingReservation.js`
+ */
+export async function stubModule(relativePath) {
+  await startApp();
+  return import(
+    pathToFileURL(path.join(tmpDir, 'src', relativePath)).href
+  );
+}
+
 /** Tears the temporary server down. */
 export function stopApp() {
   server?.close();

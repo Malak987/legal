@@ -1,5 +1,7 @@
 import Joi from 'joi';
 
+import { formatClockTime, parseClockTime } from './scheduling.js';
+
 /**
  * Reusable Joi validation schemas shared across routes.
  * Each route validates its body with `validate(schema, req.body)`.
@@ -151,6 +153,33 @@ export const taskSchema = Joi.object({
 export const BOOKING_STATUSES = ['Pending', 'Active', 'Completed', 'Cancelled'];
 
 /**
+ * A time of day, normalised to 24-hour `HH:MM`.
+ *
+ * `date` and `time` used to be free text, so `'noon'`, `'25:00'` and
+ * `'2026-11-01T10:00'` were all stored verbatim. The value is now parsed and
+ * rewritten, which is also what makes the stored `time` comparable with the
+ * slot strings in the `availability` collection: the repository contains both
+ * `'09:00'` (tests, bookings) and `'09:00 am'` (seed), and both are accepted.
+ *
+ * An empty value stays allowed because a partial PUT may legitimately send
+ * `time: ''` to mean "unchanged"; `POST` rejects it separately, since a booking
+ * with no time is meaningless.
+ */
+export const clockTime = Joi.string()
+  .trim()
+  .allow('', null)
+  .custom((value, helpers) => {
+    if (value === '' || value === null || value === undefined) return value;
+    const minutes = parseClockTime(value);
+    if (minutes === null) return helpers.error('string.clockTime');
+    return formatClockTime(minutes);
+  }, 'clock time')
+  .messages({
+    'string.clockTime':
+      '{{#label}} must be a time of day, for example 09:00 or 9:00 am',
+  });
+
+/**
  * Booking payload.
  *
  * `totalPrice` is NOT accepted: the server derives it from the lawyer's
@@ -161,8 +190,10 @@ export const bookingSchema = Joi.object({
   userId: Joi.string().trim().allow('', null),
   lawyerId: Joi.string().trim().allow('', null),
   lawyerName: Joi.string().trim().allow('', null),
-  date: Joi.string().trim().allow('', null),
-  time: Joi.string().trim().allow('', null),
+  // A real calendar date, not a free string: `2026-02-30` and
+  // `2026-11-01T10:00` are both refused (see `isoCalendarDate`).
+  date: isoCalendarDate,
+  time: clockTime,
   hours: Joi.number().integer().min(1).max(12).optional(),
   status: Joi.string()
     .valid(...BOOKING_STATUSES)

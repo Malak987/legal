@@ -48,7 +48,14 @@ const OWNED = [
     // WAVE 1.2: the price is derived server-side from the lawyer's rate, so a
     // booking needs a real lawyer document and a billable number of hours.
     body: { lawyerId: 'lawyer-1', date: '2026-11-01', time: '10:00', hours: 2 },
-    extra: { lawyers: [{ id: 'lawyer-1', name: 'Lawyer One', priceValue: 150 }] },
+    // A booking now also has to fit the lawyer's published schedule, so the
+    // fixture publishes the slot the body asks for.
+    extra: {
+      lawyers: [{ id: 'lawyer-1', name: 'Lawyer One', priceValue: 150 }],
+      availability: [
+        { id: 'av-1', lawyerId: 'lawyer-1', date: '2026-11-01', slots: ['09:00', '10:00', '11:00'] },
+      ],
+    },
     patch: { status: 'Cancelled' },
     expect: { status: 'Cancelled' },
     records: [

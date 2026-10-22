@@ -9,6 +9,12 @@ class Product {
   final double? rating;
   final String? location;
 
+  /// The lawyer's hourly rate, as stored on the `lawyers` document.
+  ///
+  /// This is the number the backend multiplies by `hours` to produce a
+  /// booking's `totalPrice`; `price` above is only the display string.
+  final double? priceValue;
+
   Product({
     required this.imagePath,
     required this.name,
@@ -17,5 +23,6 @@ class Product {
     this.specialty,
     this.rating,
     this.location,
+    this.priceValue,
   });
 }

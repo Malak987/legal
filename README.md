@@ -88,7 +88,7 @@ Collections: `users`, `lawyers`, `cases`, `bookings`, `tasks`, `chats`
 cd backend
 npm ci
 cp .env.example .env          # then edit it
-npm test                      # 420 tests, no Firebase project required
+npm test                      # 451 tests, no Firebase project required
 npm run dev                   # http://localhost:5000/api/health
 ```
 
@@ -172,7 +172,7 @@ require `Authorization: Bearer <Firebase ID token>`.
 | GET | `/api/health` | Liveness |
 | GET | `/api/lawyers` | `?search=&isPopular=&isTop=&page=&limit=` — searches name, specialty, location; sorted by rating |
 | GET | `/api/lawyers/:id` | |
-| GET | `/api/availability` | Lawyer slots |
+| GET | `/api/availability` | `?lawyerId=&page=&limit=` — one document per (lawyer, day), see [booking semantics](#8-booking-and-availability-semantics) |
 | GET | `/api/availability/:id` | |
 | GET | `/api/plans`, `/api/plans/:id` | Subscription plans |
 | GET | `/api/reviews`, `/api/reviews/:id` | Author ids are stripped from the payload |
@@ -206,12 +206,59 @@ scoped to their own records; `userId` in a body cannot transfer ownership.
 | GET | `/api/dashboard/stats` | Admin |
 | POST | `/api/reviews` | One review per (author, lawyer); author comes from the token |
 
+### Booking and availability semantics
+
+An availability document is
+`{ lawyerId, lawyerName, date: 'YYYY-MM-DD', slots: ['09:00', '10:30', ...] }`.
+The collection is **not** enforced to one document per (lawyer, day): the
+booking code reads every document for that pair and merges their slots, so
+duplicates are harmless. A slot is a **start time only** — there is no end
+time, no slot length and no timezone anywhere in the model, so `date` and
+`time` are wall-clock values in the lawyer's local time and the server compares
+them as strings. There is no past-date rule.
+
+`POST /api/bookings` enforces, in this order:
+
+1. the lawyer exists and has a numeric `priceValue` — otherwise **400**
+   (`totalPrice` is computed as `priceValue × hours`, never taken from the
+   body; an administrator may override it);
+2. `date` is a real calendar date and `time` is a parseable clock time
+   (`'09:00'`, `'9:00'`, `'9:00 am'` are accepted and stored as `HH:MM`);
+3. `hours` is an integer from 1 to 12;
+4. the (lawyer, date) pair has published availability — otherwise **400**;
+5. the requested start is one of the advertised slots — otherwise **400**,
+   with the offered slots in the message;
+6. no blocking booking already covers the appointment. Every status blocks
+   **except `Cancelled`**, which releases its slot (and `DELETE` releases too).
+   `Completed` keeps its slot, because the appointment did happen.
+
+An appointment occupies every advertised slot in `[start, start + hours)`.
+Because the model has no closing time, a duration that runs past the last
+published slot is accepted; the mobile UI is stricter and only offers a
+duration while every hour it spans is published and free.
+
+**Concurrency.** Firestore gives no phantom protection for queries, so a
+"read the day, then write" check can be beaten by a second request. Instead each
+(lawyer, day, slot) has a deterministic reservation document,
+`bookingSlots/{sha256(lawyerId \0 date \0 minutes)}`, written **in the same
+`db.runTransaction` as the booking**. Two requests for the same slot read the
+same document, so at most one commits; the other gets **409**. A query-based
+overlap check still runs inside the transaction as a backstop for legacy or
+seeded bookings that predate the reservation documents. An administrator
+rescheduling a booking (`PUT /api/bookings/:id`) re-reserves it in its own
+transaction, ignoring its current locks and releasing the ones it no longer
+needs.
+
+Regression coverage lives in `backend/test/booking_availability.test.js`; the
+atomicity test drives two `createReservedBooking` transactions in the same tick,
+which is the only way to force the interleaving (see the notes in that file).
+
 ---
 
 ## 6. Running the tests
 
 ```bash
-cd backend      && npm test                 # 420 tests, Node 22, in-memory Firestore double
+cd backend      && npm test                 # 451 tests, Node 22, in-memory Firestore double
 cd admin_panel   && flutter analyze && flutter test
 cd legal_app     && flutter analyze && flutter test
 ```
@@ -294,7 +341,9 @@ Honest list. Nothing below is a working feature.
   `views/profile/past_orders.dart`), the address book, wallet/top-up,
   subscriptions, reviews, chat and settings. The lists that read the API today
   are cases, favourites, popular lawyers, top lawyers, search and the profile.
-  Bookings exist in the API but no mobile screen lists them yet.
+  Bookings exist in the API and are created by the availability screen
+  (`views/availablitycalendar/`); the history list (`views/order/`) still shows
+  sample rows.
 - **`LegalServicesAppDoc/`** is a duplicate export of an older copy of the app
   kept for documentation. It is not built and is not maintained.
 - **Wallet top-ups are not real**: crediting requires an administrator, because
