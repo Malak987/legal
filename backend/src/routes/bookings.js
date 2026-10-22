@@ -8,14 +8,37 @@ import {
   isAdmin,
   lockOwnerOnUpdate,
 } from '../middleware/auth.js';
-import { ok, created, notFound, badRequest, parseListQuery, cleanObject } from '../utils/response.js';
+import {
+  ok,
+  created,
+  notFound,
+  badRequest,
+  conflict,
+  parseListQuery,
+  cleanObject,
+} from '../utils/response.js';
 import { validate, bookingSchema, bookingCreateSchema } from '../utils/validators.js';
 import { canTransition, BOOKING_TRANSITIONS } from '../utils/stateTransitions.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { listDocs, getDocById, createDoc, updateDoc, deleteDoc } from '../utils/firestore.js';
+import {
+  listDocs,
+  getDocById,
+  updateDoc,
+  serverTimestamp,
+} from '../utils/firestore.js';
+import { formatClockTime, parseClockTime } from '../utils/scheduling.js';
+import {
+  BOOKINGS_COLLECTION,
+  createReservedBooking,
+  findOverlap,
+  loadAdvertisedSlots,
+  lockRefs,
+  planReservation,
+  releaseLocks,
+} from '../utils/bookingReservation.js';
 
 const router = Router();
-const COLLECTION = 'bookings';
+const COLLECTION = BOOKINGS_COLLECTION;
 const LAWYERS_COLLECTION = 'lawyers';
 
 // Fields that define the appointment. Clients cannot rewrite them after
@@ -87,27 +110,71 @@ async function priceBooking(db, { lawyerId, hours }) {
 }
 
 // POST /api/bookings
+//
+// The appointment is reserved atomically: the booking document and one
+// reservation document per occupied slot are written in a single Firestore
+// transaction. Two requests for the same slot address the same reservation
+// document, so the SDK's conflict detection — not a read-then-write check —
+// is what lets exactly one of them through.
 router.post(
   '/',
   authenticate,
   asyncHandler(async (req, res) => {
     const data = validate(bookingCreateSchema, { ...req.body, userId: ownerIdFor(req) });
 
+    // Price first: "this lawyer does not exist" and "this lawyer has no rate"
+    // stay the answers they always were, rather than turning into an
+    // availability error because no schedule exists for an unknown lawyer.
     const priced = await priceBooking(getDb(), {
       lawyerId: data.lawyerId,
       hours: data.hours,
     });
     if (priced.error) return badRequest(res, priced.error);
 
+    const startMinutes = parseClockTime(data.time);
+    if (startMinutes === null) {
+      return badRequest(
+        res,
+        'time is required and must be a time of day, for example 09:00 or 9:00 am.',
+      );
+    }
+
+    const db = getDb();
+    const advertised = await loadAdvertisedSlots(db, data.lawyerId, data.date);
+    const plan = planReservation({
+      advertised,
+      startMinutes,
+      hours: data.hours,
+      lawyerId: data.lawyerId,
+      date: data.date,
+    });
+    if (plan.error) return badRequest(res, plan.error);
+
     // The server is the only source of price and of the starting status.
     data.totalPrice = priced.totalPrice;
     data.lawyerName = priced.lawyer.name ?? data.lawyerName ?? '';
+    data.time = formatClockTime(startMinutes);
     if (!isAdmin(req)) {
       data.status = 'Pending';
     }
 
-    const createdDoc = await createDoc(getDb(), COLLECTION, data);
-    created(res, createdDoc, 'Booking created');
+    const outcome = await createReservedBooking(db, {
+      data,
+      lawyerId: data.lawyerId,
+      date: data.date,
+      startMinutes,
+      hours: data.hours,
+      locks: plan.locks,
+    });
+
+    if (outcome.status !== 'created') {
+      return conflict(res, outcome.message);
+    }
+
+    // Read the stored document back so the response keeps the exact shape
+    // `createDoc()` produced (`{ id, ...data, createdAt, updatedAt }`).
+    const saved = await getDocById(db, COLLECTION, outcome.id);
+    created(res, saved, 'Booking created');
   }),
 );
 
@@ -123,7 +190,8 @@ router.put(
       noDefaults: true,
     });
 
-    const existing = await getDocById(getDb(), COLLECTION, req.params.id);
+    const db = getDb();
+    const existing = await getDocById(db, COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Booking not found');
     if (!isOwner(existing, req)) {
       return forbidden(res);
@@ -132,9 +200,8 @@ router.put(
     if (!isAdmin(req)) {
       // A client may only CANCEL. Everything that defines the appointment —
       // who, when, how long, at what price — is fixed at creation: the server
-      // derives the price from the lawyer's rate, and there is no availability
-      // model here that could validate a reschedule, so accepting a new
-      // date/time would let a client move a booking to a slot nobody approved.
+      // derives the price from the lawyer's rate, and a reschedule has to go
+      // through the availability check an administrator is allowed to make.
       const attempted = CLIENT_IMMUTABLE_FIELDS.filter(
         (field) => data[field] !== undefined,
       );
@@ -157,7 +224,7 @@ router.put(
       // An administrator may reschedule or rebook, but the derived fields must
       // be recomputed: changing the lawyer (or the hours) would otherwise keep
       // the previous lawyer's price and name on the record.
-      const priced = await priceBooking(getDb(), {
+      const priced = await priceBooking(db, {
         lawyerId: data.lawyerId ?? existing.lawyerId,
         hours: data.hours ?? existing.hours,
       });
@@ -170,22 +237,155 @@ router.put(
     // record to another account (admin-only operation).
     lockOwnerOnUpdate(data, existing, req);
 
-    const updated = await updateDoc(getDb(), COLLECTION, req.params.id, data);
+    const nextStatus = data.status ?? existing.status;
+    const cancelling = nextStatus === 'Cancelled' && existing.status !== 'Cancelled';
+
+    const nextLawyerId = data.lawyerId ?? existing.lawyerId;
+    const nextDate = data.date ?? existing.date;
+    const nextHours = data.hours ?? existing.hours;
+    const nextStart = parseClockTime(data.time ?? existing.time);
+    const scheduleChanged =
+      nextLawyerId !== existing.lawyerId ||
+      nextDate !== existing.date ||
+      nextHours !== existing.hours ||
+      nextStart !== parseClockTime(existing.time);
+
+    // ---- Cancelling releases the slot -------------------------------------
+    //
+    // `Cancelled` is terminal and means the appointment did not happen, so
+    // holding the reservation afterwards would strand the slot forever. The
+    // status write and the release are one transaction: a crash between them
+    // cannot leave a cancelled booking still occupying its slot.
+    if (cancelling) {
+      const bookingRef = db.collection(COLLECTION).doc(existing.id);
+      await db.runTransaction(async (tx) => {
+        await releaseLocks(tx, db, existing.slotKeys);
+        tx.update(bookingRef, {
+          ...data,
+          status: 'Cancelled',
+          slotKeys: [],
+          updatedAt: serverTimestamp(),
+        });
+      });
+      return ok(res, await getDocById(db, COLLECTION, existing.id), 'Booking updated');
+    }
+
+    // ---- Rescheduling re-reserves -----------------------------------------
+    //
+    // Without this an administrator could move an appointment onto a slot
+    // somebody else already holds, which is the same double-booking the create
+    // path refuses.
+    if (isAdmin(req) && scheduleChanged && nextStart !== null) {
+      const advertised = await loadAdvertisedSlots(db, nextLawyerId, nextDate);
+
+      // A row with no lawyer or no date (legacy / hand-written) has no schedule
+      // to check. Refusing the edit would make such a row unrepairable, so the
+      // change is allowed and remains unguarded — documented in the README.
+      if (advertised !== null) {
+        const plan = planReservation({
+          advertised,
+          startMinutes: nextStart,
+          hours: nextHours,
+          lawyerId: nextLawyerId,
+          date: nextDate,
+        });
+        if (plan.error) return badRequest(res, plan.error);
+
+        const locks = lockRefs(db, plan.locks);
+        const previousIds = new Set(existing.slotKeys ?? []);
+        const bookingRef = db.collection(COLLECTION).doc(existing.id);
+
+        const outcome = await db.runTransaction(async (tx) => {
+          for (const lock of locks) {
+            const snap = await tx.get(lock.ref);
+            if (!snap.exists) continue;
+            // A reservation this booking already holds is not a conflict with
+            // itself; anything else is somebody else's appointment.
+            if (snap.data()?.bookingId !== existing.id) {
+              return {
+                status: 'taken',
+                message: `The ${lock.slot} slot is already booked. Choose another time.`,
+              };
+            }
+          }
+
+          const clash = await findOverlap(tx, db, {
+            lawyerId: nextLawyerId,
+            date: nextDate,
+            startMinutes: nextStart,
+            hours: nextHours,
+            ignoreId: existing.id,
+          });
+          if (clash) {
+            return {
+              status: 'conflict',
+              message:
+                `That appointment overlaps an existing booking at ${clash.time ?? 'another time'}. ` +
+                'Choose a different slot or a shorter duration.',
+            };
+          }
+
+          // Release the slots this booking no longer occupies...
+          const keptIds = new Set(locks.map((lock) => lock.id));
+          await releaseLocks(
+            tx,
+            db,
+            [...previousIds].filter((id) => !keptIds.has(id)),
+          );
+          // ...and take the new ones.
+          for (const lock of locks) {
+            tx.set(lock.ref, {
+              lawyerId: nextLawyerId,
+              date: nextDate,
+              slot: lock.slot,
+              bookingId: existing.id,
+              userId: existing.userId,
+              createdAt: serverTimestamp(),
+            });
+          }
+
+          tx.update(bookingRef, {
+            ...data,
+            time: formatClockTime(nextStart),
+            slotKeys: locks.map((lock) => lock.id),
+            updatedAt: serverTimestamp(),
+          });
+          return { status: 'updated' };
+        });
+
+        if (outcome.status !== 'updated') {
+          return conflict(res, outcome.message);
+        }
+        return ok(res, await getDocById(db, COLLECTION, existing.id), 'Booking updated');
+      }
+    }
+
+    const updated = await updateDoc(db, COLLECTION, req.params.id, data);
     ok(res, updated, 'Booking updated');
   }),
 );
 
 // DELETE /api/bookings/:id
+//
+// The reservation documents are removed with the booking in one transaction,
+// so a deleted appointment always frees its slot.
 router.delete(
   '/:id',
   authenticate,
   asyncHandler(async (req, res) => {
-    const existing = await getDocById(getDb(), COLLECTION, req.params.id);
+    const db = getDb();
+    const existing = await getDocById(db, COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Booking not found');
     if (!isOwner(existing, req)) {
       return forbidden(res);
     }
-    await deleteDoc(getDb(), COLLECTION, req.params.id);
+
+    const bookingRef = db.collection(COLLECTION).doc(existing.id);
+    await db.runTransaction(async (tx) => {
+      await releaseLocks(tx, db, existing.slotKeys);
+      tx.delete(bookingRef);
+    });
+
     ok(res, { id: req.params.id }, 'Booking deleted');
   }),
 );

@@ -1,3 +1,4 @@
+import '../models/lawyer_availability.dart';
 import '../models/product_model.dart';
 import 'api_client.dart';
 
@@ -40,6 +41,22 @@ class AppRepository {
     }
   }
 
+  /// The availability a lawyer has published.
+  ///
+  /// `GET /api/availability` is public (no token), and the engine filters on a
+  /// single field, so this asks for that lawyer's rows and lets the caller index
+  /// them by date. `limit` is the API's maximum; a lawyer with more than 100
+  /// published days would be truncated until the endpoint is paginated.
+  Future<List<LawyerAvailability>> fetchAvailability(String lawyerId) async {
+    if (lawyerId.isEmpty) return const <LawyerAvailability>[];
+    final data = await _api.get('availability', query: {
+      'lawyerId': lawyerId,
+      'limit': '100',
+    });
+    final items = (data['items'] as List).cast<Map<String, dynamic>>();
+    return items.map(LawyerAvailability.fromJson).toList();
+  }
+
   Product _toProduct(Map<String, dynamic> json) {
     return Product(
       id: json['id']?.toString(),
@@ -49,6 +66,9 @@ class AppRepository {
       specialty: json['specialty']?.toString(),
       rating: (json['rating'] as num?)?.toDouble(),
       location: json['location']?.toString(),
+      // The hourly rate the server prices bookings with. Carried through so the
+      // screen can show the same number instead of parsing the display string.
+      priceValue: (json['priceValue'] as num?)?.toDouble(),
     );
   }
 

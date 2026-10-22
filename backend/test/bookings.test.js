@@ -38,6 +38,25 @@ function seed(overrides = {}) {
       { id: 'lawyer-150', name: 'Lawyer One', priceValue: 150 },
       { id: 'lawyer-free', name: 'Lawyer Unpriced' },
     ],
+    // A booking now has to fall inside the lawyer's published schedule
+    // (POST /api/bookings validates availability), so the fixture publishes
+    // the slots these tests book. The assertions themselves are unchanged.
+    availability: [
+      {
+        id: 'av-150-nov',
+        lawyerId: 'lawyer-150',
+        lawyerName: 'Lawyer One',
+        date: '2026-11-01',
+        slots: ['08:00', '09:00', '10:00', '11:00', '12:00', '15:00', '16:00'],
+      },
+      {
+        id: 'av-150-dec',
+        lawyerId: 'lawyer-150',
+        lawyerName: 'Lawyer One',
+        date: '2026-12-24',
+        slots: ['15:00', '16:00'],
+      },
+    ],
     bookings: [],
     ...overrides,
   };
@@ -89,6 +108,9 @@ describe('bookings 1.2: the price comes from the server', () => {
     reset({
       collections: seed({
         lawyers: [{ id: 'lawyer-99', name: 'Odd Rate', priceValue: 99.99 }],
+        availability: [
+          { id: 'av-99', lawyerId: 'lawyer-99', date: '2026-11-01', slots: ['09:00', '10:00', '11:00'] },
+        ],
       }),
     });
     signIn('client1');
@@ -183,9 +205,13 @@ describe('bookings 1.2: status transitions', () => {
             date: '2026-11-01', time: '10:00', hours: 1, totalPrice: 150,
           },
           {
+            // 14:00, not 11:00: the repricing test below extends `bk-pending`
+            // from 10:00 to two hours, which occupies the 11:00 slot. Keeping
+            // this row at 11:00 would make that a real double-booking — which
+            // the API now correctly refuses (see booking_availability.test.js).
             id: 'bk-active', userId: 'client-1', status: 'Active',
             lawyerId: 'lawyer-150', lawyerName: 'Lawyer One',
-            date: '2026-11-01', time: '11:00', hours: 1, totalPrice: 150,
+            date: '2026-11-01', time: '14:00', hours: 1, totalPrice: 150,
           },
           {
             id: 'bk-done', userId: 'client-1', status: 'Completed',
@@ -205,7 +231,10 @@ describe('bookings 1.2: status transitions', () => {
       body: {
         lawyerId: 'lawyer-150',
         date: '2026-11-01',
-        time: '10:00',
+        // 15:00: free in this fixture. The slot itself is irrelevant to what
+        // this test proves (the server forces the starting status); 10:00 is
+        // already held by `bk-pending`, and double-booking it is now a 409.
+        time: '15:00',
         hours: 1,
         status: 'Completed',
       },
