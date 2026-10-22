@@ -40,8 +40,14 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   SessionController? _ownedSession;
 
-  SessionController get _session =>
-      widget.session ?? _ownedSession ??= _createSession();
+  SessionController get _session {
+    // Written as a body, not `a ?? b ??= c`: that chain does not parse (the
+    // analyzer reports `missing_assignable_selector`), because `??=` is not
+    // valid in the right-hand position of `??` without parentheses.
+    final injected = widget.session;
+    if (injected != null) return injected;
+    return _ownedSession ??= _createSession();
+  }
 
   bool get _ownsSession => widget.session == null;
 
