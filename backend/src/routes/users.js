@@ -7,10 +7,24 @@ import {
   isAdmin,
   forbidden,
 } from '../middleware/auth.js';
-import { ok, created, notFound, badRequest, parseListQuery, cleanObject } from '../utils/response.js';
-import { validate, userSchema, userRoleSchema } from '../utils/validators.js';
+import {
+  ok,
+  created,
+  notFound,
+  badRequest,
+  conflict,
+  parseListQuery,
+  cleanObject,
+} from '../utils/response.js';
+import { validate, userSchema, userRoleSchema, profileProvisionSchema } from '../utils/validators.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { listDocs, getDocById, createDoc, updateDoc, deleteDoc } from '../utils/firestore.js';
+import {
+  listDocs,
+  getDocById,
+  createDocWithId,
+  updateDoc,
+  deleteDoc,
+} from '../utils/firestore.js';
 
 const router = Router();
 const COLLECTION = 'users';
@@ -30,6 +44,50 @@ router.get(
       limit: q.limit,
     });
     ok(res, result);
+  }),
+);
+
+// POST /api/users/me  (any authenticated user, for themselves only)
+//
+// Provisions the caller's own profile document after they registered through
+// Firebase Authentication. Registration is split in two on purpose:
+//
+//   1. the client SDK creates the Auth account (the password never reaches this
+//      server), and
+//   2. this route creates the matching `users/{uid}` profile.
+//
+// The uid comes from the VERIFIED ID token, never from the body, so a caller
+// can only ever create their own document. The role is hard-coded to `client`:
+// privilege is granted by an administrator through `PATCH /:id/role`, so
+// nothing in this request can grant `admin` or `lawyer` (`profileProvisionSchema`
+// has no `role` field, and `stripUnknown` drops any attempt to send one).
+//
+// Creation uses `create()` rather than `set()`, so an existing profile is a
+// 409 rather than a silent overwrite — including for an administrator who
+// already has a profile.
+router.post(
+  '/me',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const uid = req.user.uid;
+    const data = validate(profileProvisionSchema, req.body ?? {});
+
+    // From the verified token: a caller cannot claim somebody else's address.
+    const email = req.user.email || '';
+
+    const profile = await createDocWithId(getDb(), COLLECTION, uid, {
+      ...data,
+      uid,
+      email,
+      role: 'client',
+    });
+
+    if (!profile) {
+      // Deliberately does not echo the stored document back.
+      return conflict(res, 'A profile already exists for this account.');
+    }
+
+    created(res, profile, 'Profile created');
   }),
 );
 

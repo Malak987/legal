@@ -1,15 +1,16 @@
-
-
 import 'package:flutter/material.dart';
 
-
-import '../../commonwidgets/product_data.dart';
 import '../../constants/colors.dart';
+import '../../services/api_client.dart';
+import '../../services/app_repository.dart';
+import '../../state/session_scope.dart';
 import '../../widgets/customapp_bar.dart';
 import '../../widgets/detailstext1.dart';
-import '../../widgets/text11.dart';
-import '../../models/product_model.dart';
 
+/// The signed-in user's favorite lawyers, from `GET /api/favorites/:userId`.
+///
+/// The list is real: favorites store only a `lawyerId`, so each lawyer
+/// document is fetched and a favorite whose lawyer was deleted is skipped.
 class FavoriteScreen extends StatefulWidget {
   const FavoriteScreen({super.key});
 
@@ -22,8 +23,9 @@ class FavoriteScreenState extends State<FavoriteScreen>
   late AnimationController _controller;
   late Animation<Offset> _slideFromLeftAnimation;
 
-  final List<Product> products = ProductData().products;
-
+  late Future<List<FavoriteEntry>> _favorites;
+  bool _loaded = false;
+  String? _removingId;
 
   @override
   void initState() {
@@ -42,6 +44,42 @@ class FavoriteScreenState extends State<FavoriteScreen>
     ));
 
     _controller.forward();
+    _favorites = Future.value(const <FavoriteEntry>[]);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_loaded) return;
+    _loaded = true;
+    _reload();
+  }
+
+  Future<void> _reload() {
+    final future = SessionScope.read(context).repository.fetchMyFavorites();
+    setState(() {
+      _favorites = future;
+    });
+    return future.then((_) {}, onError: (_) {});
+  }
+
+  /// Removes one favorite, then refreshes. The card disappears only after the
+  /// backend confirms, so a failed removal does not lie about the state.
+  Future<void> _remove(FavoriteEntry entry) async {
+    setState(() => _removingId = entry.favoriteId);
+    try {
+      await SessionScope.read(context).repository.removeFavorite(
+            entry.favoriteId,
+          );
+      if (!mounted) return;
+      await _reload();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _removingId = null);
+    }
   }
 
   @override
@@ -50,92 +88,9 @@ class FavoriteScreenState extends State<FavoriteScreen>
     super.dispose();
   }
 
-  void _showFilterBottomSheet() {
-    showModalBottomSheet(
-      backgroundColor: AppColors.bgColor,
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setState) {
-            return DraggableScrollableSheet(
-              expand: false,
-              initialChildSize: 0.5,
-              maxChildSize: 0.75,
-              minChildSize: 0.3,
-              builder: (context, scrollController) {
-                return ListView.builder(
-                  controller: scrollController,
-                  padding: const EdgeInsets.all(16.0),
-                  itemCount: products.length + 1,
-                  itemBuilder: (context, index) {
-                    if (index == 0) {
-                      return Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text1(
-                            text1: 'Filter',
-                            size: 17,
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, color:Colors.black54,),
-                            onPressed: () {
-                              Navigator.pop(context);
-                            },
-                          ),
-                        ],
-                      );
-                    } else {
-                      return InkWell(
-                        onTap: () {
-
-                        },
-                        child: Container(
-                          width: double.infinity,
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                          decoration: BoxDecoration(
-                            color: AppColors.buttonColor,
-                            borderRadius: BorderRadius.circular(8),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Color.fromARGB((0.2 * 255).toInt(), 128, 128, 128),
-                                spreadRadius: 2,
-                                blurRadius: 5,
-                                offset: const Offset(0, 3),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text11(text2: products[index - 1].name,color: Colors.white,),
-
-                            ],
-                          ),
-                        ),
-                      );
-                    }
-                  },
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showFilterBottomSheet,
-        backgroundColor: AppColors.text3Color,
-        child: const Icon(Icons.filter_list,color: Colors.white,),
-      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 14),
@@ -145,109 +100,213 @@ class FavoriteScreenState extends State<FavoriteScreen>
               const CustomAppBar(text: 'Favorite ', text1: ''),
               const SizedBox(height: 20),
               Expanded(
-                child: AnimatedBuilder(
-                  animation: _controller,
-                  builder: (context, child) {
-                    return ListView.builder(
-                      itemCount: products.length,
-                      itemBuilder: (context, index) {
-                        return SlideTransition(
-                          position: _slideFromLeftAnimation,
-                          child: Card(
-                            color: Colors.white,
-                            elevation: 3,
+                child: FutureBuilder<List<FavoriteEntry>>(
+                  future: _favorites,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return _Placeholder(
+                        icon: Icons.error_outline,
+                        title: 'Could not load your favorites',
+                        detail: snapshot.error is ApiException
+                            ? (snapshot.error as ApiException).message
+                            : 'Please try again.',
+                        onRetry: () => _reload(),
+                      );
+                    }
+                    final favorites = snapshot.data ?? const <FavoriteEntry>[];
+                    if (favorites.isEmpty) {
+                      return const _Placeholder(
+                        icon: Icons.favorite_border,
+                        title: 'No favorites yet',
+                        detail:
+                            'Lawyers you save will appear here.',
+                      );
+                    }
 
-                            child: Padding(
-                              padding: const EdgeInsets.all(10.0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                    children: [
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 6),
-                                        child: SizedBox(
-                                          height: 80, // Adjusted height for visibility
-                                          width: 110, // Adjusted width for visibility
+                    return RefreshIndicator(
+                      onRefresh: _reload,
+                      child: AnimatedBuilder(
+                        animation: _controller,
+                        builder: (context, child) {
+                          return ListView.builder(
+                            itemCount: favorites.length,
+                            itemBuilder: (context, index) {
+                              final entry = favorites[index];
+                              return SlideTransition(
+                                position: _slideFromLeftAnimation,
+                                child: Card(
+                                  color: Colors.white,
+                                  elevation: 3,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(10.0),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        SizedBox(
+                                          height: 80,
+                                          width: 110,
                                           child: ClipRRect(
-                                            borderRadius: BorderRadius.circular(8),
-                                            child: Image.asset(
-                                              products[index].imagePath,
-                                              fit: BoxFit.cover,  // You can change to BoxFit.contain or BoxFit.fill if needed
-                                              errorBuilder: (context, error, stackTrace) {
-                                                // Handle image loading errors gracefully
-                                                return Center(child: Icon(Icons.error, color: Colors.red));
-                                              },
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                            child: _LawyerImage(
+                                              path: entry.lawyer.imagePath,
                                             ),
                                           ),
                                         ),
-                                      ),
-
-                                      const SizedBox(width: 14),
-                                      Column(
-                                        crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                        children: [
-                                          Text1(
-                                            text1: products[index].name,
-                                          ),
-                                          Text1(
-                                                  text1: products[index].price,
+                                        const SizedBox(width: 14),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text1(
+                                                text1: entry.lawyer.name.isEmpty
+                                                    ? 'Lawyer'
+                                                    : entry.lawyer.name,
+                                              ),
+                                              Text1(
+                                                text1: entry.lawyer.price.isEmpty
+                                                    ? 'Contact for pricing'
+                                                    : entry.lawyer.price,
+                                              ),
+                                              Text(
+                                                (entry.lawyer.specialty ?? '')
+                                                        .isEmpty
+                                                    ? 'Legal services'
+                                                    : entry.lawyer.specialty!,
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: AppColors.text2Color,
                                                 ),
-                                          // Row(
-                                          //   children: [
-                                          //     Text1(
-                                          //       text1: products[index].price,
-                                          //     ),
-                                          //
-                                          //   ],
-                                          // ),
-                                          // const Row(
-                                          //   children: [
-                                          //     Icon(
-                                          //       Icons.star,
-                                          //       color: AppColors.text3Color,
-                                          //       size: 20,
-                                          //     ),
-                                          //     Icon(
-                                          //       Icons.star,
-                                          //       color: AppColors.text3Color,
-                                          //       size: 20,
-                                          //     ),
-                                          //     Icon(
-                                          //       Icons.star,
-                                          //       color: AppColors.text3Color,
-                                          //       size: 20,
-                                          //     ),
-                                          //     Icon(
-                                          //       Icons.star,
-                                          //       color: AppColors.text3Color,
-                                          //       size: 20,
-                                          //     ),
-                                          //     Text1(text1: ' 4.3')
-                                          //   ],
-                                          // )
-                                        ],
-                                      ),
-                                      const Spacer(),
-                                      const Icon(Icons.favorite, color: Colors.red),
-                                    ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        _removingId == entry.favoriteId
+                                            ? const Padding(
+                                                padding:
+                                                    EdgeInsets.all(8.0),
+                                                child: SizedBox(
+                                                  height: 18,
+                                                  width: 18,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                  ),
+                                                ),
+                                              )
+                                            : IconButton(
+                                                icon: const Icon(
+                                                  Icons.favorite,
+                                                  color: Colors.red,
+                                                ),
+                                                onPressed: () =>
+                                                    _remove(entry),
+                                              ),
+                                      ],
+                                    ),
                                   ),
-                                ],
-                              ),
-
-                            ),
-                          ),
-                        );
-                      },
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
                     );
                   },
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A lawyer photo from the backend, with a bundled fallback.
+///
+/// `Product.imagePath` holds whatever the `lawyers` document stores: a remote
+/// URL for real records, or a bundled path for the older seeded data. Both are
+/// handled, and a broken value falls back to the bundled portrait.
+class _LawyerImage extends StatelessWidget {
+  const _LawyerImage({required this.path});
+
+  final String path;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Image.asset(
+      'images/lawyer2.png',
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => Container(
+        color: AppColors.bgColor,
+        child: const Icon(Icons.person, color: AppColors.text3Color),
+      ),
+    );
+
+    if (path.isEmpty) return fallback;
+    if (path.startsWith('http')) {
+      return Image.network(
+        path,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback,
+      );
+    }
+    return Image.asset(
+      path,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => fallback,
+    );
+  }
+}
+
+class _Placeholder extends StatelessWidget {
+  const _Placeholder({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.onRetry,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 42, color: AppColors.text3Color),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              detail,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppColors.text2Color,
+              ),
+            ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 12),
+              TextButton(onPressed: onRetry, child: const Text('Retry')),
+            ],
+          ],
         ),
       ),
     );

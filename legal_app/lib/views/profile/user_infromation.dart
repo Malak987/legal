@@ -1,16 +1,108 @@
 import 'package:flutter/material.dart';
 
 import '../../../constants/colors.dart';
+import '../../../models/app_profile.dart';
 import '../../../widgets/custombtn.dart';
 import '../../../widgets/customtextfield.dart';
 import '../../../widgets/detailstext1.dart';
+import '../../services/api_client.dart';
+import '../../state/session_controller.dart';
+import '../../state/session_scope.dart';
 import 'edit_profile.dart'; // Import the EditProfile screen
 
-class UserInformation extends StatelessWidget {
+/// Shows the signed-in user's own `users/{uid}` profile.
+///
+/// The values come from the session, not from hardcoded sample text, and the
+/// `role` is displayed read-only: it is owned by the backend and no screen in
+/// the app can change it.
+class UserInformation extends StatefulWidget {
   const UserInformation({super.key});
 
   @override
+  State<UserInformation> createState() => _UserInformationState();
+}
+
+class _UserInformationState extends State<UserInformation> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _addressController = TextEditingController();
+
+  String? _filledFor;
+  bool _isSaving = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    _phoneController.dispose();
+    _addressController.dispose();
+    super.dispose();
+  }
+
+  /// Fills the fields when the profile arrives (or the account changes).
+  ///
+  /// Done in `didChangeDependencies` rather than `build`: mutating a controller
+  /// during build would notify listeners mid-frame. The uid guard means a
+  /// later rebuild never overwrites text the user is editing.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final profile = SessionScope.of(context).profile;
+    if (profile != null) _sync(profile);
+  }
+
+  /// Copies the loaded profile into the fields once per uid, so a rebuild does
+  /// not wipe what the user is typing.
+  void _sync(AppProfile profile) {
+    if (_filledFor == profile.uid) return;
+    _filledFor = profile.uid;
+    _nameController.text = profile.name;
+    _emailController.text = profile.email;
+    _phoneController.text = profile.phone;
+    _addressController.text = profile.address;
+  }
+
+  Future<void> _save(SessionController session) async {
+    final profile = session.profile;
+    if (profile == null) return;
+
+    final name = _nameController.text.trim();
+    if (name.length < 2) {
+      _showMessage('Please enter your full name (at least 2 characters).');
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      await session.updateProfile(
+        name: name,
+        email: profile.email,
+        phone: _phoneController.text.trim(),
+        address: _addressController.text.trim(),
+      );
+      if (!mounted) return;
+      _showMessage('Profile updated.');
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage(
+        e is ApiException ? e.message : 'Could not save your changes.',
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final session = SessionScope.of(context);
+    final profile = session.profile;
+
     return Scaffold(
       body: SafeArea(
         child: SingleChildScrollView(
@@ -34,7 +126,7 @@ class UserInformation extends StatelessWidget {
                           border: Border.all(color: AppColors.text3Color),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.arrow_back, color:Colors.black54, size: 20),
+                        child: const Icon(Icons.arrow_back, color: Colors.black54, size: 20),
                       ),
                     ),
                     const Text1(
@@ -69,10 +161,10 @@ class UserInformation extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    const Center(
+                    Center(
                       child: Text(
-                        'John Doe', // Example username
-                        style: TextStyle(
+                        profile?.displayName ?? 'Loading…', // Real account name
+                        style: const TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
                           color: AppColors.text1Color,
@@ -80,43 +172,64 @@ class UserInformation extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Center(
+                    Center(
                       child: Text(
-                        'john.doe@example.com', // Example email
-                        style: TextStyle(
+                        profile?.email ?? '', // Real account email
+                        style: const TextStyle(
                           fontSize: 16,
                           color: AppColors.text2Color,
                         ),
                       ),
                     ),
-
-                    const SizedBox(
-                      height: 8,
+                    const SizedBox(height: 4),
+                    Center(
+                      child: Text(
+                        profile == null ? '' : 'Account type: ${profile.role}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: AppColors.text2Color,
+                        ),
+                      ),
                     ),
-                    const CustomTextField(
-                        icon: Icons.person_outline, label: 'First Name'),
-                    const CustomTextField(
-                        icon: Icons.person_outline, label: 'Last Name'),
-                    const CustomTextField(
-                        icon: Icons.email, label: 'Email Address'),
-                    const CustomTextField(
-                        icon: Icons.phone, label: 'Phone Number'),
-                    const CustomTextField(
-                        icon: Icons.home, label: 'Street Address'),
-                    const CustomTextField(
-                        icon: Icons.location_city, label: 'City'),
-                    const CustomTextField(
-                        icon: Icons.location_on, label: 'State'),
-                    const CustomTextField(
-                        icon: Icons.markunread_mailbox, label: 'Zip Code'),
-                    const CustomTextField(
-                        icon: Icons.flag, label: 'Country'),
+                    if (session.error != null) ...[
+                      const SizedBox(height: 8),
+                      Center(
+                        child: Text(
+                          session.error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.redAccent,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    CustomTextField(
+                        icon: Icons.person_outline,
+                        label: 'Full Name',
+                        controller: _nameController),
+                    // The backend refuses an email change from an ordinary
+                    // session (it is the sign-in identity), so the label says
+                    // so instead of silently discarding what is typed here.
+                    CustomTextField(
+                        icon: Icons.email,
+                        label: 'Email (change via an administrator)',
+                        controller: _emailController),
+                    CustomTextField(
+                        icon: Icons.phone,
+                        label: 'Phone Number',
+                        controller: _phoneController),
+                    CustomTextField(
+                        icon: Icons.home,
+                        label: 'Address',
+                        controller: _addressController),
                     const SizedBox(height: 15),
                     CustomButton(
-                        text: 'Save Information',
-                        onTap: () {
-                          // Handle save information action
-                        }),
+                        text: _isSaving ? 'Saving…' : 'Save Information',
+                        onTap: profile == null || _isSaving
+                            ? () {}
+                            : () => _save(session)),
                   ],
                 ),
               ),

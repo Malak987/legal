@@ -4,7 +4,7 @@ import 'package:legalserviceapp/views/authentication/signup_sreeen.dart';
 
 
 import '../../constants/colors.dart';
-import '../../services/api_client.dart';
+import '../../state/session_scope.dart';
 import '../../widgets/custombtn.dart';
 import '../../widgets/customtextfield.dart';
 import '../../widgets/detailstext1.dart';
@@ -27,8 +27,9 @@ class _LoginScreenState extends State<LoginScreen>
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
 
-  // Firebase-backed authentication
-  final ApiClient _api = ApiClient();
+  // Authentication goes through the app-wide session controller, which signs
+  // in with Firebase and loads the Firestore profile before any protected
+  // screen is shown.
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
@@ -60,11 +61,14 @@ class _LoginScreenState extends State<LoginScreen>
     _controller.dispose();
     _emailController.dispose();
     _passwordController.dispose();
-    _api.dispose();
     super.dispose();
   }
 
-  /// Signs in through Firebase Authentication and routes to the home screen.
+  /// Signs in and routes to the home screen only once the app is ready.
+  ///
+  /// "Ready" means Firebase accepted the credential **and** the Firestore
+  /// profile loaded (or was safely provisioned for a legacy account). A user
+  /// whose profile cannot be loaded is not sent into protected screens.
   Future<void> _handleLogin() async {
     final email = _emailController.text.trim();
     final password = _passwordController.text;
@@ -74,35 +78,25 @@ class _LoginScreenState extends State<LoginScreen>
       return;
     }
 
+    final session = SessionScope.read(context);
     setState(() => _isLoading = true);
-    try {
-      await _api.signIn(email, password);
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-      Navigator.push(context, _createRoute(HomePage()));
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-      _showMessage(_friendlyError(e));
-    }
-  }
 
-  String _friendlyError(Object e) {
-    final message = e.toString();
-    if (message.contains('wrong-password') ||
-        message.contains('invalid-credential')) {
-      return 'Incorrect email or password.';
+    final ok = await session.signIn(email: email, password: password);
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (!ok) {
+      _showMessage(session.error ?? 'Sign-in failed. Please try again.');
+      return;
     }
-    if (message.contains('user-not-found')) {
-      return 'No account found with this email.';
-    }
-    if (message.contains('invalid-email')) {
-      return 'Please enter a valid email address.';
-    }
-    if (message.contains('network')) {
-      return 'Network error. Check your connection.';
-    }
-    return message;
+
+    // Signing in replaces the auth screens in the stack, so Back does not
+    // return to the login form of an already authenticated session.
+    Navigator.pushAndRemoveUntil(
+      context,
+      _createRoute(HomePage()),
+      (route) => false,
+    );
   }
 
   void _showMessage(String message) {

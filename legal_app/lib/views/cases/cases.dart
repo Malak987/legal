@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../services/api_client.dart';
+import '../../state/session_scope.dart';
 import '../../widgets/customapp_bar.dart';
 import 'casedashboard.dart';
 
@@ -10,66 +12,58 @@ const Color searchBgGrey = Color(0xFFF0F0F0); // Light grey for search backgroun
 const Color hintGrey = Colors.grey;
 const Color cardTextWhite = Colors.white;
 
-class MyCasesScreen extends StatelessWidget {
+/// The signed-in user's cases, read from `GET /api/cases`.
+///
+/// The backend scopes the query to the caller's uid for non-admins, so the
+/// app never sends an owner id. Only listing is wired up: the case status
+/// workflow screen is still a static mock and is reached unchanged.
+class MyCasesScreen extends StatefulWidget {
   const MyCasesScreen({super.key});
 
-  // Sample Data (Replace with your actual data source)
-  final List<Map<String, String>> caseData = const [
-    {
-      'title': 'Case 1',
-      'description': 'This is how we do it there is no a', // Truncated as per image
-      'date': '9:30, Today',
-      'image': 'images/case.png' // Make sure this path is correct
-    },
-    {
-      'title': 'Case 2',
-      'description': 'This is how we do it there is no',
-      'date': '2 sep, last week',
-      'image': 'images/case.png' // Make sure this path is correct
-    },
-    {
-      'title': 'Case 3',
-      'description': 'This is how we do it there is no',
-      'date': '2 sep, last week',
-      'image': 'images/case.png' // Make sure this path is correct
-    },
-    {
-      'title': 'Case 4',
-      'description': 'This is how we do it there is no',
-      'date': '2 sep, last week',
-      'image': 'images/case.png' // Make sure this path is correct
-    }, {
-      'title': 'Case 1',
-      'description': 'This is how we do it there is no a', // Truncated as per image
-      'date': '9:30, Today',
-      'image': 'images/case.png' // Make sure this path is correct
-    },
-    {
-      'title': 'Case 2',
-      'description': 'This is how we do it there is no',
-      'date': '2 sep, last week',
-      'image': 'images/case.png' // Make sure this path is correct
-    },
-    {
-      'title': 'Case 3',
-      'description': 'This is how we do it there is no',
-      'date': '2 sep, last week',
-      'image': 'images/case.png' // Make sure this path is correct
-    },
-    {
-      'title': 'Case 4',
-      'description': 'This is how we do it there is no',
-      'date': '2 sep, last week',
-      'image': 'images/case.png' // Make sure this path is correct
-    },
-    // Add more cases as needed
-  ];
+  @override
+  State<MyCasesScreen> createState() => _MyCasesScreenState();
+}
+
+class _MyCasesScreenState extends State<MyCasesScreen> {
+  late Future<List<Map<String, dynamic>>> _cases;
+
+  @override
+  void initState() {
+    super.initState();
+    // Deferred: the session is only reachable through context.
+    _cases = Future.value(const <Map<String, dynamic>>[]);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _loadIfNeeded();
+  }
+
+  bool _loaded = false;
+
+  void _loadIfNeeded() {
+    if (_loaded) return;
+    _loaded = true;
+    _reload();
+  }
+
+  /// Re-runs the query. Also used as the pull-to-refresh handler, so it
+  /// returns the future it started.
+  Future<void> _reload() {
+    final session = SessionScope.read(context);
+    final future = session.repository.fetchMyCases();
+    setState(() {
+      _cases = future;
+    });
+    // Errors are rendered by the FutureBuilder; awaiting here would surface
+    // them a second time as an unhandled exception from RefreshIndicator.
+    return future.then((_) {}, onError: (_) {});
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Use default light theme background (usually white/off-white)
-
       body: SafeArea(
         child: Column(
           children: [
@@ -78,26 +72,66 @@ class MyCasesScreen extends StatelessWidget {
               child: CustomAppBar(text: 'My Cases', text1: ''),
             ),
             Expanded(
-              child: GestureDetector(
-                onTap: (){
-
-                  Navigator.push(context, MaterialPageRoute(builder:(_)=>CaseStatusScreen()));
-
-                },
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-                  itemCount: caseData.length,
-                  itemBuilder: (context, index) {
-                    final caseItem = caseData[index];
-                    return _buildCaseCard(
-                      context: context,
-                      title: caseItem['title']!,
-                      description: caseItem['description']!,
-                      date: caseItem['date']!,
-                      imagePath: caseItem['image']!,
+              child: FutureBuilder<List<Map<String, dynamic>>>(
+                future: _cases,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return _Message(
+                      icon: Icons.error_outline,
+                      title: 'Could not load your cases',
+                      detail: snapshot.error is ApiException
+                          ? (snapshot.error as ApiException).message
+                          : 'Please try again.',
+                      onRetry: () => _reload(),
                     );
-                  },
-                ),
+                  }
+                  final cases = snapshot.data ?? const <Map<String, dynamic>>[];
+                  if (cases.isEmpty) {
+                    return const _Message(
+                      icon: Icons.folder_open,
+                      title: 'No cases yet',
+                      detail: 'Cases created for your account will appear here.',
+                    );
+                  }
+                  return RefreshIndicator(
+                    onRefresh: _reload,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12.0, vertical: 8.0),
+                      itemCount: cases.length,
+                      itemBuilder: (context, index) {
+                        final item = cases[index];
+                        final title = _text(item['title']);
+                        final description = _text(item['description']);
+                        final type = _text(item['caseType']);
+                        final status = _text(item['status']);
+                        return GestureDetector(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const CaseStatusScreen()),
+                            );
+                          },
+                          child: _buildCaseCard(
+                            context: context,
+                            title: title.isEmpty ? 'Untitled case' : title,
+                            description: description.isEmpty
+                                ? [type, status]
+                                    .where((part) => part.isNotEmpty)
+                                    .join(' • ')
+                                : description,
+                            date: _createdLabel(item['createdAt']),
+                            status: status,
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
               ),
             ),
           ],
@@ -106,15 +140,38 @@ class MyCasesScreen extends StatelessWidget {
     );
   }
 
-  // Helper widget for the search bar area
+  static String _text(dynamic value) => value?.toString().trim() ?? '';
 
-  // Helper widget for building each case card
+  /// Formats `createdAt` (an ISO string, or a Firestore timestamp serialized
+  /// as `{_seconds: n}`). Unknown shapes are shown as-is rather than hidden.
+  static String _createdLabel(dynamic value) {
+    if (value == null) return '';
+    var raw = value.toString();
+    if (value is Map && value['_seconds'] is num) {
+      raw = DateTime.fromMillisecondsSinceEpoch(
+        (value['_seconds'] as num).toInt() * 1000,
+      ).toIso8601String();
+    }
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return raw;
+    final local = parsed.toLocal();
+    final now = DateTime.now();
+    final sameDay =
+        local.year == now.year && local.month == now.month && local.day == now.day;
+    if (sameDay) {
+      final hhmm = '${local.hour.toString().padLeft(2, '0')}:'
+          '${local.minute.toString().padLeft(2, '0')}';
+      return '$hhmm, Today';
+    }
+    return '${local.day}/${local.month}/${local.year}';
+  }
+
   Widget _buildCaseCard({
     required BuildContext context,
     required String title,
     required String description,
     required String date,
-    required String imagePath,
+    required String status,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 2.0), // Spacing between cards
@@ -124,14 +181,14 @@ class MyCasesScreen extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch, // Stretch children vertically
             children: [
-              // Image part
+              // Image part (bundled illustration, not backend data)
               ClipRRect(
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(10.0),
                   bottomLeft: Radius.circular(10.0),
                 ),
                 child: Image.asset(
-                  imagePath,
+                  'images/case.png',
                   width: 100, // Adjust width as needed
                   height: 80, // Make it square or adjust aspect ratio
                   fit: BoxFit.cover,
@@ -148,7 +205,7 @@ class MyCasesScreen extends StatelessWidget {
               ),
 
               // Text content part
-              SizedBox(width: 10,),
+              const SizedBox(width: 10,),
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.all(0.0),
@@ -169,7 +226,7 @@ class MyCasesScreen extends StatelessWidget {
                       const SizedBox(height: 6.0),
                       Text(
                         description,
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: Colors.grey,
                           fontSize: 13,
                         ),
@@ -177,14 +234,33 @@ class MyCasesScreen extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 6.0),
-                      Text(
-                        date,
-                        style: TextStyle(
-                          color: Colors.black,
-                          fontSize: 12,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      Row(
+                        children: [
+                          Text(
+                            date,
+                            style: const TextStyle(
+                              color: Colors.black,
+                              fontSize: 12,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (status.isNotEmpty) ...[
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                status,
+                                style: const TextStyle(
+                                  color: cardRed,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
                   ),
@@ -192,6 +268,52 @@ class MyCasesScreen extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shared loading/empty/error placeholder.
+class _Message extends StatelessWidget {
+  const _Message({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.onRetry,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 42, color: hintGrey),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              detail,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: hintGrey),
+            ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 12),
+              TextButton(onPressed: onRetry, child: const Text('Retry')),
+            ],
+          ],
         ),
       ),
     );

@@ -258,6 +258,23 @@ function docRef(collectionName, id) {
       else if (options && options.merge) Object.assign(doc, data);
       else Object.assign(doc, { id }, data);
     },
+    // Mirrors DocumentReference.create(): atomic, and it rejects instead of
+    // overwriting. Profile provisioning relies on this to answer 409 rather
+    // than replacing an existing document. (This block is inside the
+    // FIREBASE_STUB template literal, so no backticks or dollar-braces.)
+    async create(data) {
+      guardWrite(collectionName);
+      if (find()) {
+        const error = new Error(
+          '6 ALREADY_EXISTS: Document already exists: ' + key,
+        );
+        error.code = 'already-exists';
+        throw error;
+      }
+      bumpVersion(key);
+      store(collectionName).push({ id, ...data });
+      return { id };
+    },
     async delete() {
       guardWrite(collectionName);
       bumpVersion(key);
@@ -284,6 +301,10 @@ export function getAuth() {
       return {
         uid: user.uid,
         email: user.email ?? (user.uid + '@example.com'),
+        // A freshly created email/password account has not clicked a
+        // verification link yet. Defaults to verified so existing fixtures
+        // keep working; a test can set email_verified: false explicitly.
+        email_verified: user.email_verified ?? true,
         role: user.role,
         name: user.name ?? 'Test User',
       };

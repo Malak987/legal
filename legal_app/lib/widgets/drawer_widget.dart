@@ -6,6 +6,7 @@ import 'package:legalserviceapp/views/cases/cases.dart'; // Ensure correct path
 import 'package:legalserviceapp/views/popularlawyers/popularlawyers.dart'; // Ensure correct path
 import 'package:legalserviceapp/views/tasks/tasks.dart'; // Ensure correct path
 
+import '../views/authentication/login_screen.dart'; // Ensure correct path
 import '../views/availablitycalendar/avaialblity_calendar.dart'; // Ensure correct path
 import '../views/bookmark/bookmark.dart'; // Ensure correct path
 import '../views/home/homescreen.dart'; // Ensure correct path
@@ -22,6 +23,7 @@ import '../views/messages/chat_screen.dart'; // Ensure correct path
 import '../views/subscription/subscription.dart'; // Ensure correct path
 import '../views/toplawyers/topcaregivers.dart'; // Ensure correct path (assuming this is Top Lawyers)
 import '../views/wallet/wallet_screen.dart'; // Ensure correct path
+import '../state/session_scope.dart';
 import 'detailstext1.dart'; // Ensure correct path
 
 class DrawerWidget extends StatefulWidget {
@@ -33,6 +35,46 @@ class DrawerWidget extends StatefulWidget {
 
 class _DrawerWidgetState extends State<DrawerWidget> {
   String selectedMenuItem = 'Homepage'; // Track the selected menu item, default to Homepage
+
+  /// Signs out of Firebase and returns to the login screen.
+  ///
+  /// The session is cleared by the controller even if the network call fails,
+  /// so the UI can never stay "signed in" by accident. The stack is replaced
+  /// rather than popped: an authenticated screen must not remain reachable by
+  /// pressing Back after a sign-out.
+  Future<void> _confirmSignOut() async {
+    // Read the session and the navigator BEFORE the dialog: after an `await`
+    // the widget may be gone, and touching `context` then is both a lint and a
+    // real crash risk.
+    final session = SessionScope.read(context);
+    final navigator = Navigator.of(context);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Sign out'),
+        content: const Text('Do you want to sign out of this account?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Sign out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await session.signOut();
+    if (!mounted) return;
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -201,10 +243,7 @@ class _DrawerWidgetState extends State<DrawerWidget> {
             onTap: () => navigateTo(const Settings()),
           ),
           ListTile( // Keep Logout as a distinct ListTile
-            onTap: () {
-              // Implement Logout Logic Here
-              // e.g., show confirmation dialog, clear tokens, navigate to login
-            },
+            onTap: _confirmSignOut,
             leading: const Icon(
               Icons.logout,
               color: Colors.redAccent,

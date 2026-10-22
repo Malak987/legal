@@ -3,8 +3,7 @@ import 'package:flutter/material.dart';
 import '../../commonwidgets/home_widget.dart';
 import '../../commonwidgets/product_card.dart';
 import '../../constants/colors.dart';
-import '../../services/api_client.dart';
-import '../../services/app_repository.dart';
+import '../../state/session_scope.dart';
 
 import '../../commonwidgets/caregivercategories.dart';
 import '../../models/product_model.dart';
@@ -20,26 +19,25 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final AppRepository _repository = AppRepository(ApiClient());
-
   late Future<List<Product>> _future;
   String? _error;
+  bool _loaded = false;
 
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Load once, through the app-wide session repository so every screen
+    // shares one ApiClient (base URL and token handling in one place).
+    if (_loaded) return;
+    _loaded = true;
     _load();
   }
 
-  @override
-  void dispose() {
-    super.dispose();
-  }
-
   Future<void> _load() async {
+    final repository = SessionScope.read(context).repository;
     setState(() {
       _error = null;
-      _future = _repository.fetchLawyers();
+      _future = repository.fetchLawyers();
     });
 
     try {
