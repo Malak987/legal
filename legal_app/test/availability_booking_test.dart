@@ -259,6 +259,14 @@ void _screenTests() {
         matching: find.text('$day'),
       );
 
+  /// The date shown in the slot header, or `null` while none is selected.
+  String? selectedDate(WidgetTester tester) {
+    final header = find.textContaining('Available slots for');
+    if (header.evaluate().isEmpty) return null;
+    final label = tester.widget<Text>(header.first).data ?? '';
+    return label.replaceFirst('Available slots for ', '');
+  }
+
   /// Taps calendar day cells until one of them selects an available date.
   ///
   /// Day numbers repeat across the visible grid (the neighbouring months are
@@ -270,7 +278,9 @@ void _screenTests() {
   /// a selection rebuilds the grid, so an index captured earlier can point past
   /// the end.
   Future<String> selectAnyDate(WidgetTester tester) async {
-    const prefix = 'Available slots for';
+    // Collected so that a failure in CI — where only the exception message is
+    // readable — says why the calendar could not be driven.
+    final notes = <String>[];
 
     for (var day = 1; day <= 31; day++) {
       final attempts = dayCells(day).evaluate().length;
@@ -282,76 +292,38 @@ void _screenTests() {
 
         final cells = dayCells(day);
         if (cells.evaluate().length <= index) continue;
-        await tester.tap(cells.at(index), warnIfMissed: false);
+
+        // flutter_test reports a tap that misses its target through
+        // `debugPrint`; capturing it is the only way to see what is on top.
+        final warnings = <String>[];
+        final previousDebugPrint = debugPrint;
+        debugPrint = (String? message, {int? wrapWidth}) {
+          if (message != null && message.trim().isNotEmpty) {
+            warnings.add(message.split('\n').first);
+          }
+        };
+        try {
+          await tester.tap(cells.at(index));
+        } finally {
+          debugPrint = previousDebugPrint;
+        }
         await tester.pump();
 
-        final header = find.textContaining(prefix);
-        if (header.evaluate().isNotEmpty) {
-          final label = tester.widget<Text>(header.first).data ?? '';
-          return label.replaceFirst('$prefix ', '');
-        }
+        if (warnings.isNotEmpty) notes.add('day$day:${warnings.join(' | ')}');
+        final date = selectedDate(tester);
+        if (date != null) return date;
       }
     }
-    // Diagnostic: a bare "no date" tells nothing when this breaks in CI, where
-    // only the failure message is visible.
+
     final calendar = find.byType(TableCalendar<int>);
-    final now = DateTime.now();
     final widget = calendar.evaluate().isEmpty
         ? null
         : tester.widget<TableCalendar<int>>(calendar.first);
-    final enabled = <String>[];
-    for (var day = 1; day <= 31; day++) {
-      final date = DateTime(now.year, now.month, day);
-      if (widget?.enabledDayPredicate?.call(date) ?? false) enabled.add('$day');
-    }
-    final texts = calendar.evaluate().isEmpty
-        ? 0
-        : find
-            .descendant(of: calendar, matching: find.byType(Text))
-            .evaluate()
-            .length;
-
-    // Probe the one enabled day directly: does a raw tap at the cell's centre
-    // change the selection, or is the pointer never reaching the calendar?
-    var probe = 'probe=none';
-    final today = '${now.year}-${now.month}-${now.day}';
-    final byKey =
-        find.byKey(ValueKey<String>('CellContent-$today'));
-    probe = 'keyCells=$today:${byKey.evaluate().length} '
-        'focused=${widget?.focusedDay} '
-        'centers22=${dayCells(22).evaluate().map((e) => tester.getCenter(find.byElementPredicate((x) => identical(x, e)))).toList()}';
-    if (byKey.evaluate().isNotEmpty) {
-      await tester.ensureVisible(byKey.first);
-      await tester.pump();
-      await tester.tap(byKey.first, warnIfMissed: false);
-      await tester.pump();
-      probe += ' selectedAfterKeyTap='
-          '${tester.widget<TableCalendar<int>>(calendar.first).selectedDayPredicate?.call(DateTime(now.year, now.month, now.day))}'
-          ' headerAfterKeyTap=${find.textContaining(prefix).evaluate().length}';
-    }
-    final enabledDay = enabled.isEmpty ? null : int.parse(enabled.first);
-    if (enabledDay != null) {
-      final cell = dayCells(enabledDay).last;
-      final center = tester.getCenter(cell);
-      final view = tester.view.physicalSize / tester.view.devicePixelRatio;
-      await tester.tapAt(center);
-      await tester.pump();
-      final date = DateTime(now.year, now.month, enabledDay);
-      final selected = tester
-              .widget<TableCalendar<int>>(calendar.first)
-              .selectedDayPredicate
-              ?.call(date) ??
-          false;
-      probe = 'probe center=$center view=$view selectedAfterRawTap=$selected';
-    }
     fail(
       'no date on the calendar could be selected: '
-      'calendars=${calendar.evaluate().length} texts=$texts '
-      'enabledThisMonth=$enabled '
-      'cells(1)=${dayCells(1).evaluate().length} '
-      'cells(22)=${dayCells(22).evaluate().length} '
-      'pickDateHint=${find.text('Pick a date').evaluate().length} '
-      '$probe',
+      'cells=${find.descendant(of: calendar, matching: find.byType(Text)).evaluate().length} '
+      'focused=${widget?.focusedDay} first=${widget?.firstDay} last=${widget?.lastDay} '
+      'tapWarnings=${notes.take(2).join(' // ')}',
     );
   }
 
