@@ -46,36 +46,49 @@ class ApiClient {
   /// network and short enough that the UI always recovers.
   static const Duration defaultRequestTimeout = Duration(seconds: 20);
 
-  /// Base URL of the backend API.
+  /// Deployed Firebase Hosting + Cloud Functions Gen 2 base URL.
   ///
-  /// `--dart-define=API_BASE_URL=...` always wins, so any build can point at a
-  /// deployed backend without touching code:
-  ///
-  ///     flutter run --dart-define=API_BASE_URL=http://192.168.1.10:5000/api
-  ///
-  /// Without it, the default follows the platform, because no single address
-  /// is correct everywhere:
-  ///
-  /// - **Android emulator** -> `http://10.0.2.2:5000/api`. `10.0.2.2` is the
-  ///   emulator's alias for the host machine's loopback; `localhost` inside the
-  ///   emulator is the emulated device itself.
-  /// - **Web, Linux/Windows/macOS desktop, iOS simulator** ->
-  ///   `http://localhost:5000/api`.
-  /// - **Physical Android/iOS device** -> neither default can reach your
-  ///   computer. Pass the LAN IP with `--dart-define` (see above), and make
-  ///   sure the backend listens on `0.0.0.0` and the firewall allows port 5000.
+  /// Requests to `https://legal-102026.web.app/api/**` are rewritten by
+  /// Firebase Hosting to the 2nd-generation `api` Cloud Function in
+  /// `us-central1`, so mobile, desktop, and web builds work anywhere without a
+  /// local server running on a developer laptop.
+  static const String productionBaseUrl = 'https://legal-102026.web.app/api';
+
+  /// Compile-time override (`--dart-define=API_BASE_URL=...`).
   static const String configuredBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
   );
 
-  /// The platform-aware default, honouring [configuredBaseUrl] first.
-  static String get defaultBaseUrl {
-    if (configuredBaseUrl.isNotEmpty) return configuredBaseUrl;
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:5000/api';
+  /// Optional opt-in flag (`--dart-define=USE_LOCAL_EMULATOR=true`) for running
+  /// against the local Firebase Hosting/Functions Emulator on port 5000.
+  static const bool useLocalEmulator = bool.fromEnvironment(
+    'USE_LOCAL_EMULATOR',
+  );
+
+  /// Resolves the backend base URL for the current build and platform.
+  ///
+  /// Precedence:
+  ///   1. Explicit `--dart-define=API_BASE_URL=...`
+  ///   2. `--dart-define=USE_LOCAL_EMULATOR=true` -> `http://10.0.2.2:5000/api`
+  ///      on Android emulator or `http://localhost:5000/api` elsewhere
+  ///   3. Production Firebase API (`https://legal-102026.web.app/api`)
+  static String resolveBaseUrl({
+    String configured = configuredBaseUrl,
+    bool localEmulator = useLocalEmulator,
+  }) {
+    if (configured.isNotEmpty) return configured;
+    if (localEmulator) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        return 'http://10.0.2.2:5000/api';
+      }
+      return 'http://localhost:5000/api';
     }
-    return 'http://localhost:5000/api';
+    return productionBaseUrl;
   }
+
+  /// Default API base URL — always points to the deployed Firebase API unless
+  /// explicitly overridden at build/run time.
+  static String get defaultBaseUrl => resolveBaseUrl();
 
   final String baseUrl;
   final http.Client _client;

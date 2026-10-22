@@ -1,6 +1,13 @@
 node_modules/
 .env
+.env.*
+!.env.example
+functions-config/.env
+functions-config/.env.*
+!functions-config/.env.example
 serviceAccount.json
+serviceAccount*.json
+service-account*.json
 *.log
 dist/
 .DS_Store

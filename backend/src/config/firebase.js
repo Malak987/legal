@@ -1,25 +1,70 @@
 import admin from 'firebase-admin';
 import fs from 'node:fs';
-import env from './env.js';
+import env, { resolveFirebaseProjectId } from './env.js';
 
 let app = null;
 let firestore = null;
 let auth = null;
 
 /**
- * Initialize Firebase Admin SDK using the service account JSON file.
- * If the file is missing we throw a helpful error with setup instructions.
+ * Returns true when Firebase Admin can authenticate without a local
+ * `serviceAccount.json` file:
+ *   - Firebase Cloud Functions Gen 2 / Cloud Run (`K_SERVICE`, `FUNCTION_TARGET`, `FIREBASE_CONFIG`)
+ *   - Explicit Google Cloud Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`)
+ *   - Firebase Emulator Suite (`FUNCTIONS_EMULATOR`, `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`)
+ */
+export function canUseManagedCredentials(envVars = process.env) {
+  return Boolean(
+    envVars.K_SERVICE ||
+      envVars.FUNCTION_TARGET ||
+      envVars.FIREBASE_CONFIG ||
+      envVars.GOOGLE_APPLICATION_CREDENTIALS ||
+      envVars.FUNCTIONS_EMULATOR === 'true' ||
+      envVars.FIRESTORE_EMULATOR_HOST ||
+      envVars.FIREBASE_AUTH_EMULATOR_HOST,
+  );
+}
+
+/**
+ * Initialize Firebase Admin SDK safely across Cloud Functions Gen 2,
+ * Firebase Emulator Suite, and local standalone development:
+ *   1. Reuse existing initialized app instance if already initialized.
+ *   2. In Cloud Functions / Cloud Run / Emulators / ADC environments, call
+ *      `admin.initializeApp()` so Google Cloud managed runtime credentials are
+ *      used automatically without requiring any private-key JSON file.
+ *   3. In standalone local development outside Cloud Functions, fall back to
+ *      an untracked local `serviceAccount.json` if present.
  */
 export function initializeFirebase() {
-  if (app) return { app, firestore, auth };
+  if (app && firestore && auth) return { app, firestore, auth };
+
+  if (admin.apps.length > 0) {
+    app = admin.app();
+    firestore = admin.firestore();
+    auth = admin.auth();
+    return { app, firestore, auth };
+  }
+
+  const projectId =
+    resolveFirebaseProjectId() || env.firebaseProjectId || undefined;
+
+  if (canUseManagedCredentials()) {
+    app = projectId ? admin.initializeApp({ projectId }) : admin.initializeApp();
+    firestore = admin.firestore();
+    auth = admin.auth();
+    console.log(
+      `[Firebase] Initialized with managed runtime credentials (project: ${projectId || 'default'})`,
+    );
+    return { app, firestore, auth };
+  }
 
   if (!fs.existsSync(env.serviceAccountPath)) {
     throw new Error(
-      `\n[Firebase] Service account not found at:\n  ${env.serviceAccountPath}\n\n` +
-        'To fix this:\n' +
-        '  1. Go to Firebase Console > Project Settings > Service accounts\n' +
-        '  2. Click "Generate new private key"\n' +
-        '  3. Save the downloaded JSON as "serviceAccount.json" inside the backend folder\n',
+      `\n[Firebase] Credentials not configured and local key not found at:\n  ${env.serviceAccountPath}\n\n` +
+        'Options:\n' +
+        '  1. Production / Cloud Functions Gen 2 uses managed Application Default Credentials automatically.\n' +
+        '  2. Local Emulators: run `npm run emulator` (no service account file needed).\n' +
+        '  3. Standalone local against live Firebase: place an untracked JSON key at `backend/serviceAccount.json`.\n',
     );
   }
 
@@ -27,18 +72,17 @@ export function initializeFirebase() {
     fs.readFileSync(env.serviceAccountPath, 'utf8'),
   );
 
-  const projectId =
-    env.firebaseProjectId || serviceAccount.project_id || undefined;
+  const resolvedProjectId = projectId || serviceAccount.project_id || undefined;
 
   app = admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
-    projectId,
+    projectId: resolvedProjectId,
   });
 
   firestore = admin.firestore();
   auth = admin.auth();
 
-  console.log(`[Firebase] Initialized (project: ${projectId})`);
+  console.log(`[Firebase] Initialized (project: ${resolvedProjectId})`);
   return { app, firestore, auth };
 }
 
@@ -53,3 +97,4 @@ export function getAuth() {
 }
 
 export { admin };
+export default admin;

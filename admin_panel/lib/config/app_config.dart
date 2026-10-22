@@ -1,25 +1,18 @@
 /// Central configuration for the admin panel.
 class AppConfig {
-  /// Base URL of the backend API (Express + Firestore).
+  /// Base URL of the deployed Firebase backend API (Firebase Hosting rewrite ->
+  /// Cloud Functions Gen 2 `api` in `us-central1`).
   ///
-  /// The default targets the loopback interface, which is correct whenever the
-  /// browser and the backend run on the same machine (the normal local
-  /// development setup). A hard-coded LAN IP such as 10.0.0.28 breaks as soon
-  /// as the machine's DHCP lease changes — the symptom is
-  /// `ClientException: Failed to fetch`.
+  /// Production builds target `https://legal-102026.web.app/api` out of the
+  /// box so neither the deployed Admin Web Panel nor local browser sessions
+  /// depend on a server running on a developer laptop.
   ///
-  /// For any other target, pass the URL at build/run time instead of editing
-  /// this file:
+  /// For local Firebase Emulator development, pass `--dart-define` at run time:
   ///
-  ///     flutter run -d chrome --dart-define=API_BASE_URL=http://10.74.140.190:5000/api
-  ///     flutter build web  --dart-define=API_BASE_URL=https://api.example.com/api
-  ///
-  /// NOTE: Flutter Web running in Chrome treats "localhost"/"127.0.0.1" as the
-  /// machine running the browser, which is the same machine in local
-  /// development.
+  ///     flutter run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1:5000/api
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://127.0.0.1:5000/api',
+    defaultValue: 'https://legal-102026.web.app/api',
   );
 
   /// Brand colors taken from the main Legal Services app.
