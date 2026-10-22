@@ -478,7 +478,7 @@ void main() {
 
       // A failed change leaves the session exactly as it was.
       expect(session.status, SessionStatus.signedIn);
-      expect(session.profile?.name, 'Sara');
+      expect(session.profile?.name, 'Sara Ali');
       session.dispose();
     });
 
