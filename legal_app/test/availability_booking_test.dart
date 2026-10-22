@@ -267,63 +267,53 @@ void _screenTests() {
     return label.replaceFirst('Available slots for ', '');
   }
 
-  /// Taps calendar day cells until one of them selects an available date.
+  /// Taps a calendar day and returns the date the screen selected, or `null`.
   ///
-  /// Day numbers repeat across the visible grid (the neighbouring months are
-  /// drawn faintly), and a day without published availability is deliberately
-  /// not selectable — so a single hardcoded tap would be date-dependent. This
-  /// tries the candidates and returns the date the screen actually selected.
-  ///
-  /// The finder is rebuilt and the match count re-checked before every tap:
-  /// a selection rebuilds the grid, so an index captured earlier can point past
-  /// the end.
-  Future<String> selectAnyDate(WidgetTester tester) async {
-    // Collected so that a failure in CI — where only the exception message is
-    // readable — says why the calendar could not be driven.
-    final notes = <String>[];
+  /// The calendar is a `PageView`, so a day number also appears on the
+  /// neighbouring month's page. Those cells sit outside the calendar's own
+  /// rectangle; tapping them would be a miss, and asking the framework to scroll
+  /// a cell into view would paginate the calendar instead (`Scrollable
+  /// .ensureVisible` drives *every* ancestor scrollable, including the
+  /// horizontal page view). This taps raw coordinates, so only on-screen cells
+  /// receive the pointer.
+  Future<String?> tapDay(WidgetTester tester, int day) async {
+    final calendar = find.byType(TableCalendar<int>);
+    final rect = tester.getRect(calendar);
 
-    for (var day = 1; day <= 31; day++) {
-      final attempts = dayCells(day).evaluate().length;
-      for (var index = attempts - 1; index >= 0; index--) {
-        final before = dayCells(day);
-        if (before.evaluate().length <= index) continue;
-        await tester.ensureVisible(before.at(index));
-        await tester.pump();
+    for (var index = 0; index < dayCells(day).evaluate().length; index++) {
+      final cells = dayCells(day);
+      if (cells.evaluate().length <= index) break;
 
-        final cells = dayCells(day);
-        if (cells.evaluate().length <= index) continue;
+      final center = tester.getCenter(cells.at(index));
+      if (!rect.contains(center)) continue;
 
-        // flutter_test reports a tap that misses its target through
-        // `debugPrint`; capturing it is the only way to see what is on top.
-        final warnings = <String>[];
-        final previousDebugPrint = debugPrint;
-        debugPrint = (String? message, {int? wrapWidth}) {
-          if (message != null && message.trim().isNotEmpty) {
-            warnings.add(message.split('\n').first);
-          }
-        };
-        try {
-          await tester.tap(cells.at(index));
-        } finally {
-          debugPrint = previousDebugPrint;
-        }
-        await tester.pump();
+      await tester.tapAt(center);
+      await tester.pump();
 
-        if (warnings.isNotEmpty) notes.add('day$day:${warnings.join(' | ')}');
-        final date = selectedDate(tester);
-        if (date != null) return date;
-      }
+      final date = selectedDate(tester);
+      if (date != null) return date;
     }
+    return null;
+  }
 
+  /// Selects any date that has published availability.
+  ///
+  /// Which day is selectable depends on the availability each test seeds, and
+  /// days without availability are deliberately not selectable, so this walks
+  /// the day numbers until one of them changes the selection.
+  Future<String> selectAnyDate(WidgetTester tester) async {
+    for (var day = 1; day <= 31; day++) {
+      final date = await tapDay(tester, day);
+      if (date != null) return date;
+    }
     final calendar = find.byType(TableCalendar<int>);
     final widget = calendar.evaluate().isEmpty
         ? null
         : tester.widget<TableCalendar<int>>(calendar.first);
     fail(
       'no date on the calendar could be selected: '
-      'cells=${find.descendant(of: calendar, matching: find.byType(Text)).evaluate().length} '
-      'focused=${widget?.focusedDay} first=${widget?.firstDay} last=${widget?.lastDay} '
-      'tapWarnings=${notes.take(2).join(' // ')}',
+      'focused=${widget?.focusedDay} first=${widget?.firstDay} '
+      'last=${widget?.lastDay}',
     );
   }
 
