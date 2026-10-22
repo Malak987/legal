@@ -54,10 +54,12 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
     try {
       final reviews = await repo.fetchReviews(lawyerId: widget.lawyerId);
       var lawyers = const <Product>[];
-      try {
-        lawyers = await repo.fetchLawyers();
-      } catch (_) {
-        lawyers = const <Product>[];
+      if (widget.lawyerId == null || widget.lawyerId!.isEmpty) {
+        try {
+          lawyers = await repo.fetchLawyers();
+        } catch (_) {
+          lawyers = const <Product>[];
+        }
       }
       if (!mounted) return;
 
@@ -231,12 +233,16 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
 
     return RefreshIndicator(
       onRefresh: _load,
-      child: ListView(
-        children: [
-          _buildOverallRatingSection(),
-          const SizedBox(height: 16),
-          ..._reviews.map((r) => _buildReviewCard(r, currentUid)),
-        ],
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildOverallRatingSection(),
+            const SizedBox(height: 16),
+            ..._reviews.map((r) => _buildReviewCard(r, currentUid)),
+          ],
+        ),
       ),
     );
   }
@@ -354,9 +360,16 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
         children: [
           Row(
             children: [
-              const CircleAvatar(
+              CircleAvatar(
                 radius: 20,
-                backgroundImage: AssetImage('images/c3.png'),
+                backgroundColor: AppColors.buttonColor.withAlpha(30),
+                child: Text(
+                  userName.isEmpty ? 'C' : userName[0].toUpperCase(),
+                  style: const TextStyle(
+                    color: AppColors.buttonColor,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(

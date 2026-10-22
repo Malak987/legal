@@ -22,14 +22,14 @@ import 'package:legalserviceapp/views/wallet/walletscreen.dart';
 
 import 'support/fakes.dart';
 
-Future<void> _drain(WidgetTester tester, {int frames = 3}) async {
-  await tester.runAsync(() async {
-    for (var i = 0; i < 80; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 3));
-    }
-  });
-  for (var i = 0; i < frames; i++) {
-    await tester.pump();
+Future<void> _drain(WidgetTester tester, {int frames = 4}) async {
+  for (var f = 0; f < frames; f++) {
+    await tester.runAsync(() async {
+      for (var i = 0; i < 25; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+      }
+    });
+    await tester.pump(const Duration(milliseconds: 16));
   }
 }
 
