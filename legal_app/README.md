@@ -1,17 +1,22 @@
-# legal_app
+# legal_app — mobile client
 
-A new Flutter project.
+Flutter client for clients and lawyers. See the repository
+[README](../README.md) for architecture, the API, and the data model.
 
-## Getting Started
+```bash
+flutter pub get
+flutter run --dart-define=API_BASE_URL=http://10.0.2.2:5000/api   # Android emulator
+flutter analyze
+flutter test
+```
 
-This project is a starting point for a Flutter application.
+- `API_BASE_URL` overrides the default backend address; a physical device needs
+  your LAN IP, and release builds need an **https** URL (cleartext HTTP is
+  allowed in debug/profile manifests only).
+- The AI screens require `--dart-define=GEMINI_API_KEY=...`; without it they
+  report that the feature is not configured. No key is stored in this repository.
+- Firebase is configured for Android only — the web and iOS entries in
+  `lib/config/firebase_options.dart` are still placeholders.
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Screens that still render sample data, and the rest of the current limitations,
+are listed in the root README (§8).

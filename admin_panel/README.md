@@ -1,17 +1,21 @@
-# legal_admin
+# admin_panel — administrator console
 
-A new Flutter project.
+Flutter app (web/desktop) for users, lawyers, cases, bookings, plans,
+subscriptions, reviews, chats and notifications. Requires an account whose
+`users/{uid}` document has `role: "admin"`; the API enforces that independently,
+so a non-admin build cannot do anything an administrator could not.
 
-## Getting Started
+```bash
+flutter pub get
+flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:5000/api
+flutter analyze
+flutter test
+```
 
-This project is a starting point for a Flutter application.
+The console reads only its own profile document through the Firestore SDK (to
+decide whether to show any UI at all); every other read and write goes through
+the REST API. The Firestore rules that permit exactly that are in
+[`firestore.rules`](../firestore.rules) — deploy them with
+`firebase deploy --only firestore:rules` from the repository root.
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+See the repository [README](../README.md) for the API reference and setup.
