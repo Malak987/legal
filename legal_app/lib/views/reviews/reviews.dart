@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../constants/colors.dart';
+import '../../models/product_model.dart';
 import '../../services/api_client.dart';
 import '../../state/session_scope.dart';
 import '../../widgets/customapp_bar.dart';
@@ -48,23 +49,19 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
 
     final repo = SessionScope.read(context).repository;
     try {
-      final reviewsFuture = repo.fetchReviews(lawyerId: widget.lawyerId);
-      final lawyersFuture = repo
-          .fetchLawyers()
-          .catchError((_) => const <dynamic>[]);
-
-      final results = await Future.wait<dynamic>([
-        reviewsFuture,
-        lawyersFuture,
-      ]);
+      final reviews = await repo.fetchReviews(lawyerId: widget.lawyerId);
+      var lawyers = const <Product>[];
+      try {
+        lawyers = await repo.fetchLawyers();
+      } catch (_) {
+        lawyers = const <Product>[];
+      }
       if (!mounted) return;
 
-      final reviews = results[0] as List<Map<String, dynamic>>;
-      final lawyers = results[1] as List<dynamic>;
       final nameMap = <String, String>{};
       for (final lawyer in lawyers) {
         final id = lawyer.id?.toString() ?? '';
-        final name = lawyer.name?.toString() ?? '';
+        final name = lawyer.name.trim();
         if (id.isNotEmpty && name.isNotEmpty) {
           nameMap[id] = name;
         }

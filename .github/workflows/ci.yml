@@ -197,7 +197,7 @@ jobs:
             printf '%s\n' "$body"
           }
           publish "$RUNNER_TEMP/analyze.log" "flutter analyze (legal_app)" \
-            '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
+            '^[[:space:]]*(error|warning)[[:space:]]*[•-]'
           publish "$RUNNER_TEMP/test.log" "flutter test (legal_app)" \
             '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'
           publish_block "$RUNNER_TEMP/test.log" "flutter test (legal_app) detail"

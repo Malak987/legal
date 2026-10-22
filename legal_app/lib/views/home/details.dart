@@ -77,29 +77,26 @@ class _LegalServiceDetailsScreenState extends State<LegalServiceDetailsScreen> {
       String? favId;
 
       if (targetId.isNotEmpty) {
-        final results = await Future.wait<dynamic>([
-          repo
-              .fetchReviews(lawyerId: targetId)
-              .catchError((_) => const <Map<String, dynamic>>[]),
-          repo
-              .fetchAvailability(targetId)
-              .catchError((_) => const <LawyerAvailability>[]),
-          if (session.isSignedIn)
-            repo
-                .fetchFavorites(repo.currentUid ?? '')
-                .catchError((_) => const <Map<String, dynamic>>[])
-          else
-            Future.value(const <Map<String, dynamic>>[]),
-        ]);
-
-        reviews = results[0] as List<Map<String, dynamic>>;
-        availability = results[1] as List<LawyerAvailability>;
-        final favs = results[2] as List<Map<String, dynamic>>;
-        for (final row in favs) {
-          if (row['lawyerId']?.toString() == targetId) {
-            favId = row['id']?.toString();
-            break;
-          }
+        try {
+          reviews = await repo.fetchReviews(lawyerId: targetId);
+        } catch (_) {
+          reviews = const <Map<String, dynamic>>[];
+        }
+        try {
+          availability = await repo.fetchAvailability(targetId);
+        } catch (_) {
+          availability = const <LawyerAvailability>[];
+        }
+        if (session.isSignedIn) {
+          try {
+            final favs = await repo.fetchFavorites(repo.currentUid ?? '');
+            for (final row in favs) {
+              if (row['lawyerId']?.toString() == targetId) {
+                favId = row['id']?.toString();
+                break;
+              }
+            }
+          } catch (_) {}
         }
       }
 
