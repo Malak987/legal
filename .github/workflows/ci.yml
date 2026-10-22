@@ -185,7 +185,26 @@ jobs:
             echo "----- ${title} (last 60 lines) -----"
             tail -60 "$log"
           }
+          publish_block() {  # $1 = log file, $2 = annotation title
+            local log="$1" title="$2" body encoded
+            [ -f "$log" ] || return 0
+            body="$(awk '
+              /EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK/ { seen++ }
+              seen == 1 { print }
+              seen == 1 && ++lines > 40 { exit }
+            ' "$log" | grep -v 'google_fonts was unable' || true)"
+            [ -n "$body" ] || return 0
+            encoded="$(printf '%s\n' "$body" | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'NF { printf "%s%%0A", $0 }')"
+            echo "::error title=${title}::${encoded}"
+            echo "----- ${title} -----"
+            printf '%s\n' "$body"
+          }
           publish "$RUNNER_TEMP/analyze.log" "flutter analyze (legal_app)" \
             '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
           publish "$RUNNER_TEMP/test.log" "flutter test (legal_app)" \
             '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'
+          # `flutter test` reports a failure as a multi-line block whose only
+          # greppable lines are the header and the closing sentence, so the
+          # pattern above shows "Test failed" with no reason. Publish the first
+          # block verbatim so the cause is readable without the log archive.
+          publish_block "$RUNNER_TEMP/test.log" "flutter test (legal_app) detail"
