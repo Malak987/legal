@@ -7,6 +7,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backendRoot = path.resolve(__dirname, '../..');
 
 export const DEFAULT_FIREBASE_PROJECT_ID = 'legal-102026';
+export const DEFAULT_SUPABASE_PROJECT_REF = 'qqfzbecwhewswkyxgebu';
+export const DEFAULT_SUPABASE_URL = `https://${DEFAULT_SUPABASE_PROJECT_REF}.supabase.co`;
 
 /**
  * Returns true when running inside Cloud Functions / Cloud Run or the
@@ -121,6 +123,16 @@ export const env = {
   corsOrigins: resolveCorsOrigins({ ...process.env, NODE_ENV: nodeEnv }),
   serviceAccountPath: resolveServiceAccountPath(),
   firebaseProjectId: resolveFirebaseProjectId(),
+  supabaseProjectRef: (
+    process.env.SUPABASE_PROJECT_REF || DEFAULT_SUPABASE_PROJECT_REF
+  ).trim(),
+  supabaseUrl: (process.env.SUPABASE_URL || '').trim(),
+  supabaseAnonKey: (process.env.SUPABASE_ANON_KEY || '').trim(),
+  supabaseServiceRoleKey: (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    ''
+  ).trim(),
   // Automatic startup seeding is strictly forbidden in Cloud Functions and in
   // production environments.
   seedOnStart:

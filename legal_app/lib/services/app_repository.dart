@@ -5,10 +5,21 @@ import 'api_client.dart';
 /// Repository that fetches the app's data from the backend REST API.
 ///
 /// This replaces the hard-coded lists (ProductData, sample case lists, etc.)
-/// so the screens can show live data stored in Firestore.
+/// so the screens can show live data stored in the database.
 class AppRepository {
   AppRepository(this._api);
   final ApiClient _api;
+
+  /// The signed-in user's ID, or `null` when signed out.
+  String? get currentUid => _api.currentUid;
+
+  String _requireUid() {
+    final uid = _api.currentUid;
+    if (uid == null || uid.isEmpty) {
+      throw ApiException('You are not signed in.', 401);
+    }
+    return uid;
+  }
 
   // ---------------- Lawyers ----------------
 
@@ -42,11 +53,6 @@ class AppRepository {
   }
 
   /// The availability a lawyer has published.
-  ///
-  /// `GET /api/availability` is public (no token), and the engine filters on a
-  /// single field, so this asks for that lawyer's rows and lets the caller index
-  /// them by date. `limit` is the API's maximum; a lawyer with more than 100
-  /// published days would be truncated until the endpoint is paginated.
   Future<List<LawyerAvailability>> fetchAvailability(String lawyerId) async {
     if (lawyerId.isEmpty) return const <LawyerAvailability>[];
     final data = await _api.get('availability', query: {
@@ -66,9 +72,12 @@ class AppRepository {
       specialty: json['specialty']?.toString(),
       rating: (json['rating'] as num?)?.toDouble(),
       location: json['location']?.toString(),
-      // The hourly rate the server prices bookings with. Carried through so the
-      // screen can show the same number instead of parsing the display string.
       priceValue: (json['priceValue'] as num?)?.toDouble(),
+      experience: json['experience']?.toString(),
+      bio: json['bio']?.toString(),
+      userId: json['userId']?.toString(),
+      isPopular: json['isPopular'] as bool?,
+      isTop: json['isTop'] as bool?,
     );
   }
 
@@ -136,28 +145,88 @@ class AppRepository {
     return (data['items'] as List).cast<Map<String, dynamic>>();
   }
 
-  // ---------------- Plans ----------------
+  Future<Map<String, dynamic>> createTask({
+    required String title,
+    String description = '',
+    String dueDate = '',
+    String priority = 'Medium',
+    String status = 'Pending',
+  }) async {
+    return await _api.post('tasks', body: {
+      'title': title,
+      'description': description,
+      'dueDate': dueDate,
+      'priority': priority,
+      'status': status,
+    }) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> updateTask(
+    String taskId,
+    Map<String, dynamic> updates,
+  ) async {
+    return await _api.put('tasks/$taskId', body: updates)
+        as Map<String, dynamic>;
+  }
+
+  Future<void> deleteTask(String taskId) async {
+    await _api.delete('tasks/$taskId');
+  }
+
+  // ---------------- Plans & Subscriptions ----------------
 
   Future<List<Map<String, dynamic>>> fetchPlans() async {
     final data = await _api.get('plans', query: {'limit': '100'});
     return (data['items'] as List).cast<Map<String, dynamic>>();
   }
 
+  Future<List<Map<String, dynamic>>> fetchMySubscriptions() async {
+    final data = await _api.get('subscriptions', query: {'limit': '100'});
+    return (data['items'] as List).cast<Map<String, dynamic>>();
+  }
+
+  Future<Map<String, dynamic>> createSubscription({
+    required String planId,
+  }) async {
+    return await _api.post('subscriptions', body: {
+      'planId': planId,
+    }) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> cancelSubscription(String subscriptionId) async {
+    return await _api.put('subscriptions/$subscriptionId', body: {
+      'status': 'Cancelled',
+    }) as Map<String, dynamic>;
+  }
+
   // ---------------- Notifications ----------------
 
   Future<List<Map<String, dynamic>>> fetchNotifications(String userId) async {
-    final data = await _api.get('notifications/$userId', query: {'limit': '100'});
+    final data =
+        await _api.get('notifications/$userId', query: {'limit': '100'});
     return (data['items'] as List).cast<Map<String, dynamic>>();
+  }
+
+  Future<List<Map<String, dynamic>>> fetchMyNotifications() async {
+    return fetchNotifications(_requireUid());
   }
 
   Future<void> markNotificationRead(String notificationId, bool read) async {
     await _api.put('notifications/$notificationId/read', body: {'read': read});
   }
 
+  Future<void> deleteNotification(String notificationId) async {
+    await _api.delete('notifications/$notificationId');
+  }
+
   // ---------------- Wallet ----------------
 
   Future<Map<String, dynamic>> fetchWallet(String userId) async {
     return await _api.get('wallet/$userId') as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> fetchMyWallet() async {
+    return fetchWallet(_requireUid());
   }
 
   Future<void> addWalletTransaction({
@@ -174,10 +243,27 @@ class AppRepository {
     });
   }
 
+  Future<void> addMyWalletTransaction({
+    required String type,
+    required double amount,
+    String description = '',
+  }) async {
+    await addWalletTransaction(
+      userId: _requireUid(),
+      type: type,
+      amount: amount,
+      description: description,
+    );
+  }
+
   // ---------------- Earnings ----------------
 
   Future<Map<String, dynamic>> fetchEarnings(String userId) async {
     return await _api.get('earnings/$userId') as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> fetchMyEarnings() async {
+    return fetchEarnings(_requireUid());
   }
 
   // ---------------- Reviews ----------------
@@ -185,21 +271,25 @@ class AppRepository {
   Future<List<Map<String, dynamic>>> fetchReviews({String? lawyerId}) async {
     final data = await _api.get('reviews', query: {
       'limit': '100',
-      if (lawyerId != null) 'lawyerId': lawyerId,
+      if (lawyerId != null && lawyerId.isNotEmpty) 'lawyerId': lawyerId,
     });
     return (data['items'] as List).cast<Map<String, dynamic>>();
   }
 
-  Future<void> addReview({
+  Future<Map<String, dynamic>> addReview({
     required String lawyerId,
     required double rating,
     required String comment,
   }) async {
-    await _api.post('reviews', body: {
+    return await _api.post('reviews', body: {
       'lawyerId': lawyerId,
       'rating': rating,
       'comment': comment,
-    });
+    }) as Map<String, dynamic>;
+  }
+
+  Future<void> deleteReview(String reviewId) async {
+    await _api.delete('reviews/$reviewId');
   }
 
   // ---------------- Chats ----------------
@@ -213,11 +303,25 @@ class AppRepository {
     return await _api.get('chats/$chatId') as Map<String, dynamic>;
   }
 
-  Future<void> sendMessage({
+  Future<Map<String, dynamic>> createChat({
+    required List<String> participants,
+    Map<String, String>? participantNames,
+    String? initialMessage,
+  }) async {
+    return await _api.post('chats', body: {
+      'participants': participants,
+      if (participantNames != null) 'participantNames': participantNames,
+      if (initialMessage != null && initialMessage.isNotEmpty)
+        'lastMessage': initialMessage,
+    }) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> sendMessage({
     required String chatId,
     required String text,
   }) async {
-    await _api.post('chats/$chatId/messages', body: {'text': text});
+    return await _api.post('chats/$chatId/messages', body: {'text': text})
+        as Map<String, dynamic>;
   }
 
   // ---------------- Favorites ----------------
@@ -228,17 +332,8 @@ class AppRepository {
   }
 
   /// The signed-in user's favorites, joined with the lawyer documents.
-  ///
-  /// `GET /api/favorites/:userId` returns rows that only carry `lawyerId`, so
-  /// each lawyer is fetched separately. A favorite whose lawyer was deleted is
-  /// skipped rather than rendered as an empty card — the backend does not
-  /// check that the lawyer still exists when the favorite is created.
   Future<List<FavoriteEntry>> fetchMyFavorites() async {
-    final uid = _api.currentUid;
-    if (uid == null || uid.isEmpty) {
-      throw ApiException('You are not signed in.', 401);
-    }
-
+    final uid = _requireUid();
     final rows = await fetchFavorites(uid);
     final entries = rows
         .where((row) => (row['lawyerId']?.toString() ?? '').isNotEmpty)

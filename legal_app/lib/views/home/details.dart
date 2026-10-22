@@ -1,193 +1,532 @@
-import 'package:legalserviceapp/constants/colors.dart';
 import 'package:flutter/material.dart';
+
+import '../../constants/colors.dart';
+import '../../models/lawyer_availability.dart';
+import '../../models/product_model.dart';
+import '../../services/api_client.dart';
+import '../../state/session_scope.dart';
 import '../../widgets/custombtn.dart';
 import '../../widgets/detailstext1.dart';
 import '../../widgets/detailstext2.dart';
-import '../booking/booking.dart';
+import '../availablitycalendar/avaialblity_calendar.dart';
+import '../messages/chat_screen.dart';
+import '../reviews/reviews.dart';
 
-class LegalServiceDetailsScreen extends StatelessWidget {
-  const LegalServiceDetailsScreen({super.key});
+/// Lawyer profile and service details backed by `GET /api/lawyers/:id`,
+/// `GET /api/reviews?lawyerId=`, `GET /api/availability?lawyerId=`, and
+/// `POST / DELETE /api/favorites`.
+class LegalServiceDetailsScreen extends StatefulWidget {
+  final Product? lawyer;
+  final String? lawyerId;
+
+  const LegalServiceDetailsScreen({
+    super.key,
+    this.lawyer,
+    this.lawyerId,
+  });
+
+  @override
+  State<LegalServiceDetailsScreen> createState() =>
+      _LegalServiceDetailsScreenState();
+}
+
+class _LegalServiceDetailsScreenState extends State<LegalServiceDetailsScreen> {
+  Product? _lawyer;
+  List<Map<String, dynamic>> _reviews = const <Map<String, dynamic>>[];
+  List<LawyerAvailability> _availability = const <LawyerAvailability>[];
+  String? _favoriteId;
+  bool _togglingFavorite = false;
+  bool _loading = true;
+  String? _error;
+  bool _initialized = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialized) return;
+    _initialized = true;
+    _lawyer = widget.lawyer;
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    final session = SessionScope.read(context);
+    final repo = session.repository;
+    var targetId = (widget.lawyerId ?? widget.lawyer?.id ?? '').trim();
+
+    try {
+      Product? loaded = widget.lawyer;
+      if (targetId.isNotEmpty) {
+        final fetched = await repo.fetchLawyer(targetId);
+        if (fetched != null) loaded = fetched;
+      } else if (loaded == null) {
+        final list = await repo.fetchLawyers();
+        if (list.isNotEmpty) {
+          loaded = list.first;
+          targetId = (loaded.id ?? '').trim();
+        }
+      }
+
+      var reviews = const <Map<String, dynamic>>[];
+      var availability = const <LawyerAvailability>[];
+      String? favId;
+
+      if (targetId.isNotEmpty) {
+        final results = await Future.wait<dynamic>([
+          repo
+              .fetchReviews(lawyerId: targetId)
+              .catchError((_) => const <Map<String, dynamic>>[]),
+          repo
+              .fetchAvailability(targetId)
+              .catchError((_) => const <LawyerAvailability>[]),
+          if (session.isSignedIn)
+            repo
+                .fetchFavorites(repo.currentUid ?? '')
+                .catchError((_) => const <Map<String, dynamic>>[])
+          else
+            Future.value(const <Map<String, dynamic>>[]),
+        ]);
+
+        reviews = results[0] as List<Map<String, dynamic>>;
+        availability = results[1] as List<LawyerAvailability>;
+        final favs = results[2] as List<Map<String, dynamic>>;
+        for (final row in favs) {
+          if (row['lawyerId']?.toString() == targetId) {
+            favId = row['id']?.toString();
+            break;
+          }
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _lawyer = loaded;
+        _reviews = reviews;
+        _availability = availability;
+        _favoriteId = favId;
+        _loading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not load lawyer details. Please try again.';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _toggleFavorite() async {
+    final lawyerId = (_lawyer?.id ?? widget.lawyerId ?? '').trim();
+    if (lawyerId.isEmpty || _togglingFavorite) return;
+
+    final session = SessionScope.read(context);
+    if (!session.isSignedIn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please sign in to save favorites.')),
+      );
+      return;
+    }
+
+    setState(() => _togglingFavorite = true);
+    final repo = session.repository;
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      if (_favoriteId != null && _favoriteId!.isNotEmpty) {
+        await repo.removeFavorite(_favoriteId!);
+        if (!mounted) return;
+        setState(() => _favoriteId = null);
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Removed from favorites.')),
+        );
+      } else {
+        await repo.addFavorite(lawyerId);
+        final rows = await repo.fetchFavorites(repo.currentUid ?? '');
+        String? newFavId;
+        for (final row in rows) {
+          if (row['lawyerId']?.toString() == lawyerId) {
+            newFavId = row['id']?.toString();
+            break;
+          }
+        }
+        if (!mounted) return;
+        setState(() => _favoriteId = newFavId ?? 'saved');
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Added to favorites.')),
+        );
+      }
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _togglingFavorite = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: AppColors.bgColor,
       body: SafeArea(
-        child: NestedScrollView(
-          headerSliverBuilder: (context, innerBoxIsScrolled) {
-            return [
-              SliverAppBar(
-                expandedHeight: 200,
-                floating: false,
-                pinned: true,
-                backgroundColor: Colors.white,
-                flexibleSpace: FlexibleSpaceBar(
-                  background: Stack(
-                    children: [
-                      Container(
-                        width: double.infinity, // Takes full width of the screen
-                        height: 310, // Set the height according to your needs
-                        decoration: const BoxDecoration(
-                          borderRadius: BorderRadius.only(
-                            bottomLeft: Radius.circular(10),
-                            bottomRight: Radius.circular(10),
-                          ),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: const BorderRadius.only(
-                            bottomLeft: Radius.circular(10),
-                            bottomRight: Radius.circular(10),
-                          ),
-                          child: Image.network(
-                            'https://img.freepik.com/premium-photo/portrait-lawyer-looking-documents-office_107420-12586.jpg?w=996', // Adjusted image for legal services
-                            width: double.infinity, // Ensures the image takes up full width
-                            height: 310, // Ensures the image respects the container height
-                            fit: BoxFit.cover, // Ensures the image fits correctly in the container
-                          ),
-                        ),
-                      )
+        child: _buildContent(),
+      ),
+    );
+  }
 
-                    ],
-                  ),
-                ),
-                leading: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: CircleAvatar(
-                    backgroundColor: AppColors.buttonColor,
-                    child: IconButton(
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ),
-                ),
+  Widget _buildContent() {
+    if (_loading && _lawyer == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null && _lawyer == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 46,
+                color: AppColors.text3Color,
               ),
-            ];
-          },
-          body: SingleChildScrollView(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildTitleAndFav(),
-                const SizedBox(height: 8),
-                _buildLocation(),
-                const SizedBox(height: 16),
-                _buildExperience(),
-                const SizedBox(height: 16),
-                _buildAboutService(),
-                const SizedBox(height: 16),
-                _buildKeyFeatures(),
-              ],
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.text2Color),
+              ),
+              const SizedBox(height: 12),
+              TextButton(onPressed: _load, child: const Text('Retry')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final lawyer = _lawyer;
+    if (lawyer == null) {
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(14.0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.pop(context),
+              ),
             ),
           ),
-        ),
-      ),
-      bottomSheet: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: CustomButton(
-          text: 'Book Now',
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(builder: (context) => const BookingScreen()),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTitleAndFav() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(
-          child: Text1(
-            text1: 'Legal Consultation Service',
-            size: 22,
-          ),
-        ),
-        const Icon(Icons.favorite, color: Colors.red, size: 32),
-      ],
-    );
-  }
-
-  Widget _buildLocation() {
-    return const Row(
-      children: [
-        Icon(Icons.location_on, color: Colors.orangeAccent),
-        SizedBox(width: 6),
-        Text2(text2: 'Available in New York & Nearby Areas'),
-      ],
-    );
-  }
-
-  Widget _buildExperience() {
-    return Text(
-      '10+ Years of Legal Experience',
-      style: const TextStyle(
-        fontSize: 22,
-        fontWeight: FontWeight.bold,
-        color: Color(0xFF3498db),
-      ),
-    );
-  }
-
-  Widget _buildAboutService() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Color.fromARGB((0.2 * 255).toInt(), 158, 158, 158),
-            spreadRadius: 1,
-            blurRadius: 8,
+          const Expanded(
+            child: Center(
+              child: Text(
+                'No lawyer details available.',
+                style: TextStyle(color: AppColors.text2Color),
+              ),
+            ),
           ),
         ],
-      ),
+      );
+    }
+
+    final name = lawyer.name.isEmpty ? 'Lawyer' : lawyer.name;
+    final specialty = (lawyer.specialty ?? '').trim().isEmpty
+        ? 'Legal Consultation'
+        : lawyer.specialty!.trim();
+    final location = (lawyer.location ?? '').trim().isEmpty
+        ? 'Location not specified'
+        : lawyer.location!.trim();
+    final price =
+        lawyer.price.trim().isEmpty ? 'Contact for pricing' : lawyer.price;
+    final rating = lawyer.rating ?? 0.0;
+    final experience = (lawyer.experience ?? '').trim();
+    final bio = (lawyer.bio ?? '').trim();
+    final isFavorited = _favoriteId != null;
+
+    return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text1(text1: 'About Legal Service', size: 20),
-          const SizedBox(height: 10),
-          Text2(
-            text2:
-            'Our legal experts offer personalized consultations and legal representation for individuals and businesses. Services include legal advice, contract review, dispute resolution, and more. Get expert guidance for your legal needs.',
+          Stack(
+            children: [
+              SizedBox(
+                width: double.infinity,
+                height: 260,
+                child: _LawyerBannerImage(path: lawyer.imagePath),
+              ),
+              Positioned(
+                top: 15,
+                left: 15,
+                child: CircleAvatar(
+                  backgroundColor: Colors.white,
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.black),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 15,
+                right: 15,
+                child: CircleAvatar(
+                  backgroundColor: Colors.white,
+                  child: _togglingFavorite
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : IconButton(
+                          icon: Icon(
+                            isFavorited
+                                ? Icons.favorite
+                                : Icons.favorite_border,
+                            color: Colors.redAccent,
+                          ),
+                          onPressed: _toggleFavorite,
+                        ),
+                ),
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text1(text1: name, size: 22),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(Icons.gavel, color: Colors.blue, size: 18),
+                    const SizedBox(width: 6),
+                    Text2(text2: specialty),
+                    const Spacer(),
+                    const Icon(Icons.location_on, color: Colors.red, size: 18),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        location,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: AppColors.text2Color,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Text1(
+                      text1: price,
+                      size: 20,
+                      color: AppColors.buttonColor,
+                    ),
+                    const Spacer(),
+                    const Icon(Icons.star, color: Colors.amber, size: 20),
+                    const SizedBox(width: 4),
+                    Text1(
+                      text1: rating > 0
+                          ? '${rating.toStringAsFixed(1)} (${_reviews.length} review${_reviews.length == 1 ? '' : 's'})'
+                          : 'New (${_reviews.length} reviews)',
+                      size: 15,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                const Divider(),
+                const SizedBox(height: 10),
+                const Text1(text1: 'About Lawyer', size: 18),
+                const SizedBox(height: 6),
+                Text2(
+                  text2: bio.isNotEmpty
+                      ? bio
+                      : '$name specializes in $specialty and provides legal consultation and representation.',
+                ),
+                const SizedBox(height: 14),
+                const Text1(text1: 'Details & Availability', size: 18),
+                const SizedBox(height: 8),
+                if (experience.isNotEmpty)
+                  _buildDetailPoint('Experience: $experience'),
+                _buildDetailPoint('Specialty: $specialty'),
+                _buildDetailPoint('Location: $location'),
+                _buildDetailPoint(
+                  _availability.isEmpty
+                      ? 'Availability: Check calendar for open dates'
+                      : 'Availability: ${_availability.length} published date(s) open for booking',
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text1(text1: 'Client Reviews', size: 18),
+                    TextButton(
+                      onPressed: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ReviewsScreen(
+                              lawyerId: lawyer.id,
+                              lawyerName: name,
+                            ),
+                          ),
+                        );
+                        if (mounted) _load();
+                      },
+                      child: const Text('See All / Write Review'),
+                    ),
+                  ],
+                ),
+                if (_reviews.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Text2(
+                      text2: 'No reviews yet for this lawyer.',
+                    ),
+                  )
+                else
+                  ..._reviews.take(3).map((r) {
+                    final reviewer =
+                        (r['userName']?.toString() ?? 'Client').trim();
+                    final rRating =
+                        (r['rating'] as num?)?.toDouble() ?? 5.0;
+                    final comment = (r['comment']?.toString() ?? '').trim();
+                    return Card(
+                      color: Colors.white,
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        title: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text1(text1: reviewer, size: 14),
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.star,
+                                  color: Colors.amber,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(rRating.toStringAsFixed(1)),
+                              ],
+                            ),
+                          ],
+                        ),
+                        subtitle: comment.isEmpty
+                            ? null
+                            : Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text2(text2: comment),
+                              ),
+                      ),
+                    );
+                  }),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const ChatScreen(),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.chat_bubble_outline),
+                        label: const Text('Messages'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: CustomButton(
+                        text: 'Book Appointment',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  AvailabilityCalendarScheduleScreen(
+                                lawyerId: lawyer.id,
+                                lawyerName: name,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildKeyFeatures() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text1(text1: 'Key Features', size: 20),
-        const SizedBox(height: 8),
-        _buildFeature('Experienced Lawyers with Proven Success'),
-        _buildFeature('Free Initial Consultation'),
-        _buildFeature('Personalized Legal Services for Every Client'),
-        _buildFeature('Affordable Pricing Plans'),
-        _buildFeature('24/7 Legal Support Available'),
-      ],
-    );
-  }
-
-  Widget _buildFeature(String feature) {
+  Widget _buildDetailPoint(String text) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
-          const Icon(Icons.check_circle, color: Colors.green, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(feature,
-                style: const TextStyle(fontSize: 16, color: Colors.black87)),
+          const Icon(
+            Icons.check_circle,
+            color: AppColors.buttonColor,
+            size: 18,
           ),
+          const SizedBox(width: 8),
+          Expanded(child: Text2(text2: text)),
         ],
       ),
+    );
+  }
+}
+
+class _LawyerBannerImage extends StatelessWidget {
+  const _LawyerBannerImage({required this.path});
+
+  final String path;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Image.asset(
+      'images/lawyer2.png',
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => Container(
+        color: AppColors.bgColor,
+        child: const Icon(Icons.person, size: 64, color: AppColors.text3Color),
+      ),
+    );
+    if (path.isEmpty) return fallback;
+    if (path.startsWith('http')) {
+      return Image.network(
+        path,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback,
+      );
+    }
+    return Image.asset(
+      path,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => fallback,
     );
   }
 }

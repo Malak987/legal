@@ -3,11 +3,16 @@ class Product {
   final String name;
   final String price;
 
-  // Optional fields populated from the backend (Firestore).
+  // Optional fields populated from the backend API.
   final String? id;
   final String? specialty;
   final double? rating;
   final String? location;
+  final String? experience;
+  final String? bio;
+  final String? userId;
+  final bool? isPopular;
+  final bool? isTop;
 
   /// The lawyer's hourly rate, as stored on the `lawyers` document.
   ///
@@ -24,5 +29,10 @@ class Product {
     this.rating,
     this.location,
     this.priceValue,
+    this.experience,
+    this.bio,
+    this.userId,
+    this.isPopular,
+    this.isTop,
   });
 }

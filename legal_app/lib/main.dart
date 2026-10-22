@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
 import 'config/firebase_options.dart';
+import 'config/supabase_config.dart';
 import 'constants/colors.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
@@ -12,16 +13,17 @@ import 'views/splash/splashscreen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase so the API layer can authenticate requests.
-  // If your firebase_options.dart still has placeholder values this will
-  // throw; the app catches it so the UI still loads, and the session reports
-  // that authentication is unavailable instead of crashing.
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-  } catch (e) {
-    debugPrint('Firebase initialization failed: $e');
+  // When SUPABASE_ANON_KEY is provided via --dart-define, the app uses
+  // SupabaseAuthGateway directly. Otherwise it initializes Firebase as a
+  // legacy fallback.
+  if (!SupabaseConfig.isConfigured) {
+    try {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    } catch (e) {
+      debugPrint('Firebase initialization failed: $e');
+    }
   }
 
   runApp(const MyApp());
@@ -52,6 +54,16 @@ class _MyAppState extends State<MyApp> {
   bool get _ownsSession => widget.session == null;
 
   static SessionController _createSession() {
+    if (SupabaseConfig.isConfigured) {
+      final gateway = SupabaseAuthGateway();
+      final api = ApiClient(
+        idTokenProvider: () => gateway.getAccessToken(),
+        currentUidProvider: () => gateway.currentUser?.uid,
+      );
+      return SessionController(
+        auth: AuthService(gateway: gateway, api: api),
+      );
+    }
     final api = ApiClient();
     return SessionController(
       auth: AuthService(gateway: FirebaseAuthGateway(), api: api),

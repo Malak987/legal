@@ -53,38 +53,47 @@ async function seedUsers(db, auth, passwords) {
   ];
 
   for (const u of users) {
-    // `account` selects the password; it is never written to Firestore.
+    // `account` selects the password; it is never written to the database.
     const { account, uid, ...profile } = u;
     const password = passwords[account];
+    let createdAuth = null;
     try {
-      await auth.createUser({ uid, email: profile.email, password, displayName: profile.name });
+      createdAuth = await auth.createUser({ uid, email: profile.email, password, displayName: profile.name });
     } catch (e) {
       if (e.code !== 'auth/uid-already-exists' && e.code !== 'auth/email-already-exists') {
         throw e;
       }
     }
-    await db.collection('users').doc(uid).set({ ...profile, createdAt: ts(), updatedAt: ts() }, { merge: true });
+    const userDoc = {
+      uid,
+      ...profile,
+      ...(createdAuth?.authUserId ? { authUserId: createdAuth.authUserId } : {}),
+      createdAt: ts(),
+      updatedAt: ts(),
+    };
+    await db.collection('users').doc(uid).set(userDoc, { merge: true });
   }
   console.log(`[Seed] Users: ${users.length}`);
 }
 
 async function seedLawyers(db) {
   const lawyers = [
-    { name: 'Corporate Lawyer', specialty: 'Corporate Law', price: '$150/hr', priceValue: 150, image: 'images/layer1.png', rating: 4.8, location: 'Uk London', isPopular: true, isTop: true },
-    { name: 'Family Lawyer', specialty: 'Family Law', price: '$120/hr', priceValue: 120, image: 'images/lawyer10.jpg', rating: 4.6, location: 'Uk London', isPopular: true, isTop: false },
-    { name: 'Criminal Lawyer', specialty: 'Criminal Law', price: '$180/hr', priceValue: 180, image: 'images/lawyer3.png', rating: 4.9, location: 'Uk London', isPopular: true, isTop: true },
-    { name: 'Intellectual Lawyer', specialty: 'Intellectual Property', price: '$200/hr', priceValue: 200, image: 'images/lawyer8.jpg', rating: 4.7, location: 'Uk London', isPopular: false, isTop: true },
-    { name: 'Personal Injury Lawyer', specialty: 'Personal Injury', price: '$170/hr', priceValue: 170, image: 'images/lawyer7.jpg', rating: 4.5, location: 'Uk London', isPopular: false, isTop: false },
-    { name: 'Tax Lawyer', specialty: 'Tax Law', price: '$160/hr', priceValue: 160, image: 'images/lawyer6.png', rating: 4.4, location: 'Uk London', isPopular: true, isTop: false },
-    { name: 'Immigration Lawyer', specialty: 'Immigration Law', price: '$140/hr', priceValue: 140, image: 'images/lawyer4.jpg', rating: 4.3, location: 'Uk London', isPopular: false, isTop: false },
-    { name: 'Employment Lawyer', specialty: 'Employment Law', price: '$130/hr', priceValue: 130, image: 'images/lawyer5.png', rating: 4.2, location: 'Uk London', isPopular: true, isTop: false },
-    { name: 'Bankruptcy Lawyer', specialty: 'Bankruptcy Law', price: '$125/hr', priceValue: 125, image: 'images/lawyer9.jpg', rating: 4.1, location: 'Uk London', isPopular: false, isTop: false },
-    { name: 'Real Estate Lawyer', specialty: 'Real Estate Law', price: '$135/hr', priceValue: 135, image: 'images/lawyer2.png', rating: 4.4, location: 'Uk London', isPopular: true, isTop: true },
+    { id: 'lawyer-1', name: 'Corporate Lawyer', specialty: 'Corporate Law', price: '$150/hr', priceValue: 150, image: 'images/layer1.png', rating: 4.8, location: 'Uk London', isPopular: true, isTop: true },
+    { id: 'lawyer-2', name: 'Family Lawyer', specialty: 'Family Law', price: '$120/hr', priceValue: 120, image: 'images/lawyer10.jpg', rating: 4.6, location: 'Uk London', isPopular: true, isTop: false },
+    { id: 'lawyer-3', name: 'Criminal Lawyer', specialty: 'Criminal Law', price: '$180/hr', priceValue: 180, image: 'images/lawyer3.png', rating: 4.9, location: 'Uk London', isPopular: true, isTop: true },
+    { id: 'lawyer-4', name: 'Intellectual Lawyer', specialty: 'Intellectual Property', price: '$200/hr', priceValue: 200, image: 'images/lawyer8.jpg', rating: 4.7, location: 'Uk London', isPopular: false, isTop: true },
+    { id: 'lawyer-5', name: 'Personal Injury Lawyer', specialty: 'Personal Injury', price: '$170/hr', priceValue: 170, image: 'images/lawyer7.jpg', rating: 4.5, location: 'Uk London', isPopular: false, isTop: false },
+    { id: 'lawyer-6', name: 'Tax Lawyer', specialty: 'Tax Law', price: '$160/hr', priceValue: 160, image: 'images/lawyer6.png', rating: 4.4, location: 'Uk London', isPopular: true, isTop: false },
+    { id: 'lawyer-7', name: 'Immigration Lawyer', specialty: 'Immigration Law', price: '$140/hr', priceValue: 140, image: 'images/lawyer4.jpg', rating: 4.3, location: 'Uk London', isPopular: false, isTop: false },
+    { id: 'lawyer-8', name: 'Employment Lawyer', specialty: 'Employment Law', price: '$130/hr', priceValue: 130, image: 'images/lawyer5.png', rating: 4.2, location: 'Uk London', isPopular: true, isTop: false },
+    { id: 'lawyer-9', name: 'Bankruptcy Lawyer', specialty: 'Bankruptcy Law', price: '$125/hr', priceValue: 125, image: 'images/lawyer9.jpg', rating: 4.1, location: 'Uk London', isPopular: false, isTop: false },
+    { id: 'lawyer-10', name: 'Real Estate Lawyer', specialty: 'Real Estate Law', price: '$135/hr', priceValue: 135, image: 'images/lawyer2.png', rating: 4.4, location: 'Uk London', isPopular: true, isTop: true },
+    { id: 'lawyer-001', userId: 'lawyer-001', name: 'Maddy Lin', specialty: 'Corporate Law', price: '$150/hr', priceValue: 150, image: 'images/c2.png', rating: 4.9, location: 'Uk London', isPopular: true, isTop: true },
   ];
 
   const batch = db.batch();
-  for (const l of lawyers) {
-    const ref = db.collection('lawyers').doc();
+  for (const { id, ...l } of lawyers) {
+    const ref = db.collection('lawyers').doc(id);
     batch.set(ref, { ...l, createdAt: ts(), updatedAt: ts() });
   }
   await batch.commit();
@@ -132,14 +141,14 @@ async function seedCases(db) {
 }
 
 async function seedBookings(db) {
-  const statuses = ['Active', 'Completed', 'Cancelled', 'Pending'];
+  const statuses = ['Confirmed', 'Completed', 'Cancelled', 'Pending'];
   const names = ['Corporate Lawyer', 'Family Lawyer', 'Criminal Lawyer', 'Intellectual Lawyer'];
   const batch = db.batch();
   for (let i = 0; i < 8; i++) {
-    const ref = db.collection('bookings').doc();
+    const ref = db.collection('bookings').doc(`booking-${i + 1}`);
     batch.set(ref, {
       userId: 'client-001',
-      lawyerId: 'lawyer-' + (i % 10),
+      lawyerId: `lawyer-${(i % 10) + 1}`,
       lawyerName: names[i % names.length],
       date: `2024-0${(i % 6) + 1}-1${i % 9}`,
       time: ['08:30 am', '09:00 am', '10:30 am', '11:00 am'][i % 4],
@@ -157,9 +166,9 @@ async function seedBookings(db) {
 async function seedTasks(db) {
   const tasks = [
     { userId: 'client-001', title: 'Draft motion for summary judgment.', description: 'Case #CL-2024-001', dueDate: '2024-08-15', priority: 'High', status: 'In Progress' },
-    { userId: 'client-001', title: 'Review title report', description: 'Matter #RE-2024-015', dueDate: '2024-07-30', priority: 'Medium', status: 'To Do' },
-    { userId: 'client-001', title: 'Respond to USPTO office action', description: 'Case #IP-2024-003', dueDate: '2024-09-01', priority: 'High', status: 'To Do' },
-    { userId: 'client-001', title: 'Client consultation asset division', description: 'Matter #FL-2024-020', dueDate: '2024-07-25', priority: 'Low', status: 'Done' },
+    { userId: 'client-001', title: 'Review title report', description: 'Matter #RE-2024-015', dueDate: '2024-07-30', priority: 'Medium', status: 'Pending' },
+    { userId: 'client-001', title: 'Respond to USPTO office action', description: 'Case #IP-2024-003', dueDate: '2024-09-01', priority: 'High', status: 'Pending' },
+    { userId: 'client-001', title: 'Client consultation asset division', description: 'Matter #FL-2024-020', dueDate: '2024-07-25', priority: 'Low', status: 'Completed' },
   ];
   const batch = db.batch();
   for (const t of tasks) {
@@ -274,18 +283,22 @@ async function seedFavorites(db) {
 }
 
 async function seedEarnings(db) {
-  await db.collection('earnings').doc('client-001').set(
-    {
-      userId: 'client-001',
-      balance: 1250.75,
-      totalEarnings: 1250.75,
-      breakdown: { baseFare: 820.0, distance: 220.5, tips: 85.75, bonuses: 125.0, referral: 100.0, surge: 50.0 },
-      updatedAt: ts(),
-      createdAt: ts(),
-    },
+  const payload = {
+    balance: 1250.75,
+    totalEarnings: 1250.75,
+    breakdown: { baseFare: 820.0, distance: 220.5, tips: 85.75, bonuses: 125.0, referral: 100.0, surge: 50.0 },
+    updatedAt: ts(),
+    createdAt: ts(),
+  };
+  await db.collection('earnings').doc('lawyer-001').set(
+    { userId: 'lawyer-001', ...payload },
     { merge: true },
   );
-  console.log('[Seed] Earnings: 1');
+  await db.collection('earnings').doc('client-001').set(
+    { userId: 'client-001', ...payload },
+    { merge: true },
+  );
+  console.log('[Seed] Earnings: 2');
 }
 
 export async function runSeed() {

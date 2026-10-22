@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'config/app_config.dart';
 import 'config/firebase_options.dart';
 import 'config/theme.dart';
 import 'providers/auth_provider.dart';
@@ -14,10 +15,12 @@ import 'services/auth_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Firebase is initialized exactly once, before any service touches it.
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  // Initialize Firebase only when Supabase client config is not supplied.
+  if (!AppConfig.useSupabase) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
 
   // One AuthProvider for the whole app, with a single auth-state listener.
   // Building it outside the widget tree guarantees `create:` below is not the

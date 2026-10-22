@@ -5,6 +5,7 @@
 // from test/fakes.dart, so they need no Firebase project and no network.
 
 import 'dart:async';
+import 'dart:convert';
 
 // `firebase_auth` re-exports a platform-level `AuthProvider`, which collides
 // with the admin panel's own AuthProvider class and made every `AuthProvider(`
@@ -12,6 +13,8 @@ import 'dart:async';
 // is hidden rather than the whole import dropped.
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:legal_admin/providers/auth_provider.dart';
 import 'package:legal_admin/services/api_service.dart';
 import 'package:legal_admin/services/auth_service.dart';
@@ -348,6 +351,104 @@ void main() {
       await api.get('users');
 
       expect(api.lastAuthHeader, isNull);
+    });
+  });
+
+  group('AuthService (Supabase mode)', () {
+    test('authenticates an admin via Supabase Auth and verifies role via PostgREST', () async {
+      final client = MockClient((request) async {
+        if (request.url.path.endsWith('/auth/v1/token')) {
+          return http.Response(
+            jsonEncode(<String, dynamic>{
+              'access_token': 'supa-admin-jwt',
+              'user': <String, dynamic>{
+                'id': '00000000-0000-4000-8000-000000000001',
+                'email': 'admin@legalapp.com',
+              },
+            }),
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/rest/v1/users')) {
+          return http.Response(
+            jsonEncode(<Map<String, dynamic>>[
+              <String, dynamic>{
+                'id': 'admin-uid',
+                'uid': 'admin-uid',
+                'auth_user_id': '00000000-0000-4000-8000-000000000001',
+                'name': 'App Administrator',
+                'email': 'admin@legalapp.com',
+                'role': 'admin',
+              },
+            ]),
+            200,
+          );
+        }
+        return http.Response('{}', 404);
+      });
+
+      final api = FakeApiService();
+      final authService = AuthService(
+        api: api,
+        supabaseHttpClient: client,
+        supabaseUrl: 'https://qqfzbecwhewswkyxgebu.supabase.co',
+        supabaseAnonKey: 'public-anon-key',
+      );
+
+      final session = await authService.signIn('admin@legalapp.com', 'secret');
+      expect(session.uid, 'admin-uid');
+      expect(session.role, 'admin');
+      expect(session.idToken, 'supa-admin-jwt');
+      expect(await authService.freshToken(), 'supa-admin-jwt');
+    });
+
+    test('rejects a non-admin account in Supabase mode and clears the token', () async {
+      final client = MockClient((request) async {
+        if (request.url.path.endsWith('/auth/v1/token')) {
+          return http.Response(
+            jsonEncode(<String, dynamic>{
+              'access_token': 'supa-client-jwt',
+              'user': <String, dynamic>{
+                'id': '00000000-0000-4000-8000-000000000002',
+                'email': 'client@legalapp.com',
+              },
+            }),
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/rest/v1/users')) {
+          return http.Response(
+            jsonEncode(<Map<String, dynamic>>[
+              <String, dynamic>{
+                'id': 'client-001',
+                'uid': 'client-001',
+                'name': 'James Powell',
+                'email': 'client@legalapp.com',
+                'role': 'client',
+              },
+            ]),
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/auth/v1/logout')) {
+          return http.Response('', 204);
+        }
+        return http.Response('{}', 404);
+      });
+
+      final api = FakeApiService();
+      final authService = AuthService(
+        api: api,
+        supabaseHttpClient: client,
+        supabaseUrl: 'https://qqfzbecwhewswkyxgebu.supabase.co',
+        supabaseAnonKey: 'public-anon-key',
+      );
+
+      await expectLater(
+        authService.signIn('client@legalapp.com', 'secret'),
+        throwsA(isA<NotAdminException>()),
+      );
+      expect(await authService.freshToken(), isNull);
     });
   });
 }

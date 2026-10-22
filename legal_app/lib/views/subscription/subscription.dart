@@ -1,376 +1,418 @@
 import 'package:flutter/material.dart';
-import 'package:legalserviceapp/constants/colors.dart';
-import 'package:smooth_page_indicator/smooth_page_indicator.dart';
 
+import '../../constants/colors.dart';
+import '../../services/api_client.dart';
+import '../../state/session_scope.dart';
+import '../../widgets/customapp_bar.dart';
+import '../../widgets/custombtn.dart';
+import '../../widgets/detailstext1.dart';
+import '../../widgets/detailstext2.dart';
+
+/// Subscription plans and membership backed by `GET /api/plans`,
+/// `GET /api/subscriptions`, `POST /api/subscriptions`, and
+/// `PUT /api/subscriptions/:id`.
 class SubscriptionScreen extends StatefulWidget {
   const SubscriptionScreen({super.key});
 
   @override
-  SubscriptionScreenState createState() => SubscriptionScreenState();
+  State<SubscriptionScreen> createState() => _SubscriptionScreenState();
 }
 
-class SubscriptionScreenState extends State<SubscriptionScreen> {
-  final PageController _pageController = PageController(
-    viewportFraction: 0.85,
-  ); // Show parts of next/prev cards
-  int _currentPage = 0;
+class _SubscriptionScreenState extends State<SubscriptionScreen> {
+  List<Map<String, dynamic>> _plans = const <Map<String, dynamic>>[];
+  List<Map<String, dynamic>> _mySubscriptions = const <Map<String, dynamic>>[];
+  String? _selectedPlanId;
+  bool _loading = true;
+  bool _submitting = false;
+  String? _error;
+  bool _initialized = false;
 
-  // Define colors matching the design
-  static const Color basicPriceBg = Colors.red; // Light reddish pink
-  static const Color silverPriceBg = Colors.blue; // Light blue
-  static const Color premiumPriceBg =
-      Colors.deepOrangeAccent; // Light orange/yellow
-  static const Color choosePlanButtonColor = Color(
-    0xFF3A86FF,
-  ); // Consistent blue
-  static const Color nextButtonColor = Color(0xFF0A2342); // Dark blue/indigo
-  static const Color featureHeaderColor =
-      Colors.grey; // Color for "For Every Users" etc.
-  static const Color checkColor = Colors.green;
-  static const Color crossColor = Colors.red;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialized) return;
+    _initialized = true;
+    _load();
+  }
 
-  // Store plan data centrally, including feature groups
-  final List<Map<String, dynamic>> plans = [
-    {
-      "title": "Basic Plan",
-      "price": "\$ 0.00", // Format matching design
-      "priceBgColor": basicPriceBg,
-      "features": [
-        "HEADER:For Every Users", // Special marker for headers
-        "✅ Once 5 Mins Allowed To Talk With Advocates Via Voice Call",
-        "✅ Users Can Chat In Advocates Q & A Groups",
-        "HEADER:For Other Plan Users",
-        "❌ User Can Hire An Family Intermediate Advocates",
-        "❌ Book Advocates Appointment Schedule With In This App",
-        "❌ Chat & Virtual Call Options Available",
-      ],
-    },
-    {
-      "title": "Silver Plan",
-      "price": "\$ 799/- Inter Advocates", // Format matching design
-      "priceBgColor": silverPriceBg,
-      "features": [
-        "HEADER:For Every Users",
-        "✅ Once 5 Mins Allowed To Talk With Advocates Via Voice Call",
-        "✅ Users Can Chat In Advocates Q & A Groups",
-        "HEADER:For Silver Plan Users",
-        "✅ User Can Hire An Family Intermediate Advocates",
-        "✅ Book Advocates Appointment Schedule With In This App",
-        "✅ Chat & Virtual Call Options Available",
-      ],
-    },
-    {
-      "title": "Premium Plan",
-      "price": "\$ 1499/- Senior Advocates", // Format matching design
-      "priceBgColor": premiumPriceBg,
-      "features": [
-        "HEADER:For Every Users",
-        "✅ Once 5 Mins Allowed To Talk With Advocates Via Voice Call",
-        "✅ Users Can Chat In Advocates Q & A Groups",
-        "HEADER:For Premium Plan Users",
-        "✅ User Can Hire An Family Senior Advocates",
-        "✅ Book Advocates Appointment Schedule With In This App",
-        "✅ Chat & Virtual Call Options Available",
-      ],
-    },
-  ];
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
 
-  void _nextPage() {
-    if (_currentPage < plans.length - 1) {
-      // Use plans.length
-      _pageController.nextPage(
-        duration: Duration(milliseconds: 400),
-        curve: Curves.easeInOut,
-      );
-    } else {
-      // Handle what happens after the last page
-      // Example: Navigator.push(context, MaterialPageRoute(builder: (context) => PaymentScreen()));
+    final session = SessionScope.read(context);
+    final repo = session.repository;
+
+    try {
+      final plans = await repo.fetchPlans();
+      var subs = const <Map<String, dynamic>>[];
+      if (session.isSignedIn) {
+        try {
+          subs = await repo.fetchMySubscriptions();
+        } catch (_) {
+          subs = const <Map<String, dynamic>>[];
+        }
+      }
+      if (!mounted) return;
+
+      final activePlans =
+          plans.where((p) => p['isActive'] != false).toList();
+      final displayPlans = activePlans.isNotEmpty ? activePlans : plans;
+
+      String? initialSelected = _selectedPlanId;
+      if (initialSelected == null && displayPlans.isNotEmpty) {
+        initialSelected = displayPlans.first['id']?.toString();
+      }
+
+      setState(() {
+        _plans = displayPlans;
+        _mySubscriptions = subs;
+        _selectedPlanId = initialSelected;
+        _loading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not load subscription plans. Please try again.';
+        _loading = false;
+      });
     }
   }
 
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
+  Map<String, dynamic>? get _currentSubscription {
+    for (final sub in _mySubscriptions) {
+      final status = (sub['status']?.toString() ?? '').toLowerCase();
+      if (status == 'active' || status == 'pending') return sub;
+    }
+    return _mySubscriptions.isNotEmpty ? _mySubscriptions.first : null;
+  }
+
+  static String _planTitle(Map<String, dynamic> plan) {
+    final title = (plan['title'] ?? plan['name'] ?? 'Plan').toString().trim();
+    return title.isEmpty ? 'Plan' : title;
+  }
+
+  static String _planPriceLabel(Map<String, dynamic> plan) {
+    final rawPrice = plan['price'];
+    if (rawPrice is String && rawPrice.trim().isNotEmpty) {
+      return rawPrice.trim();
+    }
+    final numPrice = (rawPrice as num?)?.toDouble() ??
+        (plan['priceValue'] as num?)?.toDouble() ??
+        0.0;
+    final cycle = (plan['billingCycle'] ?? 'month').toString().trim();
+    return '\$${numPrice.toStringAsFixed(2)} / $cycle';
+  }
+
+  Future<void> _requestSubscription(Map<String, dynamic> plan) async {
+    if (_submitting) return;
+    final planId = (plan['id']?.toString() ?? '').trim();
+    if (planId.isEmpty) return;
+
+    setState(() => _submitting = true);
+    final repo = SessionScope.read(context).repository;
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      await repo.createSubscription(planId: planId);
+      if (!mounted) return;
+      await _load();
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Subscription request submitted for ${_planTitle(plan)} (Pending administrator confirmation).',
+          ),
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  Future<void> _cancelSubscription(String subscriptionId) async {
+    if (_submitting || subscriptionId.isEmpty) return;
+    setState(() => _submitting = true);
+    final repo = SessionScope.read(context).repository;
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      await repo.cancelSubscription(subscriptionId);
+      if (!mounted) return;
+      await _load();
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Subscription cancelled.')),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        // Ensure AppBar matches design
-        title: Text(
-          "Select Your Plan",
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold, // Use bold as per design
-            fontSize: 18, // Adjust size if needed
-          ),
-        ),
-        backgroundColor: AppColors.buttonColor, // White background
-        elevation: 0, // No shadow
-        centerTitle: true,
-        leading: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: CircleAvatar(
-            backgroundColor: Colors.white,
-
-            child: IconButton(
-              icon: Icon(Icons.arrow_back, color: Colors.black),
-              onPressed: () {
-                if (Navigator.canPop(context)) {
-                  Navigator.pop(context);
-                }
-              },
-            ),
+      backgroundColor: AppColors.bgColor,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const CustomAppBar(text: 'Subscriptions', text1: ''),
+              const SizedBox(height: 16),
+              Expanded(child: _buildBody()),
+            ],
           ),
         ),
       ),
-      body: Column(
-        children: [
-          Expanded(
-            // Add some vertical padding around the PageView
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 14.0),
-              child: PageView.builder(
-                controller: _pageController,
-                itemCount: plans.length,
-                onPageChanged: (index) {
-                  setState(() {
-                    _currentPage = index;
-                  });
-                },
-                itemBuilder: (context, index) {
-                  final plan = plans[index];
-                  // Add scaling effect for non-active pages
-                  double scale = _currentPage == index ? 1.0 : 0.9;
-                  return TweenAnimationBuilder(
-                    duration: const Duration(milliseconds: 350),
-                    tween: Tween(begin: scale, end: scale),
-                    curve: Curves.ease,
-                    child: buildPlan(
-                      title: plan['title'],
-                      price: plan['price'],
-                      priceBgColor: plan['priceBgColor'],
-                      features: plan['features'],
-                    ),
-                    builder: (context, value, child) {
-                      return Transform.scale(scale: value, child: child);
-                    },
-                  );
-                },
+    );
+  }
+
+  Widget _buildBody() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 46,
+                color: AppColors.text3Color,
               ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(
-              bottom: 14.0,
-              top: 0,
-            ), // Adjust spacing
-            child: SmoothPageIndicator(
-              controller: _pageController,
-              count: plans.length,
-              effect: ExpandingDotsEffect(
-                // Match design indicator
-                activeDotColor: nextButtonColor, // Use dark blue for active dot
-                dotColor: Colors.grey.shade300,
-                dotHeight: 8,
-                dotWidth: 8,
-                expansionFactor: 3,
-                spacing: 5,
+              const SizedBox(height: 12),
+              const Text(
+                'Could not load plans',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 15.0,
-            ).copyWith(bottom: 25.0, top: 10.0), // Adjust padding for button
-            child: ElevatedButton(
-              onPressed: _nextPage,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: nextButtonColor, // Dark blue button
-                minimumSize: Size(double.infinity, 50), // Make button wide
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ), // Match design rounding
-                padding: EdgeInsets.symmetric(vertical: 14),
-              ),
-              child: Text(
-                // Text remains "Next" in the design for all pages
-                "Next",
-                style: TextStyle(
-                  fontSize: 18,
-                  color: Colors.white,
-                  fontWeight: FontWeight.w500,
+              const SizedBox(height: 6),
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: AppColors.text2Color,
                 ),
               ),
+              const SizedBox(height: 12),
+              TextButton(onPressed: _load, child: const Text('Retry')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_plans.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.card_membership_outlined,
+                size: 46,
+                color: AppColors.text3Color,
+              ),
+              SizedBox(height: 12),
+              Text(
+                'No plans available yet',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 6),
+              Text(
+                'Subscription plans added by an administrator will appear here.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppColors.text2Color),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final currentSub = _currentSubscription;
+    final selectedPlan = _plans.firstWhere(
+      (p) => p['id']?.toString() == _selectedPlanId,
+      orElse: () => _plans.first,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (currentSub != null) ...[
+          _buildCurrentSubscriptionBanner(currentSub),
+          const SizedBox(height: 14),
+        ],
+        const Text1(text1: 'Available Legal Plans', size: 20),
+        const SizedBox(height: 6),
+        const Text2(
+          text2:
+              'Request a subscription plan below. New subscriptions start as Pending until confirmed by an administrator.',
+        ),
+        const SizedBox(height: 14),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: ListView.builder(
+              itemCount: _plans.length,
+              itemBuilder: (context, index) => _buildPlanCard(_plans[index]),
             ),
           ),
+        ),
+        const SizedBox(height: 10),
+        CustomButton(
+          text: _submitting
+              ? 'Submitting...'
+              : 'Subscribe to ${_planTitle(selectedPlan)}',
+          onTap: _submitting ? () {} : () => _requestSubscription(selectedPlan),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCurrentSubscriptionBanner(Map<String, dynamic> sub) {
+    final id = sub['id']?.toString() ?? '';
+    final planName =
+        (sub['planTitle'] ?? sub['planName'] ?? 'Subscription').toString();
+    final status = (sub['status'] ?? 'Pending').toString();
+    final canCancel =
+        status == 'Pending' || status == 'Active';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.buttonColor,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.verified, color: Colors.white, size: 28),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text1(
+                  text1: 'My Subscription: $planName',
+                  color: Colors.white,
+                  size: 16,
+                ),
+                Text2(
+                  text2: 'Status: $status',
+                  color: Colors.white70,
+                ),
+              ],
+            ),
+          ),
+          if (canCancel && id.isNotEmpty)
+            TextButton(
+              onPressed: _submitting ? null : () => _cancelSubscription(id),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  Widget buildPlan({
-    required String title,
-    required String price,
-    required Color priceBgColor,
-    required List<String> features,
-  }) {
-    return Container(
-      margin: const EdgeInsets.symmetric(
-        horizontal: 8.0,
-      ), // Space between cards
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha((0.1 * 255).toInt()), // Softer shadow
-            blurRadius: 10,
-            spreadRadius: 0,
-            offset: Offset(0, 4),
+  Widget _buildPlanCard(Map<String, dynamic> plan) {
+    final id = plan['id']?.toString() ?? '';
+    final title = _planTitle(plan);
+    final priceLabel = _planPriceLabel(plan);
+    final rawFeatures = plan['features'];
+    final features = rawFeatures is List
+        ? rawFeatures.map((f) => f.toString()).toList()
+        : const <String>[];
+    final isSelected = _selectedPlanId == id;
+
+    return GestureDetector(
+      onTap: () => setState(() => _selectedPlanId = id),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppColors.buttonColor.withAlpha(25)
+              : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? AppColors.buttonColor : Colors.grey.shade300,
+            width: isSelected ? 2 : 1,
           ),
-        ],
-        color: Colors.white,
-      ),
-      child: ClipRRect(
-        // Clip content to rounded corners
-        borderRadius: BorderRadius.circular(20),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 15.0, vertical: 20.0),
-          child: Column(
-            crossAxisAlignment:
-                CrossAxisAlignment.center, // Center column items horizontally
-            children: [
-              // Plan Title
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.shade200,
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(child: Text1(text1: title, size: 20)),
+                Icon(
+                  isSelected
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked,
+                  color: isSelected ? AppColors.buttonColor : Colors.grey,
+                  size: 24,
                 ),
-              ),
-              SizedBox(height: 12),
-
-              // Price Container
-              Container(
-                padding: EdgeInsets.symmetric(vertical: 8, horizontal: 45),
-                decoration: BoxDecoration(
-                  color: priceBgColor,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  price,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ), // White price text
-                  textAlign: TextAlign.center,
-                ),
-              ),
-              SizedBox(height: 20),
-
-              // "Features" Header
-              Text(
-                "Features",
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              SizedBox(height: 15),
-
-              // Build Feature List with Headers
-              Column(
-                crossAxisAlignment:
-                    CrossAxisAlignment.start, // Align features left
-                children:
-                    features.map((feature) {
-                      if (feature.startsWith("HEADER:")) {
-                        // Render Feature Group Header
-                        return Padding(
-                          padding: const EdgeInsets.only(
-                            top: 10.0,
-                            bottom: 5.0,
-                          ),
-                          child: Text(
-                            feature
-                                .substring(7)
-                                .trim(), // Get text after "HEADER:"
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: featureHeaderColor,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        );
-                      } else {
-                        // Render Feature Item
-                        bool included = feature.startsWith("✅");
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4.0),
-                          child: Row(
-                            crossAxisAlignment:
-                                CrossAxisAlignment
-                                    .start, // Align icon and text nicely
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.only(
-                                  top: 2.0,
-                                ), // Align icon better with text
-                                child: Icon(
-                                  included ? Icons.check_circle : Icons.cancel,
-                                  color: included ? checkColor : crossColor,
-                                  size: 18,
-                                ),
-                              ),
-                              SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  feature.substring(2).trim(),
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: Colors.black45,
-                                    height: 1.3,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }
-                    }).toList(),
-              ),
-
-              SizedBox(height: 25), // Space before button
-              // "Choose Plan" Button
-              ElevatedButton(
-                onPressed: () {},
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      choosePlanButtonColor, // Use the consistent blue
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  padding: EdgeInsets.symmetric(vertical: 10, horizontal: 45),
-                  elevation: 2,
-                  shadowColor: Colors.black.withAlpha((0.2 * 255).toInt()),
-                ),
-                child: Text(
-                  "Choose Plan",
-                  style: TextStyle(
-                    fontSize: 15,
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text1(
+              text1: priceLabel,
+              size: 17,
+              color: AppColors.buttonColor,
+            ),
+            if (features.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              ...features.map(
+                (feature) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.check,
+                        color: AppColors.buttonColor,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text2(text2: feature)),
+                    ],
                   ),
                 ),
               ),
-              SizedBox(height: 10), // Some bottom padding inside card
             ],
-          ),
+          ],
         ),
       ),
     );

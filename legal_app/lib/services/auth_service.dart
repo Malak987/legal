@@ -1,5 +1,10 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
+import 'dart:convert';
 
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
+
+import '../config/supabase_config.dart';
 import '../models/app_profile.dart';
 import 'api_client.dart';
 
@@ -227,6 +232,333 @@ class FirebaseAuthGateway implements AuthGateway {
       return 'Authentication is not configured for this build.';
     }
     return 'Could not reach authentication. Check your connection and retry.';
+  }
+}
+
+/// [AuthGateway] backed by Supabase Auth (`/auth/v1/*` GoTrue REST API).
+///
+/// Uses the public `SUPABASE_ANON_KEY` (never the service-role key) to sign
+/// users in, register accounts, refresh JWT access tokens, and update
+/// passwords after re-authenticating with the current password.
+class SupabaseAuthGateway implements AuthGateway {
+  SupabaseAuthGateway({
+    http.Client? client,
+    String? supabaseUrl,
+    String? supabaseAnonKey,
+  })  : _client = client ?? http.Client(),
+        _supabaseUrl = (supabaseUrl ?? SupabaseConfig.supabaseUrl).trim(),
+        _supabaseAnonKey =
+            (supabaseAnonKey ?? SupabaseConfig.supabaseAnonKey).trim();
+
+  final http.Client _client;
+  final String _supabaseUrl;
+  final String _supabaseAnonKey;
+
+  final StreamController<AuthUser?> _authController =
+      StreamController<AuthUser?>.broadcast();
+
+  AuthUser? _currentUser;
+  String? _accessToken;
+  String? _refreshToken;
+
+  /// Current Supabase JWT access token for authenticating backend API calls.
+  String? get accessToken => _accessToken;
+
+  /// Returns a valid access token, refreshing via `refresh_token` if needed.
+  Future<String?> getAccessToken({bool forceRefresh = false}) async {
+    if (forceRefresh && _refreshToken != null && _refreshToken!.isNotEmpty) {
+      try {
+        await _refreshSession(_refreshToken!);
+      } catch (_) {
+        // Keep last known token if transient refresh fails.
+      }
+    }
+    return _accessToken;
+  }
+
+  @override
+  Stream<AuthUser?> get authStateChanges async* {
+    yield _currentUser;
+    yield* _authController.stream;
+  }
+
+  @override
+  AuthUser? get currentUser => _currentUser;
+
+  Map<String, String> _headers({String? bearerToken}) => <String, String>{
+        'Content-Type': 'application/json',
+        'apikey': _supabaseAnonKey,
+        if (bearerToken != null && bearerToken.isNotEmpty)
+          'Authorization': 'Bearer $bearerToken',
+      };
+
+  Uri _authUri(String path, [Map<String, String>? query]) {
+    final base = _supabaseUrl.endsWith('/')
+        ? _supabaseUrl.substring(0, _supabaseUrl.length - 1)
+        : _supabaseUrl;
+    final clean = path.startsWith('/') ? path.substring(1) : path;
+    return Uri.parse('$base/auth/v1/$clean').replace(
+      queryParameters: query == null || query.isEmpty ? null : query,
+    );
+  }
+
+  @override
+  Future<AuthUser> signIn({
+    required String email,
+    required String password,
+  }) async {
+    _ensureConfigured();
+    http.Response response;
+    try {
+      response = await _client.post(
+        _authUri('token', const <String, String>{'grant_type': 'password'}),
+        headers: _headers(),
+        body: jsonEncode(<String, dynamic>{
+          'email': email.trim(),
+          'password': password,
+        }),
+      );
+    } catch (_) {
+      throw AuthException(
+        'Network error. Check your connection and try again.',
+        code: 'network-request-failed',
+      );
+    }
+
+    final decoded = _decodeJson(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _mapSupabaseError(decoded, response.statusCode);
+    }
+
+    final user = _extractUser(decoded, fallbackEmail: email.trim());
+    _accessToken = decoded['access_token']?.toString();
+    _refreshToken = decoded['refresh_token']?.toString();
+    _currentUser = user;
+    _authController.add(user);
+    return user;
+  }
+
+  @override
+  Future<AuthUser> createAccount({
+    required String email,
+    required String password,
+  }) async {
+    _ensureConfigured();
+    http.Response response;
+    try {
+      response = await _client.post(
+        _authUri('signup'),
+        headers: _headers(),
+        body: jsonEncode(<String, dynamic>{
+          'email': email.trim(),
+          'password': password,
+        }),
+      );
+    } catch (_) {
+      throw AuthException(
+        'Network error. Check your connection and try again.',
+        code: 'network-request-failed',
+      );
+    }
+
+    final decoded = _decodeJson(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _mapSupabaseError(decoded, response.statusCode);
+    }
+
+    final token = decoded['access_token']?.toString();
+    if (token == null || token.isEmpty) {
+      // When signup succeeds without returning an immediate session token,
+      // sign in with the newly registered credentials.
+      return signIn(email: email, password: password);
+    }
+
+    final user = _extractUser(decoded, fallbackEmail: email.trim());
+    _accessToken = token;
+    _refreshToken = decoded['refresh_token']?.toString();
+    _currentUser = user;
+    _authController.add(user);
+    return user;
+  }
+
+  @override
+  Future<void> deleteCurrentAccount() async {
+    await signOut();
+  }
+
+  @override
+  Future<void> signOut() async {
+    final token = _accessToken;
+    _currentUser = null;
+    _accessToken = null;
+    _refreshToken = null;
+    _authController.add(null);
+
+    if (token != null && token.isNotEmpty && _supabaseAnonKey.isNotEmpty) {
+      try {
+        await _client.post(
+          _authUri('logout'),
+          headers: _headers(bearerToken: token),
+        );
+      } catch (_) {
+        // Local session is already cleared.
+      }
+    }
+  }
+
+  @override
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = _currentUser;
+    if (user == null) {
+      throw AuthException('You are not signed in.');
+    }
+    final email = user.email;
+    if (email == null || email.isEmpty) {
+      throw AuthException(
+        'This account has no email address, so its password cannot be changed here.',
+      );
+    }
+
+    // Re-authenticate with the current password first.
+    await signIn(email: email, password: currentPassword);
+
+    final token = _accessToken;
+    if (token == null || token.isEmpty) {
+      throw AuthException('Please sign in again to finish this action.');
+    }
+
+    http.Response response;
+    try {
+      response = await _client.put(
+        _authUri('user'),
+        headers: _headers(bearerToken: token),
+        body: jsonEncode(<String, dynamic>{'password': newPassword}),
+      );
+    } catch (_) {
+      throw AuthException(
+        'Network error. Check your connection and try again.',
+        code: 'network-request-failed',
+      );
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final decoded = _decodeJson(response.body);
+      throw _mapSupabaseError(decoded, response.statusCode);
+    }
+  }
+
+  Future<void> _refreshSession(String refreshToken) async {
+    final response = await _client.post(
+      _authUri(
+        'token',
+        const <String, String>{'grant_type': 'refresh_token'},
+      ),
+      headers: _headers(),
+      body: jsonEncode(<String, dynamic>{'refresh_token': refreshToken}),
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final decoded = _decodeJson(response.body);
+      final nextAccess = decoded['access_token']?.toString();
+      final nextRefresh = decoded['refresh_token']?.toString();
+      if (nextAccess != null && nextAccess.isNotEmpty) {
+        _accessToken = nextAccess;
+      }
+      if (nextRefresh != null && nextRefresh.isNotEmpty) {
+        _refreshToken = nextRefresh;
+      }
+    }
+  }
+
+  void _ensureConfigured() {
+    if (_supabaseUrl.isEmpty || _supabaseAnonKey.isEmpty) {
+      throw AuthException('Authentication is not configured for this build.');
+    }
+  }
+
+  static Map<String, dynamic> _decodeJson(String raw) {
+    if (raw.trim().isEmpty) return const <String, dynamic>{};
+    try {
+      final parsed = jsonDecode(raw);
+      if (parsed is Map) return Map<String, dynamic>.from(parsed);
+    } catch (_) {}
+    return const <String, dynamic>{};
+  }
+
+  static AuthUser _extractUser(
+    Map<String, dynamic> decoded, {
+    required String fallbackEmail,
+  }) {
+    final userObj = decoded['user'] is Map
+        ? Map<String, dynamic>.from(decoded['user'] as Map)
+        : decoded;
+    final meta = userObj['user_metadata'] is Map
+        ? Map<String, dynamic>.from(userObj['user_metadata'] as Map)
+        : const <String, dynamic>{};
+    final legacyUid = (meta['legacy_uid'] ?? '').toString().trim();
+    final uid = legacyUid.isNotEmpty
+        ? legacyUid
+        : (userObj['id'] ?? '').toString().trim();
+    if (uid.isEmpty) {
+      throw AuthException('Authentication failed: no user id returned.');
+    }
+    final email = (userObj['email'] ?? fallbackEmail).toString().trim();
+    return AuthUser(uid: uid, email: email.isEmpty ? null : email);
+  }
+
+  static AuthException _mapSupabaseError(
+    Map<String, dynamic> body,
+    int statusCode,
+  ) {
+    final rawCode =
+        (body['error_code'] ?? body['error'] ?? '').toString().toLowerCase();
+    final rawMsg = (body['msg'] ??
+            body['error_description'] ??
+            body['message'] ??
+            '')
+        .toString();
+    final combined = '$rawCode ${rawMsg.toLowerCase()}';
+
+    if (combined.contains('user_already_exists') ||
+        combined.contains('already registered') ||
+        combined.contains('already exists')) {
+      return AuthException(
+        'An account with this email already exists. Try signing in.',
+        code: 'email-already-in-use',
+      );
+    }
+    if (combined.contains('invalid_credentials') ||
+        combined.contains('invalid login credentials')) {
+      return AuthException(
+        'Incorrect email or password.',
+        code: 'invalid-credential',
+      );
+    }
+    if (combined.contains('weak_password') ||
+        combined.contains('password should be at least')) {
+      return AuthException(
+        'Choose a stronger password (at least 6 characters).',
+        code: 'weak-password',
+      );
+    }
+    if (combined.contains(' email') && combined.contains('invalid')) {
+      return AuthException(
+        'Please enter a valid email address.',
+        code: 'invalid-email',
+      );
+    }
+    if (statusCode == 429 || combined.contains('over_request_rate_limit')) {
+      return AuthException(
+        'Too many attempts. Please wait a moment and try again.',
+        code: 'too-many-requests',
+      );
+    }
+    return AuthException(
+      rawMsg.isNotEmpty ? rawMsg : 'Authentication failed. Please try again.',
+      code: rawCode.isEmpty ? null : rawCode,
+    );
   }
 }
 

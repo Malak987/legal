@@ -1,6 +1,7 @@
 import admin from 'firebase-admin';
 import fs from 'node:fs';
 import env, { resolveFirebaseProjectId } from './env.js';
+import { isSupabaseConfigured, initializeSupabase } from './supabase.js';
 
 let app = null;
 let firestore = null;
@@ -38,6 +39,17 @@ export function canUseManagedCredentials(envVars = process.env) {
 export function initializeFirebase() {
   if (app && firestore && auth) return { app, firestore, auth };
 
+  if (isSupabaseConfigured()) {
+    const supa = initializeSupabase();
+    app = supa.client;
+    firestore = supa.db;
+    auth = supa.auth;
+    console.log(
+      `[Supabase] Initialized PostgreSQL + Auth backend (${process.env.SUPABASE_URL || env.supabaseUrl})`,
+    );
+    return { app, firestore, auth };
+  }
+
   if (admin.apps.length > 0) {
     app = admin.app();
     firestore = admin.firestore();
@@ -60,9 +72,10 @@ export function initializeFirebase() {
 
   if (!fs.existsSync(env.serviceAccountPath)) {
     throw new Error(
-      `\n[Firebase] Credentials not configured and local key not found at:\n  ${env.serviceAccountPath}\n\n` +
+      `\n[Backend] Database/Auth credentials not configured and local key not found at:\n  ${env.serviceAccountPath}\n\n` +
         'Options:\n' +
-        '  1. Production / Cloud Functions Gen 2 uses managed Application Default Credentials automatically.\n' +
+        '  0. Supabase PostgreSQL + Auth (primary): set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in backend/.env.\n' +
+        '  1. Production / Cloud Functions Gen 2 uses managed Application Default Credentials (K_SERVICE) automatically.\n' +
         '  2. Local Emulators: run `npm run emulator` (no service account file needed).\n' +
         '  3. Standalone local against live Firebase: place an untracked JSON key at `backend/serviceAccount.json`.\n',
     );
@@ -83,6 +96,14 @@ export function initializeFirebase() {
   auth = admin.auth();
 
   console.log(`[Firebase] Initialized (project: ${resolvedProjectId})`);
+  return { app, firestore, auth };
+}
+
+export function useSupabaseClient(customClient) {
+  const supa = initializeSupabase(customClient);
+  app = supa.client;
+  firestore = supa.db;
+  auth = supa.auth;
   return { app, firestore, auth };
 }
 

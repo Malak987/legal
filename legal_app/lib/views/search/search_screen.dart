@@ -7,6 +7,7 @@ import '../../models/product_model.dart';
 import '../../services/api_client.dart';
 import '../../state/session_scope.dart';
 import '../../widgets/customapp_bar.dart';
+import '../home/details.dart';
 
 /// Lawyer search, backed by `GET /api/lawyers?search=...`.
 ///
@@ -214,89 +215,102 @@ class _LawyerResultCard extends StatelessWidget {
 
     return Opacity(
       opacity: dimmed ? 0.55 : 1,
-      child: Card(
-        elevation: 4,
-        shadowColor: Colors.black12,
-        color: Colors.white,
-        margin: const EdgeInsets.only(bottom: 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      lawyer.name.trim().isEmpty ? 'Unnamed lawyer' : lawyer.name,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.text1Color,
-                      ),
-                    ),
-                  ),
-                  if (rating != null)
-                    Row(
-                      children: [
-                        const Icon(Icons.star, size: 16, color: Colors.amber),
-                        const SizedBox(width: 4),
-                        Text(
-                          rating.toStringAsFixed(1),
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
+      child: GestureDetector(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => LegalServiceDetailsScreen(
+                lawyer: lawyer,
+                lawyerId: lawyer.id,
               ),
-              if (specialty.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  specialty,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: AppColors.text2Color,
-                  ),
-                ),
-              ],
-              if (location.isNotEmpty) ...[
-                const SizedBox(height: 4),
+            ),
+          );
+        },
+        child: Card(
+          elevation: 4,
+          shadowColor: Colors.black12,
+          color: Colors.white,
+          margin: const EdgeInsets.only(bottom: 8),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Row(
                   children: [
-                    const Icon(
-                      Icons.location_on_outlined,
-                      size: 14,
-                      color: AppColors.text3Color,
-                    ),
-                    const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        location,
+                        lawyer.name.trim().isEmpty ? 'Unnamed lawyer' : lawyer.name,
                         style: const TextStyle(
-                          fontSize: 12,
-                          color: AppColors.text2Color,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.text1Color,
                         ),
                       ),
                     ),
+                    if (rating != null)
+                      Row(
+                        children: [
+                          const Icon(Icons.star, size: 16, color: Colors.amber),
+                          const SizedBox(width: 4),
+                          Text(
+                            rating.toStringAsFixed(1),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
-              ],
-              if (price.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(
-                  price,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.buttonColor,
+                if (specialty.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    specialty,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.text2Color,
+                    ),
                   ),
-                ),
+                ],
+                if (location.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.location_on_outlined,
+                        size: 14,
+                        color: AppColors.text3Color,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          location,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.text2Color,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                if (price.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    price,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.buttonColor,
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

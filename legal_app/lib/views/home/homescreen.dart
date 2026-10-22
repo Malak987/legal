@@ -200,6 +200,8 @@ class _HomePageState extends State<HomePage> {
                           imagePath: p.imagePath,
                           name: p.name,
                           price: p.price,
+                          lawyer: p,
+                          rating: p.rating,
                         );
                       },
                     );

@@ -1,234 +1,316 @@
 import 'package:flutter/material.dart';
 
 import '../../constants/colors.dart';
-import '../../widgets/detailstext2.dart';
-import '../../widgets/text11.dart';
+import '../../services/api_client.dart';
+import '../../state/session_scope.dart';
+import '../../widgets/customapp_bar.dart';
 import '../../widgets/detailstext1.dart';
+import '../../widgets/detailstext2.dart';
 import 'chatdetailsscreen.dart';
 
-
-
-class ChatScreen extends StatelessWidget {
+/// Conversation list backed by `GET /api/chats`.
+class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
   @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  final TextEditingController _searchController = TextEditingController();
+  late Future<List<Map<String, dynamic>>> _chats;
+  bool _loaded = false;
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _chats = Future.value(const <Map<String, dynamic>>[]);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_loaded) return;
+    _loaded = true;
+    _reload();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _reload() {
+    final future = SessionScope.read(context).repository.fetchChats();
+    setState(() {
+      _chats = future;
+    });
+    return future.then((_) {}, onError: (_) {});
+  }
+
+  String _resolvePeerName(Map<String, dynamic> chat, String? currentUid) {
+    final names = chat['participantNames'];
+    if (names is Map) {
+      for (final entry in names.entries) {
+        final key = entry.key.toString();
+        final value = entry.value?.toString().trim() ?? '';
+        if (key != currentUid && value.isNotEmpty) {
+          return value;
+        }
+      }
+      for (final value in names.values) {
+        final text = value?.toString().trim() ?? '';
+        if (text.isNotEmpty) return text;
+      }
+    }
+    return 'Legal Consultation';
+  }
+
+  String _formatTime(dynamic raw) {
+    final value = raw?.toString() ?? '';
+    if (value.isEmpty) return '';
+    final parsed = DateTime.tryParse(value);
+    if (parsed == null) return value;
+    final local = parsed.toLocal();
+    final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final minute = local.minute.toString().padLeft(2, '0');
+    final period = local.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $period';
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final currentUid = SessionScope.of(context).repository.currentUid;
+
     return Scaffold(
-      resizeToAvoidBottomInset: false,
       backgroundColor: AppColors.bgColor,
-      appBar: AppBar(
-        backgroundColor: AppColors.tabColor, // Light blue background
-        elevation: 0, // Remove shadow
-        toolbarHeight: 40, // Increase AppBar height
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const CustomAppBar(text: 'Messages', text1: ''),
+              const SizedBox(height: 15),
+              _buildSearchBar(),
+              const SizedBox(height: 12),
+              Expanded(
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _chats,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return _ChatStatus(
+                        icon: Icons.error_outline,
+                        title: 'Could not load messages',
+                        detail: snapshot.error is ApiException
+                            ? (snapshot.error as ApiException).message
+                            : 'Please try again.',
+                        onRetry: _reload,
+                      );
+                    }
 
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(90), // Adjust to fit content
-          child: Padding(
-            padding: const EdgeInsets.all(12.0),
-            child: Column(
-              children: [
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 10),
-                  child: Row(
-                    children: [
+                    final allChats =
+                        snapshot.data ?? const <Map<String, dynamic>>[];
+                    final query = _searchQuery.trim().toLowerCase();
+                    final chats = query.isEmpty
+                        ? allChats
+                        : allChats.where((chat) {
+                            final peer =
+                                _resolvePeerName(chat, currentUid).toLowerCase();
+                            final last = (chat['lastMessage']?.toString() ?? '')
+                                .toLowerCase();
+                            return peer.contains(query) || last.contains(query);
+                          }).toList();
 
-                      SizedBox(
-                        width: 6,
-                      ),
-                      Text1(
-                        text1: 'Messages',
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      Spacer(),
-                      CircleAvatar(
-                        radius: 15,
-                        backgroundColor: Colors.white,
-                        child: CircleAvatar(
-                          backgroundColor: AppColors.tabColor,
-                          child: Center(
-                            child: Icon(
-                              Icons.notifications,
-                              size: 20,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // My Balance and Top Up section
-                const SizedBox(height: 3),
+                    if (chats.isEmpty) {
+                      return _ChatStatus(
+                        icon: Icons.chat_bubble_outline,
+                        title: query.isEmpty
+                            ? 'No conversations yet'
+                            : 'No matching conversations',
+                        detail: query.isEmpty
+                            ? 'Active conversations with your lawyer or client will appear here.'
+                            : 'Nothing matches "$_searchQuery".',
+                      );
+                    }
 
-                // Track Number Input
-                Card(
-                  color: AppColors.buttonColor,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.search, color: Colors.white),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextField(
-                            onTap: (){
-                              // Navigator.push(context, MaterialPageRoute(builder: (_)=>const TrackEmpty()));
+                    return RefreshIndicator(
+                      onRefresh: _reload,
+                      child: ListView.builder(
+                        padding: EdgeInsets.zero,
+                        itemCount: chats.length,
+                        itemBuilder: (context, index) {
+                          final chat = chats[index];
+                          final chatId = chat['id']?.toString() ?? '';
+                          final name = _resolvePeerName(chat, currentUid);
+                          final lastMessage =
+                              (chat['lastMessage']?.toString() ?? '').trim();
+                          final time = _formatTime(
+                            chat['lastMessageTime'] ?? chat['updatedAt'],
+                          );
 
+                          return GestureDetector(
+                            onTap: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ChatDetailsScreen(
+                                    chatId: chatId,
+                                    userName: name,
+                                  ),
+                                ),
+                              );
+                              if (mounted) _reload();
                             },
-                            decoration: const InputDecoration(
-
-                              hintText: 'Search Message',
-                              hintStyle: TextStyle(color: Colors.white70),
-                              border: InputBorder.none,
+                            child: _buildChatTile(
+                              name: name,
+                              message: lastMessage.isEmpty
+                                  ? 'Tap to open conversation'
+                                  : lastMessage,
+                              time: time,
                             ),
-                          ),
-                        ),
-
-                      ],
-                    ),
-                  ),
+                          );
+                        },
+                      ),
+                    );
+                  },
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
-      body: Column(
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.shade200,
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: TextField(
+        controller: _searchController,
+        onChanged: (value) => setState(() => _searchQuery = value),
+        decoration: InputDecoration(
+          hintText: 'Search messages',
+          border: InputBorder.none,
+          icon: const Icon(Icons.search, color: Colors.grey),
+          suffixIcon: _searchQuery.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() => _searchQuery = '');
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChatTile({
+    required String name,
+    required String message,
+    required String time,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.shade100,
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
         children: [
-          const SizedBox(height: 8,),
+          const CircleAvatar(
+            radius: 26,
+            backgroundImage: AssetImage('images/c3.png'),
+          ),
+          const SizedBox(width: 12),
           Expanded(
-            child: ListView.builder(
-              physics: const BouncingScrollPhysics(),
-              itemCount: 10,
-              itemBuilder: (context, index) {
-                return MessageItem(
-                  name: index == 0
-                      ? 'Maddy Lin'
-                      : index == 1
-                      ? 'Sarah Jen'
-                      : index == 2
-                      ? 'Ron Edward'
-                      : index == 3
-                      ? 'Alice Adam'
-                      : index == 4
-                      ? 'Will Smith'
-                      : 'Jessica Ben',
-                  message: index == 0
-                      ? 'Hai Rizal, I\'m on the way...'
-                      : index == 1
-                      ? 'woohoooo'
-                      : index == 2
-                      ? 'Haha that\'s terrifying 😂'
-                      : index == 3
-                      ? 'Wow, this is really epic'
-                      : index == 4
-                      ? 'Just ideas for next time'
-                      : 'How are you?',
-                  time: index == 0
-                      ? '3:74 Pm'
-                      : index == 1
-                      ? '6:32 Pm'
-                      : index == 2
-                      ? '7:22 Pm'
-                      : 'Yesterday',
-                  profileImage: index == 0
-                      ? 'images/c2.png'
-                      : index == 1
-                      ? 'images/c3.png'
-                      : index == 2
-                      ? 'images/c4.png'
-                      : index == 3
-                      ? 'images/c2.png'
-                      : index == 4
-                      ? 'images/c5.png'
-                      : 'images/c2.png',
-                );
-              },
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text1(text1: name, size: 16),
+                const SizedBox(height: 4),
+                Text2(text2: message),
+              ],
             ),
           ),
+          if (time.isNotEmpty)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text2(text2: time),
+              ],
+            ),
         ],
       ),
     );
   }
 }
 
-class MessageItem extends StatelessWidget {
-  final String name;
-  final String message;
-  final String time;
-  final String profileImage;
-
-  const MessageItem({
-    super.key,
-    required this.name,
-    required this.message,
-    required this.time,
-    required this.profileImage,
+class _ChatStatus extends StatelessWidget {
+  const _ChatStatus({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.onRetry,
   });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: (){
-        Navigator.push(context, MaterialPageRoute(builder: (_)=>const ChatDetailsScreen()));
-      },
-      child: Card(
-
-        color: Colors.white,
-            elevation: 1,
-        margin: const EdgeInsets.only(bottom: 8,left: 8,right: 8),
-        child: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              CircleAvatar(
-                radius: 25,
-                backgroundImage: AssetImage(profileImage),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text1(
-                        text1:   name,
-                          size: 17,
-
-                        ),
-                        const Spacer(),
-                        const CircleAvatar(
-                          radius: 13,
-                          backgroundColor: AppColors.tabColor,
-                          child: Text11(text2: '2',color: Colors.white,),
-
-                        )
-
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Text2(
-                         text2:  message,
-
-                        ),
-                        const Spacer(),
-                        Text2(
-                          text2:  time,
-                        ),
-
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 46, color: AppColors.text3Color),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              detail,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: AppColors.text2Color),
+            ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 12),
+              TextButton(onPressed: onRetry, child: const Text('Retry')),
             ],
-          ),
+          ],
         ),
       ),
     );

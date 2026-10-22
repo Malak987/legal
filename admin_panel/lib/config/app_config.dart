@@ -15,6 +15,31 @@ class AppConfig {
     defaultValue: 'https://legal-102026.web.app/api',
   );
 
+  /// Connected Supabase project reference ID.
+  static const String supabaseProjectRef = String.fromEnvironment(
+    'SUPABASE_PROJECT_REF',
+    defaultValue: 'qqfzbecwhewswkyxgebu',
+  );
+
+  /// Connected Supabase project URL.
+  static const String supabaseUrl = String.fromEnvironment(
+    'SUPABASE_URL',
+    defaultValue: 'https://qqfzbecwhewswkyxgebu.supabase.co',
+  );
+
+  /// Public Supabase anon/publishable key (`--dart-define=SUPABASE_ANON_KEY=...`).
+  ///
+  /// Never pass or embed a Supabase `service_role` or `secret` key in Flutter
+  /// Web or client code.
+  static const String supabaseAnonKey = String.fromEnvironment(
+    'SUPABASE_ANON_KEY',
+    defaultValue: '',
+  );
+
+  /// True when Supabase client credentials have been configured via `--dart-define`.
+  static bool get useSupabase =>
+      supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
+
   /// Brand colors taken from the main Legal Services app.
   static const int primaryColorValue = 0xFF002366; // buttonColor (navy)
   static const int secondaryColorValue = 0xFF3498DB; // blue

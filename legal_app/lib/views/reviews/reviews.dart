@@ -1,285 +1,412 @@
-// Reviews Screen
-import 'package:legalserviceapp/views/reviews/writereview.dart';
 import 'package:flutter/material.dart';
 
-
+import '../../constants/colors.dart';
+import '../../services/api_client.dart';
+import '../../state/session_scope.dart';
 import '../../widgets/customapp_bar.dart';
 import '../../widgets/custombtn.dart';
 import '../../widgets/detailstext1.dart';
+import '../../widgets/detailstext2.dart';
+import 'writereview.dart';
 
-class Reviews extends StatelessWidget {
-  const Reviews({super.key});
+/// Reviews list backed by `GET /api/reviews` and `DELETE /api/reviews/:id`.
+class ReviewsScreen extends StatefulWidget {
+  final String? lawyerId;
+  final String? lawyerName;
+
+  const ReviewsScreen({
+    super.key,
+    this.lawyerId,
+    this.lawyerName,
+  });
+
+  @override
+  State<ReviewsScreen> createState() => _ReviewsScreenState();
+}
+
+class _ReviewsScreenState extends State<ReviewsScreen> {
+  List<Map<String, dynamic>> _reviews = const <Map<String, dynamic>>[];
+  Map<String, String> _lawyerNames = const <String, String>{};
+  bool _loading = true;
+  String? _error;
+  String? _deletingId;
+  bool _initialized = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialized) return;
+    _initialized = true;
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    final repo = SessionScope.read(context).repository;
+    try {
+      final reviewsFuture = repo.fetchReviews(lawyerId: widget.lawyerId);
+      final lawyersFuture = repo
+          .fetchLawyers()
+          .catchError((_) => const <dynamic>[]);
+
+      final results = await Future.wait<dynamic>([
+        reviewsFuture,
+        lawyersFuture,
+      ]);
+      if (!mounted) return;
+
+      final reviews = results[0] as List<Map<String, dynamic>>;
+      final lawyers = results[1] as List<dynamic>;
+      final nameMap = <String, String>{};
+      for (final lawyer in lawyers) {
+        final id = lawyer.id?.toString() ?? '';
+        final name = lawyer.name?.toString() ?? '';
+        if (id.isNotEmpty && name.isNotEmpty) {
+          nameMap[id] = name;
+        }
+      }
+
+      setState(() {
+        _reviews = reviews;
+        _lawyerNames = nameMap;
+        _loading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not load reviews. Please try again.';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _deleteReview(String reviewId) async {
+    setState(() => _deletingId = reviewId);
+    final repo = SessionScope.read(context).repository;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await repo.deleteReview(reviewId);
+      if (!mounted) return;
+      await _load();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Review deleted.')),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _deletingId = null);
+    }
+  }
+
+  String _formatDate(dynamic raw) {
+    final value = raw?.toString() ?? '';
+    if (value.isEmpty) return '';
+    final parsed = DateTime.tryParse(value);
+    if (parsed == null) return value;
+    final local = parsed.toLocal();
+    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final currentUid = SessionScope.of(context).repository.currentUid;
+    final headerTitle = (widget.lawyerName ?? '').isEmpty
+        ? 'Reviews'
+        : '${widget.lawyerName} Reviews';
+
     return Scaffold(
+      backgroundColor: AppColors.bgColor,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 14),
-          child: SingleChildScrollView(
-            child: Column(
-              children: [
-                const SizedBox(height: 10),
-                const CustomAppBar(text: 'Reviews', text1: ''),
-                const SizedBox(height: 20),
-                const Center(
-                  child: Text(
-                    '4.0',
-                    style: TextStyle(
-                      fontSize: 30,
-                      fontWeight: FontWeight.w700,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CustomAppBar(text: headerTitle, text1: ''),
+              const SizedBox(height: 16),
+              Expanded(child: _buildBody(currentUid)),
+              const SizedBox(height: 10),
+              CustomButton(
+                text: 'Write a Review',
+                onTap: () async {
+                  final created = await Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => WriteReviewScreen(
+                        initialLawyerId: widget.lawyerId,
+                        initialLawyerName: widget.lawyerName,
+                      ),
                     ),
-                  ),
+                  );
+                  if (created == true && mounted) {
+                    _load();
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody(String? currentUid) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 46,
+                color: AppColors.text3Color,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Could not load reviews',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: AppColors.text2Color,
                 ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+              ),
+              const SizedBox(height: 12),
+              TextButton(onPressed: _load, child: const Text('Retry')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_reviews.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.rate_review_outlined,
+                size: 46,
+                color: AppColors.text3Color,
+              ),
+              SizedBox(height: 12),
+              Text(
+                'No reviews yet',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 6),
+              Text(
+                'Client reviews for legal consultations will appear here.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppColors.text2Color),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        children: [
+          _buildOverallRatingSection(),
+          const SizedBox(height: 16),
+          ..._reviews.map((r) => _buildReviewCard(r, currentUid)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOverallRatingSection() {
+    final total = _reviews.length;
+    var sum = 0.0;
+    final counts = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
+
+    for (final r in _reviews) {
+      final rating = (r['rating'] as num?)?.toDouble() ?? 0.0;
+      sum += rating;
+      final bucket = rating.round().clamp(1, 5);
+      counts[bucket] = (counts[bucket] ?? 0) + 1;
+    }
+    final avg = total > 0 ? sum / total : 0.0;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Text(
+                avg.toStringAsFixed(1),
+                style: const TextStyle(
+                  fontSize: 42,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: List.generate(5, (index) {
+                      return Icon(
+                        index < avg.round() ? Icons.star : Icons.star_border,
+                        color: Colors.amber,
+                        size: 22,
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 4),
+                  Text2(
+                    text2: 'Based on $total review${total == 1 ? '' : 's'}',
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          for (var stars = 5; stars >= 1; stars--)
+            _buildRatingProgress(
+              '$stars Stars',
+              total > 0 ? (counts[stars] ?? 0) / total : 0.0,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRatingProgress(String label, double value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          SizedBox(width: 65, child: Text2(text2: label)),
+          Expanded(
+            child: LinearProgressIndicator(
+              value: value,
+              backgroundColor: Colors.grey.shade300,
+              color: Colors.amber,
+              minHeight: 7,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReviewCard(Map<String, dynamic> review, String? currentUid) {
+    final id = review['id']?.toString() ?? '';
+    final userName = (review['userName']?.toString() ?? '').trim();
+    final lawyerId = (review['lawyerId']?.toString() ?? '').trim();
+    final lawyerName = _lawyerNames[lawyerId];
+    final rating = (review['rating'] as num?)?.toDouble() ?? 5.0;
+    final comment = review['comment']?.toString() ?? '';
+    final date = _formatDate(review['createdAt']);
+    final isMine =
+        currentUid != null && review['userId']?.toString() == currentUid;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.shade200,
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const CircleAvatar(
+                radius: 20,
+                backgroundImage: AssetImage('images/c3.png'),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(
-                      Icons.star,
-                      color: Colors.yellow.shade800,
+                    Text1(
+                      text1: userName.isEmpty ? 'Client' : userName,
+                      size: 15,
                     ),
-                    Icon(
-                      Icons.star,
-                      color: Colors.yellow.shade800,
-                    ),
-                    Icon(
-                      Icons.star,
-                      color: Colors.yellow.shade800,
-                    ),
-                    Icon(
-                      Icons.star,
-                      color: Colors.yellow.shade800,
-                    ),
-                    const Icon(
-                      Icons.star,
-                      color: Colors.grey,
-                    ),
+                    if (lawyerName != null && widget.lawyerId == null)
+                      Text2(text2: 'Lawyer: $lawyerName'),
+                    if (date.isNotEmpty) Text2(text2: date),
                   ],
                 ),
-                const Center(
-                  child: Text(
-                    'based on 23 Reviews',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 25),
-                RatingRow(
-                  text: 'Excellent',
-                  width: 150,
-                  color: Color.fromARGB((0.9 * 255).toInt(), 205, 220, 57),
-                ),
-                RatingRow(
-                  text: 'Good',
-                  width: 140,
-                  color: Color.fromARGB((0.9 * 255).toInt(), 205, 220, 57),
-                ),
-                RatingRow(
-                  text: 'Average',
-                  width: 120,
-                  color: Colors.yellow.shade800,
-                ),
-                const RatingRow(
-                  text: 'Below Average',
-                  width: 100,
-                  color: Colors.purple,
-                ),
-                const RatingRow(
-                  text: 'Poor',
-                  width: 50,
-                  color: Colors.pink,
-                ),
-                const SizedBox(height: 10),
-                const ReviewsContainer(
-                  image: 'images/c3.png',
-                  text1: 'James Andre',
-                  text2: '4.3',
-                  text3: '1 day ago',
-                  reviewText:
-                  'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Proin eu lorem ut quam hendrerit rutrum. Nullam tristique consequat tortor, id sagittis nisl faucibus a. In hac habitasse platea dictumst. Mauris at purus et elit consequat laoreet non ac odio.',
-                ),
-                const ReviewsContainer(
-                  image: 'images/c2.png',
-                  text1: 'Powell Sumuled',
-                  text2: '3.3',
-                  text3: '4 day ago',
-                  reviewText:
-                  'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Proin eu lorem ut quam hendrerit rutrum. Nullam tristique consequat tortor, id sagittis nisl faucibus a. In hac habitasse platea dictumst. Mauris at purus et elit consequat laoreet non ac odio.',
-                ),
-                const ReviewsContainer(
-                  image: 'images/c3.png',
-                  text1: 'Hales Andreeed',
-                  text2: '5.3',
-                  text3: '7 day ago',
-                  reviewText:
-                  'Integer eu neque a justo sagittis posuere. Morbi nec dolor nec nulla dictum fermentum. Quisque accumsan, sapien id congue lobortis, dui ante sodales quam, eu placerat quam turpis nec magna.',
-                ),
-                const ReviewsContainer(
-                  image: 'images/c4.png',
-                  text1: 'Guptel Stin',
-                  text2: '2.3',
-                  text3: '8 day ago',
-                  reviewText:
-                  'Suspendisse potenti. Aenean eu nibh nec lectus congue efficitur vel ac lacus. Sed non lobortis erat, et aliquet justo. Nam a suscipit lorem.',
-                ),
-                const ReviewsContainer(
-                  image: 'images/c3.png',
-                  text1: 'Andre',
-                  text2: '4.3',
-                  text3: '6 day ago',
-                  reviewText:
-                  'Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Quisque euismod convallis leo, non tempor tortor consectetur sed. Curabitur vel vestibulum eros.',
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
-        child: CustomButton(
-          text: 'Write A Review',
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const WriteReviews()),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class ReviewsContainer extends StatelessWidget {
-  final String image;
-  final String text1, text2, text3, reviewText;
-  const ReviewsContainer({
-    super.key,
-    required this.image,
-    required this.text1,
-    required this.text2,
-    required this.text3,
-    required this.reviewText,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 3,
-      color: Colors.white,
-
-      child: Padding(
-        padding: const EdgeInsets.all(13.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(30),
-                  child: Image.asset(
-                    image,
-                    width: 35,
-                    height: 35,
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text1(text1: text1),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.star,
-                            color: Colors.yellow.shade800,
-                            size: 15,
-                          ),
-                          Icon(
-                            Icons.star,
-                            color: Colors.yellow.shade800,
-                            size: 15,
-                          ),
-                          Icon(
-                            Icons.star,
-                            color: Colors.yellow.shade800,
-                            size: 15,
-                          ),
-                          Icon(
-                            Icons.star,
-                            color: Colors.yellow.shade800,
-                            size: 15,
-                          ),
-                          const SizedBox(width: 5),
-                          Text1(text1: text2),
-                          const Spacer(),
-                          Text1(text1: text3),
-                        ],
+              ),
+              Row(
+                children: List.generate(5, (index) {
+                  return Icon(
+                    index < rating.round() ? Icons.star : Icons.star_border,
+                    color: Colors.amber,
+                    size: 16,
+                  );
+                }),
+              ),
+              if (isMine && id.isNotEmpty)
+                _deletingId == id
+                    ? const Padding(
+                        padding: EdgeInsets.only(left: 8),
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : IconButton(
+                        icon: const Icon(
+                          Icons.delete_outline,
+                          size: 18,
+                          color: Colors.redAccent,
+                        ),
+                        tooltip: 'Delete my review',
+                        onPressed: () => _deleteReview(id),
                       ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              reviewText,
-              style: const TextStyle(),
-            ),
-          ],
-        ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text2(text2: comment),
+        ],
       ),
-    );
-  }
-}
-
-class RatingRow extends StatelessWidget {
-  final String text;
-  final Color color;
-  final double width;
-  const RatingRow({
-    super.key,
-    required this.text,
-    required this.color,
-    required this.width,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(
-          text,
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(width: 30),
-        Expanded(
-          child: Container(
-            height: 5,
-            width: double.infinity,
-            color: Colors.grey.shade300,
-            child: Row(
-              children: [
-                Container(
-                  height: 5,
-                  width: width,
-                  color: color,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

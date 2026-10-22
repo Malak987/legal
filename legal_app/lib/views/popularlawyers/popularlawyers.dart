@@ -123,8 +123,10 @@ class _PopularLawyersScreenState extends State<PopularLawyersScreen> {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) =>
-                                      const LegalServiceDetailsScreen(),
+                                  builder: (_) => LegalServiceDetailsScreen(
+                                    lawyer: lawyer,
+                                    lawyerId: lawyer.id,
+                                  ),
                                 ),
                               );
                             },

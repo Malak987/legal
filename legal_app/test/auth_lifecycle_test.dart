@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:legalserviceapp/services/api_client.dart';
 import 'package:legalserviceapp/services/auth_service.dart';
 import 'package:legalserviceapp/state/session_controller.dart';
@@ -511,6 +513,87 @@ void main() {
         startScreenFor(SessionStatus.profileUnavailable),
         StartScreen.onboarding,
       );
+    });
+  });
+
+  group('SupabaseAuthGateway', () {
+    test('signs in, refreshes tokens, changes password, and signs out via Supabase Auth REST API', () async {
+      final requests = <String>[];
+      final client = MockClient((request) async {
+        requests.add('${request.method} ${request.url.path}?${request.url.query}');
+        if (request.url.path.endsWith('/auth/v1/token') &&
+            request.url.queryParameters['grant_type'] == 'password') {
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          if (body['password'] == 'wrong') {
+            return http.Response(
+              jsonEncode(<String, dynamic>{
+                'error_code': 'invalid_credentials',
+                'msg': 'Invalid login credentials',
+              }),
+              400,
+            );
+          }
+          return http.Response(
+            jsonEncode(<String, dynamic>{
+              'access_token': 'supa-access-jwt',
+              'refresh_token': 'supa-refresh-jwt',
+              'user': <String, dynamic>{
+                'id': '00000000-0000-4000-8000-000000000099',
+                'email': body['email'],
+              },
+            }),
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/auth/v1/user') &&
+            request.method == 'PUT') {
+          return http.Response(
+            jsonEncode(<String, dynamic>{
+              'id': '00000000-0000-4000-8000-000000000099',
+            }),
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/auth/v1/logout')) {
+          return http.Response('', 204);
+        }
+        return http.Response('{}', 404);
+      });
+
+      final gateway = SupabaseAuthGateway(
+        client: client,
+        supabaseUrl: 'https://qqfzbecwhewswkyxgebu.supabase.co',
+        supabaseAnonKey: 'public-anon-key',
+      );
+
+      final user = await gateway.signIn(
+        email: 'sara@example.com',
+        password: 'secret123',
+      );
+      expect(user.uid, '00000000-0000-4000-8000-000000000099');
+      expect(user.email, 'sara@example.com');
+      expect(await gateway.getAccessToken(), 'supa-access-jwt');
+
+      await expectLater(
+        gateway.changePassword(
+          currentPassword: 'wrong',
+          newPassword: 'n3wPassword!',
+        ),
+        throwsA(isA<AuthException>().having(
+          (e) => e.code,
+          'code',
+          'invalid-credential',
+        )),
+      );
+
+      await gateway.changePassword(
+        currentPassword: 'secret123',
+        newPassword: 'n3wPassword!',
+      );
+
+      await gateway.signOut();
+      expect(gateway.currentUser, isNull);
+      expect(gateway.accessToken, isNull);
     });
   });
 }

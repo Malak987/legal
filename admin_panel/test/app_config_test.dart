@@ -11,4 +11,14 @@ void main() {
     expect(AppConfig.apiBaseUrl.contains('localhost'), isFalse);
     expect(AppConfig.apiBaseUrl.contains('127.0.0.1'), isFalse);
   });
+
+  test('AppConfig.supabaseUrl defaults to the connected Supabase project without embedding secrets', () {
+    final uri = Uri.parse(AppConfig.supabaseUrl);
+    expect(AppConfig.supabaseProjectRef, 'qqfzbecwhewswkyxgebu');
+    expect(AppConfig.supabaseUrl, 'https://qqfzbecwhewswkyxgebu.supabase.co');
+    expect(uri.scheme, 'https');
+    expect(uri.host, 'qqfzbecwhewswkyxgebu.supabase.co');
+    expect(AppConfig.supabaseAnonKey, isEmpty);
+    expect(AppConfig.useSupabase, isFalse);
+  });
 }
