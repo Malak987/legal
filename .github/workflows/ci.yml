@@ -175,7 +175,10 @@ jobs:
           publish() {
             local log="$1" title="$2" pattern="$3" body encoded
             [ -f "$log" ] || return 0
-            body="$(grep -E "$pattern" "$log" | head -60 || true)"
+            # `google_fonts` prints a "was unable to load font" notice on every
+            # test that renders themed text. It is not a failure, and left in it
+            # fills the annotation quota and buries the actual error.
+            body="$(grep -E "$pattern" "$log" | grep -v 'google_fonts was unable' | head -60 || true)"
             [ -n "$body" ] || body="$(tail -40 "$log")"
             encoded="$(printf '%s\n' "$body" | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'NF { printf "%s%%0A", $0 }')"
             echo "::error title=${title}::${encoded}"
