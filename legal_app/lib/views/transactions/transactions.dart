@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../widgets/customapp_bar.dart';
+import '../../widgets/customapp_bar.dart';
 
 class TransactionScreen extends StatelessWidget {
   final List<Map<String, String>> transactions = [

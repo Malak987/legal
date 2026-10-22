@@ -1,35 +1,15 @@
 name: CI
 
-# The three applications the repository verifies on every push and PR.
+# Verifies all three parts of the platform on every push and PR:
 #
-#   backend/     Express + Firestore API. Its test suite is self-contained
-#                (in-memory Firestore double, no credentials, no network).
-#   admin_panel/ Flutter Web admin. `flutter analyze` + `flutter test`; the
-#                tests inject fake auth/API services, so no Firebase project is
-#                needed.
-#   legal_app/   Flutter mobile app. Gated since the authentication work: the
-#                stale counter-template widget test was replaced with real
-#                auth/session/API tests that use fakes and a MockClient, so the
-#                job needs no Firebase project, no credentials and no network.
-#
-# STILL NOT GATED: LegalServicesAppDoc/, the stale copy of the mobile app. It
-# is not the app under development and has never been verified.
-#
-# Note on scope: `flutter analyze` here runs with `--no-fatal-infos` and
-# `--no-fatal-warnings`, so the gate is "the app compiles", not "the whole
-# codebase is lint-clean". legal_app carries older screens with info-level
-# lints that predate this work; gating on those would hide real errors behind
-# noise. The full analyzer output is still printed and published on failure.
-# Formatting is reported, never gated: most of the app predates `dart format`
-# and reformatting it is unrelated to behavioural verification.
+#   backend/     1) Fast unit + Cloud Functions contract suite (`npm test`)
+#                2) Full end-to-end integration test against real Firebase
+#                   Auth + Cloud Firestore + Cloud Functions Gen 2 + Firebase
+#                   Hosting Emulators (`npm run test:emulator`)
+#   admin_panel/ Flutter Web admin (`flutter analyze`, `flutter test`, and
+#                production `flutter build web` targeting Firebase Hosting)
+#   legal_app/   Flutter mobile app (`flutter analyze` compile gate + `flutter test`)
 
-# Every branch, not only `main`: work in this repository lands on short-lived
-# `arena/*` branches and is merged through pull requests. Limiting `push` to
-# `main` meant a branch push produced no run at all (a workflow file that lives
-# only on a feature branch is not registered on the default branch, so neither
-# `workflow_dispatch` nor the workflow list can reach it either), so the first
-# feedback would arrive only after a PR existed. Running on any push gives the
-# branch that feedback immediately; `pull_request` still covers forks.
 on: [push, pull_request, workflow_dispatch]
 
 permissions:
@@ -37,32 +17,66 @@ permissions:
 
 jobs:
   backend:
-    name: Backend tests (Node 22)
+    name: Backend + Firebase Emulators (Node 22)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node
+      - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
-      - name: Install dependencies
+      - name: Set up Java 21 (for Cloud Firestore Emulator)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install backend dependencies
+        working-directory: backend
         run: npm ci
 
-      # Runs `node --test "test/**/*.test.js"` (see backend/package.json).
-      # Baseline at the Phase 0 commit: 351 tests, 0 failures.
-      - name: Run backend test suite
-        run: npm test
+      - name: Run backend unit & Cloud Functions contract tests
+        working-directory: backend
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/backend-unit.log"
+
+      - name: Run full Firebase Hosting + Functions Gen 2 + Auth + Firestore Emulator E2E suite
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p admin_panel/build/web
+          printf '<!doctype html><html><body>Legal Admin Hosting Check</body></html>\n' > admin_panel/build/web/index.html
+          npx --yes firebase-tools@15.34.1 emulators:exec \
+            --project legal-102026 \
+            --only auth,firestore,functions,hosting \
+            "RUN_FIRESTORE_E2E=1 npm --prefix backend run test:emulator" \
+            2>&1 | tee "$RUNNER_TEMP/backend-emulator.log"
+
+      - name: Publish failure details as annotations
+        if: failure()
+        shell: bash
+        run: |
+          publish() {
+            local log="$1" title="$2" body encoded
+            [ -f "$log" ] || return 0
+            body="$(tail -80 "$log")"
+            encoded="$(printf '%s\n' "$body" | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'NF { printf "%s%%0A", $0 }')"
+            echo "::error title=${title}::${encoded}"
+            echo "----- ${title} (last 80 lines) -----"
+            tail -80 "$log"
+          }
+          publish "$RUNNER_TEMP/backend-unit.log" "backend npm test"
+          publish "$RUNNER_TEMP/backend-emulator.log" "backend firebase emulators e2e"
 
   admin-panel:
-    name: Admin panel (analyze + test)
+    name: Admin panel (analyze + test + web build)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -71,8 +85,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # admin_panel/pubspec.yaml requires Dart >= 3.13.0 / Flutter >= 3.44.0,
-      # so an older pinned SDK would fail `pub get` rather than analyse.
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -84,8 +96,6 @@ jobs:
 
       - name: Analyze
         shell: bash
-        # `pipefail` keeps flutter's exit status authoritative while the output
-        # is also captured for the diagnostic step below.
         run: |
           set -o pipefail
           flutter analyze 2>&1 | tee "$RUNNER_TEMP/analyze.log"
@@ -96,20 +106,17 @@ jobs:
           set -o pipefail
           flutter test 2>&1 | tee "$RUNNER_TEMP/test.log"
 
-      # Raw job logs are served from results-receiver.actions.githubusercontent.com
-      # and blob storage, which some review environments cannot reach (the
-      # download returns EOF there, leaving only "Process completed with exit
-      # code 1"). When a step fails, the captured output is therefore also
-      # published as a check-run annotation, which api.github.com serves
-      # directly, so the exact findings are readable without the log archive.
-      #
-      # Diagnostic only: runs after the fact, never changes a job's outcome, and
-      # is never used to soften a gate.
+      - name: Build production web bundle (Firebase Hosting target)
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build web 2>&1 | tee "$RUNNER_TEMP/build-web.log"
+
       - name: Publish failure details as annotations
         if: failure()
         shell: bash
         run: |
-          publish() {  # $1 = log file, $2 = annotation title, $3 = grep pattern
+          publish() {
             local log="$1" title="$2" pattern="$3" body encoded
             [ -f "$log" ] || return 0
             body="$(grep -E "$pattern" "$log" | head -60 || true)"
@@ -123,6 +130,8 @@ jobs:
             '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
           publish "$RUNNER_TEMP/test.log" "flutter test" \
             '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'
+          publish "$RUNNER_TEMP/build-web.log" "flutter build web" \
+            'Error:|Failed|Exception'
 
   legal-app:
     name: Mobile app (analyze + test)
@@ -134,7 +143,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # legal_app/pubspec.yaml requires Dart ^3.7.2, which stable satisfies.
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -144,14 +152,10 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # Report only (no --set-exit-if-changed): see the note at the top of this
-      # file. This lists files whose formatting differs without failing the job.
       - name: Report formatting differences
         shell: bash
         run: dart format --output=none --show=changed lib test || true
 
-      # Compile gate: fails on analyzer errors, tolerates pre-existing
-      # info/warning-level lints.
       - name: Analyze
         shell: bash
         run: |
@@ -164,10 +168,6 @@ jobs:
           set -o pipefail
           flutter test 2>&1 | tee "$RUNNER_TEMP/test.log"
 
-      # Same rationale as the admin-panel job: raw job logs are not always
-      # reachable from review environments, so failure details are also
-      # published as check-run annotations. Diagnostic only — it never changes
-      # a job's outcome.
       - name: Publish failure details as annotations
         if: failure()
         shell: bash
@@ -175,9 +175,6 @@ jobs:
           publish() {
             local log="$1" title="$2" pattern="$3" body encoded
             [ -f "$log" ] || return 0
-            # `google_fonts` prints a "was unable to load font" notice on every
-            # test that renders themed text. It is not a failure, and left in it
-            # fills the annotation quota and buries the actual error.
             body="$(grep -E "$pattern" "$log" | grep -v 'google_fonts was unable' | head -60 || true)"
             [ -n "$body" ] || body="$(tail -40 "$log")"
             encoded="$(printf '%s\n' "$body" | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'NF { printf "%s%%0A", $0 }')"
@@ -185,7 +182,7 @@ jobs:
             echo "----- ${title} (last 60 lines) -----"
             tail -60 "$log"
           }
-          publish_block() {  # $1 = log file, $2 = annotation title
+          publish_block() {
             local log="$1" title="$2" body encoded
             [ -f "$log" ] || return 0
             body="$(awk '
@@ -203,8 +200,4 @@ jobs:
             '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
           publish "$RUNNER_TEMP/test.log" "flutter test (legal_app)" \
             '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'
-          # `flutter test` reports a failure as a multi-line block whose only
-          # greppable lines are the header and the closing sentence, so the
-          # pattern above shows "Test failed" with no reason. Publish the first
-          # block verbatim so the cause is readable without the log archive.
           publish_block "$RUNNER_TEMP/test.log" "flutter test (legal_app) detail"

@@ -1,0 +1,16 @@
+# Workspace-level Dart/Flutter analysis exclusions for non-application trees.
+#
+# Why this file exists at the repository root:
+#   - `LegalServicesAppDoc/LegalServicesApp-code` is an unmaintained archive copy
+#     that declares the same package name (`legalserviceapp`) as `legal_app/`,
+#     has no generated `.dart_tool/package_config.json`, and contains mixed-case
+#     imports (`../Widgets/...` vs `lib/widgets/...`) that trigger multi-URI file
+#     collisions in the Dart Analysis Server on case-insensitive mounts.
+#   - `admin_panel/` and `legal_app/` each have their own `analysis_options.yaml`
+#     with all compiler and lint diagnostics preserved (nothing is suppressed).
+
+analyzer:
+  exclude:
+    - LegalServicesAppDoc/**
+    - LegalServicesApp-documentation/**
+    - backend/**

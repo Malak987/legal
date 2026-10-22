@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../../../../../widgets/chiptext.dart';
+import 'chiptext.dart';
 import '../constants/colors.dart';
 
 class WeaklyChips extends StatelessWidget {

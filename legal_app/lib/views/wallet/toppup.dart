@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../../../constants/colors.dart';
-import '../../../widgets/detailstext1.dart';
-import '../../../widgets/custombtn.dart';
+import '../../constants/colors.dart';
+import '../../widgets/detailstext1.dart';
+import '../../widgets/custombtn.dart';
 
 
 

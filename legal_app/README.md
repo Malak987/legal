@@ -1,22 +1,31 @@
-# legal_app — mobile client
+# Legal Services — Mobile App (`legal_app`)
 
-Flutter client for clients and lawyers. See the repository
-[README](../README.md) for architecture, the API, and the data model.
+Flutter mobile client for clients and lawyers, backed by Firebase Authentication and the deployed Cloud Functions Gen 2 API (`https://legal-102026.web.app/api`).
+
+## API Configuration
+
+`lib/services/api_client.dart` resolves the API base URL automatically:
+
+1. Explicit override: `--dart-define=API_BASE_URL=...`
+2. Opt-in local Firebase Emulator mode: `--dart-define=USE_LOCAL_EMULATOR=true` (`http://10.0.2.2:5000/api` on Android emulator, `http://localhost:5000/api` on iOS simulator / desktop)
+3. **Default for all debug, profile, and release builds:** `https://legal-102026.web.app/api` (no laptop server required)
+
+## Commands
 
 ```bash
+cd legal_app
 flutter pub get
-flutter run --dart-define=API_BASE_URL=http://10.0.2.2:5000/api   # Android emulator
-flutter analyze
+
+# Static analysis & widget/unit tests
+flutter analyze --no-fatal-infos --no-fatal-warnings
 flutter test
+
+# Run against deployed Firebase API (default)
+flutter run
+
+# Run against local Firebase Emulator Suite
+flutter run --dart-define=USE_LOCAL_EMULATOR=true
+
+# Build release Android APK
+flutter build apk --release
 ```
-
-- `API_BASE_URL` overrides the default backend address; a physical device needs
-  your LAN IP, and release builds need an **https** URL (cleartext HTTP is
-  allowed in debug/profile manifests only).
-- The AI screens require `--dart-define=GEMINI_API_KEY=...`; without it they
-  report that the feature is not configured. No key is stored in this repository.
-- Firebase is configured for Android only — the web and iOS entries in
-  `lib/config/firebase_options.dart` are still placeholders.
-
-Screens that still render sample data, and the rest of the current limitations,
-are listed in the root README (§8).

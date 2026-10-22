@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../../../constants/colors.dart';
+import '../constants/colors.dart';
 import 'detailstext1.dart';
 
 class TabContainer extends StatelessWidget {

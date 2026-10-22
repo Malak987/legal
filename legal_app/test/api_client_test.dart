@@ -14,23 +14,35 @@ void main() {
   group('base URL', () {
     tearDown(() => debugDefaultTargetPlatformOverride = null);
 
-    test('the Android emulator gets the host alias, never localhost', () {
+    test('defaults to deployed Firebase HTTPS API across Android and iOS', () {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      expect(ApiClient.defaultBaseUrl, 'http://10.0.2.2:5000/api');
+      expect(ApiClient.defaultBaseUrl, 'https://legal-102026.web.app/api');
+
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      expect(ApiClient.defaultBaseUrl, 'https://legal-102026.web.app/api');
     });
 
-    test('other platforms default to localhost', () {
+    test('local emulator mode resolves Android 10.0.2.2 vs localhost cleanly', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      expect(
+        ApiClient.resolveBaseUrl(localEmulator: true),
+        'http://10.0.2.2:5000/api',
+      );
+
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      expect(ApiClient.defaultBaseUrl, 'http://localhost:5000/api');
+      expect(
+        ApiClient.resolveBaseUrl(localEmulator: true),
+        'http://localhost:5000/api',
+      );
     });
 
     test('an explicit base URL always wins', () {
       final client = ApiClient(
-        baseUrl: 'http://192.168.1.10:5000/api',
+        baseUrl: 'https://staging.example.com/api',
         client: MockClient((_) async => jsonOk(const {})),
         currentUidProvider: () => null,
       );
-      expect(client.baseUrl, 'http://192.168.1.10:5000/api');
+      expect(client.baseUrl, 'https://staging.example.com/api');
     });
   });
 

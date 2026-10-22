@@ -1,61 +1,132 @@
-import fs from 'node:fs';
 import dotenv from 'dotenv';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const backendRoot = path.resolve(__dirname, '../..');
 
-// Load environment variables from the project root (.env)
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+export const DEFAULT_FIREBASE_PROJECT_ID = 'legal-102026';
 
-/// Backend root directory (<backend>/), matching the `.env` lookup above.
-const backendRoot = path.resolve(__dirname, '../../');
-
-/// `<backend>/src/` — the directory older versions of this file resolved the
-/// service account from (`path.dirname(__dirname)`), where existing working
-/// installations may still keep the file.
-const srcRoot = path.dirname(__dirname);
-
-/// Resolves the Firebase Admin service-account JSON.
-///
-/// The documented location is `<backend>/serviceAccount.json`. Older code
-/// resolved the path from `<backend>/src/` instead, so working installations
-/// exist with the file in *either* directory. Both are accepted (documented
-/// location first) so an upgrade can never break a running backend.
-///
-/// Only the resolved PATH is exposed here: the file's contents (private key)
-/// are never read, logged or exported by this module.
-function resolveServiceAccountPath() {
-  const configured = process.env.SERVICE_ACCOUNT_PATH || './serviceAccount.json';
-
-  const candidates = path.isAbsolute(configured)
-    ? [configured]
-    : [
-        path.resolve(backendRoot, configured), // documented: <backend>/
-        path.resolve(srcRoot, configured), // legacy:    <backend>/src/
-      ];
-
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+/**
+ * Returns true when running inside Cloud Functions / Cloud Run or the
+ * Firebase Functions Emulator, where runtime configuration comes from the
+ * platform rather than a developer's local `backend/.env` file.
+ */
+export function isCloudFunctionsRuntime(envVars = process.env) {
+  return Boolean(
+    envVars.K_SERVICE ||
+      envVars.FUNCTION_TARGET ||
+      envVars.FUNCTIONS_EMULATOR === 'true',
+  );
 }
 
-const env = {
+// Load `backend/.env` only during local standalone execution so leftover local
+// settings (`NODE_ENV=development`, `SEED_ON_START`, etc.) can never leak into
+// Cloud Functions or the Firebase Functions Emulator.
+if (!isCloudFunctionsRuntime()) {
+  dotenv.config({ path: path.join(backendRoot, '.env') });
+}
+
+/**
+ * Extract `projectId` from the JSON string Google Cloud injects in
+ * `FIREBASE_CONFIG` when explicit project env vars are omitted.
+ */
+export function parseFirebaseConfigProjectId(rawFirebaseConfig) {
+  if (!rawFirebaseConfig || typeof rawFirebaseConfig !== 'string') {
+    return '';
+  }
+  if (!rawFirebaseConfig.trim().startsWith('{')) {
+    return '';
+  }
+  try {
+    const parsed = JSON.parse(rawFirebaseConfig);
+    return typeof parsed?.projectId === 'string' ? parsed.projectId.trim() : '';
+  } catch (_err) {
+    return '';
+  }
+}
+
+export function resolveFirebaseProjectId(envVars = process.env) {
+  return (
+    envVars.FIREBASE_PROJECT_ID ||
+    envVars.GCLOUD_PROJECT ||
+    envVars.GOOGLE_CLOUD_PROJECT ||
+    parseFirebaseConfigProjectId(envVars.FIREBASE_CONFIG) ||
+    ''
+  ).trim();
+}
+
+/**
+ * Compute default Firebase Hosting origins for `<projectId>` and resolve any
+ * comma-separated `CORS_ORIGINS` override.
+ */
+export function resolveCorsOrigins(envVars = process.env) {
+  const explicit = (envVars.CORS_ORIGINS || '').trim();
+  if (explicit) {
+    return explicit
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  const projectId =
+    resolveFirebaseProjectId(envVars) || DEFAULT_FIREBASE_PROJECT_ID;
+  const origins = [
+    `https://${projectId}.web.app`,
+    `https://${projectId}.firebaseapp.com`,
+  ];
+  const nodeEnv = (envVars.NODE_ENV || 'development').trim();
+  if (nodeEnv !== 'production') {
+    origins.push('http://localhost:5173');
+  }
+  return origins;
+}
+
+/**
+ * Resolve the path to the optional local Firebase service account JSON file.
+ *
+ * Cloud Functions uses Google Cloud Application Default Credentials directly
+ * (`admin.initializeApp()`) and never requires a JSON key file. For legacy
+ * local standalone execution, we resolve in order:
+ *   1. `SERVICE_ACCOUNT_PATH` (explicit path, relative to `backend/` if not absolute)
+ *   2. `<backend>/serviceAccount.json` (canonical default)
+ *   3. `<backend>/src/serviceAccount.json` (legacy fallback if present and (2) is not)
+ */
+export function resolveServiceAccountPath({
+  serviceAccountEnv = process.env.SERVICE_ACCOUNT_PATH,
+  rootDir = backendRoot,
+  existsSync = fs.existsSync,
+} = {}) {
+  if (serviceAccountEnv && serviceAccountEnv.trim() !== '') {
+    return path.resolve(rootDir, serviceAccountEnv.trim());
+  }
+  const preferred = path.resolve(rootDir, './serviceAccount.json');
+  if (existsSync(preferred)) {
+    return preferred;
+  }
+  const legacy = path.resolve(rootDir, './src/serviceAccount.json');
+  if (existsSync(legacy)) {
+    return legacy;
+  }
+  return preferred;
+}
+
+const isCloudFunction = isCloudFunctionsRuntime();
+const nodeEnv = process.env.NODE_ENV || (isCloudFunction ? 'production' : 'development');
+
+export const env = {
   port: parseInt(process.env.PORT || '5000', 10),
-  nodeEnv: process.env.NODE_ENV || 'development',
-  corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:5173')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean),
+  nodeEnv,
+  isCloudFunction,
+  corsOrigins: resolveCorsOrigins({ ...process.env, NODE_ENV: nodeEnv }),
   serviceAccountPath: resolveServiceAccountPath(),
-  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
-  seedOnStart: process.env.SEED_ON_START === 'true',
+  firebaseProjectId: resolveFirebaseProjectId(),
+  // Automatic startup seeding is strictly forbidden in Cloud Functions and in
+  // production environments.
+  seedOnStart:
+    !isCloudFunction &&
+    nodeEnv !== 'production' &&
+    process.env.SEED_ON_START === 'true',
 };
-
-// NOTE: there is deliberately no signing secret here. Authorization is decided
-// entirely from the verified Firebase ID token plus the `role` on the caller's
-// profile document (see middleware/auth.js). A previous `ADMIN_JWT_SECRET`
-// entry was never read by any code path and defaulted to a literal string,
-// which is exactly the kind of setting that later gets mistaken for a real
-// control, so it was removed instead of being given a value.
-
 
 export default env;

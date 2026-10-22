@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 
-import '../../../services/auth_service.dart';
-import '../../../state/session_controller.dart';
-import '../../../state/session_scope.dart';
-import '../../../widgets/customapp_bar.dart';
-import '../../../widgets/custombtn.dart';
-import '../../../widgets/customtextfield.dart';
-import '../../../widgets/detailstext1.dart';
+import '../../services/auth_service.dart';
+import '../../state/session_controller.dart';
+import '../../state/session_scope.dart';
+import '../../widgets/customapp_bar.dart';
+import '../../widgets/custombtn.dart';
+import '../../widgets/customtextfield.dart';
+import '../../widgets/detailstext1.dart';
 
 /// Changes the signed-in account's password through Firebase Authentication.
 ///

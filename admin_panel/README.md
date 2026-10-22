@@ -1,21 +1,29 @@
-# admin_panel — administrator console
+# Legal Services — Admin Web Panel
 
-Flutter app (web/desktop) for users, lawyers, cases, bookings, plans,
-subscriptions, reviews, chats and notifications. Requires an account whose
-`users/{uid}` document has `role: "admin"`; the API enforces that independently,
-so a non-admin build cannot do anything an administrator could not.
+Flutter Web administrative console for managing users, lawyers, cases, bookings, tasks, wallets, chats, reviews, subscriptions, notifications, availability, and earnings on Firebase project `legal-102026`.
+
+## Production Architecture
+
+- **Hosted UI:** `https://legal-102026.web.app` (Firebase Hosting, built from `admin_panel/build/web`)
+- **Backend API:** `https://legal-102026.web.app/api` (rewritten by Firebase Hosting `/api{,/**}` to the 2nd-generation Cloud Function `api` in `us-central1`)
+- **Default API config:** `lib/config/app_config.dart` (`AppConfig.apiBaseUrl` defaults to `https://legal-102026.web.app/api`)
+
+## Development & Deployment Commands
 
 ```bash
+# Install dependencies & run checks
+cd admin_panel
 flutter pub get
-flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:5000/api
 flutter analyze
 flutter test
+
+# Run locally against the deployed Firebase API (default — no local backend server required)
+flutter run -d chrome
+
+# Run locally against Firebase Emulator Suite (`firebase emulators:start` on port 5000)
+flutter run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1:5000/api
+
+# Deploy Admin Web Panel + `/api/**` Hosting rewrites from repository root
+cd ..
+firebase deploy --only hosting --project legal-102026
 ```
-
-The console reads only its own profile document through the Firestore SDK (to
-decide whether to show any UI at all); every other read and write goes through
-the REST API. The Firestore rules that permit exactly that are in
-[`firestore.rules`](../firestore.rules) — deploy them with
-`firebase deploy --only firestore:rules` from the repository root.
-
-See the repository [README](../README.md) for the API reference and setup.

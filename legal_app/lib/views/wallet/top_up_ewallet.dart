@@ -1,10 +1,10 @@
 import 'package:legalserviceapp/views/wallet/top_upwallet_successfully.dart';
 import 'package:flutter/material.dart';
-import '../../../../constants/colors.dart';
-import '../../../../widgets/detailstext1.dart';
-import '../../../../widgets/detailstext2.dart';
-import '../../../widgets/customapp_bar.dart';
-import '../../../widgets/custombtn.dart';
+import '../../constants/colors.dart';
+import '../../widgets/detailstext1.dart';
+import '../../widgets/detailstext2.dart';
+import '../../widgets/customapp_bar.dart';
+import '../../widgets/custombtn.dart';
 
 class TopUpEWallet extends StatefulWidget {
   const TopUpEWallet({super.key});
