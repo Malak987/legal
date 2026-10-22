@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../widgets/detailstext1.dart';
+import '../widgets/detailstext1.dart';
 
 class CategoriesColumn extends StatelessWidget {
   final IconData icon;

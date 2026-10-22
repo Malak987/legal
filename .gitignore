@@ -26,6 +26,7 @@ key.properties
 .DS_Store
 Thumbs.db
 *.swp
+~$*
 .idea/
 .vscode/
 __MACOSX/

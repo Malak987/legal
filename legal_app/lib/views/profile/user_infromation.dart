@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
-import '../../../constants/colors.dart';
-import '../../../models/app_profile.dart';
-import '../../../widgets/custombtn.dart';
-import '../../../widgets/customtextfield.dart';
-import '../../../widgets/detailstext1.dart';
+import '../../constants/colors.dart';
+import '../../models/app_profile.dart';
+import '../../widgets/custombtn.dart';
+import '../../widgets/customtextfield.dart';
+import '../../widgets/detailstext1.dart';
 import '../../services/api_client.dart';
 import '../../state/session_controller.dart';
 import '../../state/session_scope.dart';

@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
-import '../../../../constants/colors.dart';
-import '../../../../widgets/custombtn.dart';
-import '../../../../widgets/detailstext1.dart';
-import '../../../../widgets/detailstext2.dart';
-import '../../../../widgets/text11.dart';
+import '../../../constants/colors.dart';
+import '../../../widgets/custombtn.dart';
+import '../../../widgets/detailstext1.dart';
+import '../../../widgets/detailstext2.dart';
+import '../../../widgets/text11.dart';
 import '../../../commonwidgets/product_data.dart' show ProductData;
 import '../../../widgets/custom_outline_button.dart';
 import '../../../widgets/customapp_bar.dart';

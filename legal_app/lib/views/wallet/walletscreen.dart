@@ -1,8 +1,8 @@
 import 'package:legalserviceapp/views/wallet/toppup.dart';
 import 'package:flutter/material.dart';
 
-import '../../../constants/colors.dart';
-import '../../../widgets/detailstext1.dart';
+import '../../constants/colors.dart';
+import '../../widgets/detailstext1.dart';
 
 
 

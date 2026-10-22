@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 
 
-import '../../../constants/colors.dart';
-import '../../../models/product_model.dart';
-import '../../../widgets/custom_outline_button.dart';
-import '../../../widgets/customapp_bar.dart';
-import '../../../widgets/custombtn.dart';
-import '../../../widgets/customtextfield.dart';
-import '../../../widgets/detailstext1.dart';
-import '../../../widgets/detailstext2.dart';
+import '../../constants/colors.dart';
+import '../../models/product_model.dart';
+import '../../widgets/custom_outline_button.dart';
+import '../../widgets/customapp_bar.dart';
+import '../../widgets/custombtn.dart';
+import '../../widgets/customtextfield.dart';
+import '../../widgets/detailstext1.dart';
+import '../../widgets/detailstext2.dart';
 import '../cartscreen/cart_screen.dart';
 
 class PastOrders extends StatefulWidget {
