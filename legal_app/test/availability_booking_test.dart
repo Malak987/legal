@@ -292,7 +292,32 @@ void _screenTests() {
         }
       }
     }
-    fail('no date on the calendar could be selected');
+    // Diagnostic: a bare "no date" tells nothing when this breaks in CI, where
+    // only the failure message is visible.
+    final calendar = find.byType(TableCalendar<int>);
+    final now = DateTime.now();
+    final widget = calendar.evaluate().isEmpty
+        ? null
+        : tester.widget<TableCalendar<int>>(calendar.first);
+    final enabled = <String>[];
+    for (var day = 1; day <= 31; day++) {
+      final date = DateTime(now.year, now.month, day);
+      if (widget?.enabledDayPredicate?.call(date) ?? false) enabled.add('$day');
+    }
+    final texts = calendar.evaluate().isEmpty
+        ? 0
+        : find
+            .descendant(of: calendar, matching: find.byType(Text))
+            .evaluate()
+            .length;
+    fail(
+      'no date on the calendar could be selected: '
+      'calendars=${calendar.evaluate().length} texts=$texts '
+      'enabledThisMonth=$enabled '
+      'cells(1)=${dayCells(1).evaluate().length} '
+      'cells(22)=${dayCells(22).evaluate().length} '
+      'pickDateHint=${find.text('Pick a date').evaluate().length}',
+    );
   }
 
   testWidgets('shows the published slots of the lawyer it was given',
