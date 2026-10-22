@@ -170,7 +170,6 @@ class _TopUpScreenState extends State<TopUpScreen> {
                 controller: _amountController,
                 label: 'Enter amount (e.g. 100)',
                 icon: Icons.attach_money,
-                keyboardType: TextInputType.number,
               ),
               const SizedBox(height: 12),
               CustomTextField(
