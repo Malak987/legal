@@ -251,36 +251,44 @@ void _screenTests() {
     await tester.pump();
   }
 
-  /// Taps calendar day cells until one of them selects an available date.
-  ///
-  /// Day numbers repeat across the visible grid (neighbouring months are shown
-  /// faintly), and a day without published availability is deliberately not
-  /// selectable — so a single hardcoded tap would be date-dependent. This tries
-  /// the candidates and returns the date the screen actually selected.
-  Future<String> selectAnyDate(WidgetTester tester) async {
-    for (var day = 1; day <= 31; day++) {
-      final candidate = find.descendant(
+  /// The calendar cells showing [day], in tree order.
+  Finder dayCells(int day) => find.descendant(
         // `find.byType` compares `runtimeType` exactly, so the generic
         // argument has to be spelled out or nothing matches.
         of: find.byType(TableCalendar<int>),
         matching: find.text('$day'),
       );
-      // A day number can appear more than once in the grid (the neighbouring
-      // months are drawn faintly), and a day without published availability is
-      // deliberately not selectable, so every candidate is tried until one of
-      // them actually changes the selection.
-      final matches = candidate.evaluate().length;
-      for (var i = matches - 1; i >= 0; i--) {
-        final cell = candidate.at(i);
-        await tester.ensureVisible(cell);
-        await tester.pump();
-        await tester.tap(cell, warnIfMissed: false);
+
+  /// Taps calendar day cells until one of them selects an available date.
+  ///
+  /// Day numbers repeat across the visible grid (the neighbouring months are
+  /// drawn faintly), and a day without published availability is deliberately
+  /// not selectable — so a single hardcoded tap would be date-dependent. This
+  /// tries the candidates and returns the date the screen actually selected.
+  ///
+  /// The finder is rebuilt and the match count re-checked before every tap:
+  /// a selection rebuilds the grid, so an index captured earlier can point past
+  /// the end.
+  Future<String> selectAnyDate(WidgetTester tester) async {
+    const prefix = 'Available slots for';
+
+    for (var day = 1; day <= 31; day++) {
+      final attempts = dayCells(day).evaluate().length;
+      for (var index = attempts - 1; index >= 0; index--) {
+        final before = dayCells(day);
+        if (before.evaluate().length <= index) continue;
+        await tester.ensureVisible(before.at(index));
         await tester.pump();
 
-        final header = find.textContaining('Available slots for');
+        final cells = dayCells(day);
+        if (cells.evaluate().length <= index) continue;
+        await tester.tap(cells.at(index), warnIfMissed: false);
+        await tester.pump();
+
+        final header = find.textContaining(prefix);
         if (header.evaluate().isNotEmpty) {
           final label = tester.widget<Text>(header.first).data ?? '';
-          return label.replaceFirst('Available slots for ', '');
+          return label.replaceFirst('$prefix ', '');
         }
       }
     }
