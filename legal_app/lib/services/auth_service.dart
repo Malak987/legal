@@ -59,6 +59,16 @@ abstract class AuthGateway {
   Future<void> deleteCurrentAccount();
 
   Future<void> signOut();
+
+  /// Changes the signed-in account's password.
+  ///
+  /// Firebase requires a *recent* sign-in for this, so the current password is
+  /// re-verified first: without that the call fails with `requires-recent-login`
+  /// instead of succeeding, and the user gets no explanation.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  });
 }
 
 /// [AuthGateway] backed by the Firebase Authentication client SDK.
@@ -143,6 +153,43 @@ class FirebaseAuthGateway implements AuthGateway {
 
   @override
   Future<void> signOut() => _auth.signOut();
+
+  @override
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw AuthException('You are not signed in.');
+    }
+
+    final email = user.email;
+    if (email == null || email.isEmpty) {
+      throw AuthException(
+        'This account has no email address, so its password cannot be changed here.',
+      );
+    }
+
+    try {
+      // Re-authenticate first: `updatePassword` on a session older than a few
+      // minutes is rejected with `requires-recent-login`, and a successful
+      // re-auth is also what proves the person at the keyboard knows the
+      // current password.
+      final credential = EmailAuthProvider.credential(
+        email: email,
+        password: currentPassword,
+      );
+      await user.reauthenticateWithCredential(credential);
+      await user.updatePassword(newPassword);
+    } on FirebaseAuthException catch (e) {
+      throw AuthException(messageForAuthError(e), code: e.code);
+    } on AuthException {
+      rethrow;
+    } catch (e) {
+      throw AuthException(messageForSetupError(e));
+    }
+  }
 
   /// Maps Firebase error codes onto user-facing text.
   static String messageForAuthError(FirebaseAuthException e) {
@@ -290,6 +337,19 @@ class AuthService {
   }
 
   Future<void> signOut() => gateway.signOut();
+
+  /// Changes the password of the signed-in account.
+  ///
+  /// Deliberately does not touch the backend: the password is Firebase
+  /// Authentication's, and no server-side record of it exists.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) =>
+      gateway.changePassword(
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
 
   /// Releases the HTTP client held by [api].
   void dispose() => api.dispose();

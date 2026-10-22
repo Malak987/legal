@@ -47,8 +47,15 @@ const env = {
     .filter(Boolean),
   serviceAccountPath: resolveServiceAccountPath(),
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
-  adminJwtSecret: process.env.ADMIN_JWT_SECRET || 'dev-secret',
   seedOnStart: process.env.SEED_ON_START === 'true',
 };
+
+// NOTE: there is deliberately no signing secret here. Authorization is decided
+// entirely from the verified Firebase ID token plus the `role` on the caller's
+// profile document (see middleware/auth.js). A previous `ADMIN_JWT_SECRET`
+// entry was never read by any code path and defaulted to a literal string,
+// which is exactly the kind of setting that later gets mistaken for a real
+// control, so it was removed instead of being given a value.
+
 
 export default env;

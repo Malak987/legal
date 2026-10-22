@@ -290,6 +290,24 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Changes the signed-in account's password.
+  ///
+  /// Throws [AuthException] with a message that can be shown as-is. The session
+  /// itself is untouched on success — Firebase re-authenticates the same user,
+  /// so the account stays signed in.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    if (!isSignedIn) {
+      throw AuthException('You are not signed in.');
+    }
+    await _auth.changePassword(
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+  }
+
   /// Signs out of Firebase and clears every cached value.
   Future<void> signOut() async {
     _generation++; // discard any in-flight profile read

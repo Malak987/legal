@@ -10,9 +10,11 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:legalserviceapp/services/auth_service.dart';
 import 'package:legalserviceapp/state/session_controller.dart';
 import 'package:legalserviceapp/state/session_scope.dart';
+import 'package:legalserviceapp/views/search/search_screen.dart';
 
 import 'support/fakes.dart';
 
@@ -126,5 +128,116 @@ void main() {
 
     expect(find.text('auth'), findsOneWidget);
     expect(find.text('home:Sara Ali'), findsNothing);
+  });
+
+  group('SearchScreen', _searchTests);
+}
+
+// ---------------------------------------------------------------------------
+// Search screen: it renders whatever `GET /api/lawyers?search=` returns.
+//
+// This replaces the old behaviour where the list came from `ProductData()`
+// sample rows and the text field was not connected to anything. The tests pin
+// the three states that used to be impossible to reach: real results, an empty
+// directory, and a failed request with a retry action.
+// ---------------------------------------------------------------------------
+
+/// Waits (in real time) for the screen's initial request to settle, then
+/// renders one frame. `testWidgets` fakes timers, but the HTTP layer it awaits
+/// is a real future, so the wait must happen inside `runAsync`.
+Future<void> _settleSearch(WidgetTester tester) async {
+  await tester.runAsync(() async {
+    for (var i = 0; i < 60; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  });
+  await tester.pump();
+}
+
+Widget _searchApp(SessionController session) {
+  return SessionScope(
+    controller: session,
+    child: const MaterialApp(home: SearchScreen()),
+  );
+}
+
+SessionController _searchSession({
+  required Future<http.Response> Function(http.Request request, int attempt)
+      handler,
+}) {
+  return SessionController(
+    auth: AuthService(
+      gateway: FakeAuthGateway(),
+      api: testApiClient(handler: handler),
+    ),
+  );
+}
+
+Map<String, dynamic> _lawyerJson(String name, String city) => {
+      'id': 'lawyer-$name',
+      'name': name,
+      'specialty': 'Family law',
+      'location': city,
+      'rating': 4.5,
+      'price': '250 EGP',
+    };
+
+void _searchTests() {
+  testWidgets('renders the lawyers returned by the API', (tester) async {
+    final session = _searchSession(
+      handler: (_, __) async => jsonOk({
+        'items': [
+          _lawyerJson('Ahmed Hassan', 'Cairo'),
+          _lawyerJson('Mona Fahmy', 'Giza'),
+        ],
+        'total': 2,
+        'page': 1,
+        'limit': 100,
+        'totalPages': 1,
+      }),
+    );
+    addTearDown(session.dispose);
+
+    await tester.pumpWidget(_searchApp(session));
+    await _settleSearch(tester);
+
+    expect(find.text('Ahmed Hassan'), findsOneWidget);
+    expect(find.text('Mona Fahmy'), findsOneWidget);
+    // Real rows, not the old sample catalogue.
+    expect(find.byType(TextField), findsOneWidget);
+  });
+
+  testWidgets('reports an empty directory instead of sample rows',
+      (tester) async {
+    final session = _searchSession(
+      handler: (_, __) async => jsonOk({
+        'items': const <Object>[],
+        'total': 0,
+        'page': 1,
+        'limit': 100,
+        'totalPages': 0,
+      }),
+    );
+    addTearDown(session.dispose);
+
+    await tester.pumpWidget(_searchApp(session));
+    await _settleSearch(tester);
+
+    expect(find.text('No lawyers listed yet'), findsOneWidget);
+  });
+
+  testWidgets('a failed request shows the error and a retry action',
+      (tester) async {
+    final session = _searchSession(
+      handler: (_, __) async => jsonError(500, 'Server exploded'),
+    );
+    addTearDown(session.dispose);
+
+    await tester.pumpWidget(_searchApp(session));
+    await _settleSearch(tester);
+
+    expect(find.text('Search failed'), findsOneWidget);
+    expect(find.text('Server exploded'), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
   });
 }

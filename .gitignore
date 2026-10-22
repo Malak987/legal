@@ -1,0 +1,48 @@
+# =============================================================================
+# Repository-wide ignore rules.
+#
+# Deliberately NOT ignored (they are build inputs, not secrets):
+#   legal_app/android/app/google-services.json
+#   admin_panel/android/app/google-services.json
+#   legal_app/lib/config/firebase_options.dart
+#   admin_panel/lib/config/firebase_options.dart
+# Those files identify the Firebase project/app; they contain no private key
+# and the app cannot start without them. The server-side service-account JSON
+# IS a private key and is ignored below.
+# =============================================================================
+
+# --- Secrets / credentials (never commit) ---
+.env
+.env.*
+!.env.example
+serviceAccount.json
+serviceAccount*.json
+service-account*.json
+*.jks
+*.keystore
+key.properties
+
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+__MACOSX/
+*.iml
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+*.log
+
+# --- Flutter / Dart ---
+.dart_tool/
+.packages
+.pub/
+.pub-cache/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+coverage/

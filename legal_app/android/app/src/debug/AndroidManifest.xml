@@ -4,4 +4,10 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Development only. The local backend is served over plain HTTP
+         (http://10.0.2.2:5000 for the Android emulator, or a LAN address for a
+         physical device), so cleartext must be permitted for debug/profile
+         builds. It is deliberately absent from src/main, which means RELEASE
+         builds require an HTTPS backend. -->
+    <application android:usesCleartextTraffic="true"/>
 </manifest>

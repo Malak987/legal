@@ -117,7 +117,7 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
 
   Future<String> fetchAIResponse(String text) async {
     // IMPORTANT: Hardcoding API keys is insecure. Use environment variables or a secure config service.
-    const String apiKey = "AIzaSyCMK7RTPGB2S3YowLkUGh8aYSi4G_bZJsg"; // Replace with your actual key securely
+    const String apiKey = "YOUR_GEMINI_API_KEY"; // Replace with your actual key securely
     final Uri url = Uri.parse(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
     );

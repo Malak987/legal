@@ -8,7 +8,6 @@ import '../../../widgets/detailstext1.dart';
 import '../../services/api_client.dart';
 import '../../state/session_controller.dart';
 import '../../state/session_scope.dart';
-import 'edit_profile.dart'; // Import the EditProfile screen
 
 /// Shows the signed-in user's own `users/{uid}` profile.
 ///
@@ -133,19 +132,12 @@ class _UserInformationState extends State<UserInformation> {
                       text1: 'User Info',
                       size: 16,
                     ),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.of(context).push(MaterialPageRoute(builder: (context) => const EditProfile())); // Navigate to EditProfile screen
-                      },
-                      child: const Text(
-                        'Edit',
-                        style: TextStyle(
-                          color: AppColors.buttonColor,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
+                    // This screen already IS the editor: the fields below
+                    // are bound to the loaded profile and "Save Information"
+                    // calls SessionController.updateProfile. The old header
+                    // "Edit" button opened a duplicate screen of sample data,
+                    // so it is replaced by a spacer that keeps the title centred.
+                    const SizedBox(width: 48),
                   ],
                 ),
               ),

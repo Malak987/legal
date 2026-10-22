@@ -14,8 +14,24 @@ import '../home/details.dart';
 /// Public on purpose: the backend serves this list without a token, so the
 /// screen works before sign-in as well. The lawyer detail screen is still a
 /// static mock — tapping a card does not pass the loaded document to it yet.
+///
+/// The same widget serves two menu entries: "Popular Lawyers"
+/// (`onlyTop: false`, `isPopular=true`) and "Top Lawyers" (`onlyTop: true`,
+/// `isTop=true`). The second one used to be a separate screen rendering
+/// sample products; both now read the same real endpoint with a different
+/// server-side filter.
 class PopularLawyersScreen extends StatefulWidget {
-  const PopularLawyersScreen({super.key});
+  const PopularLawyersScreen({
+    super.key,
+    this.onlyTop = false,
+    this.title = 'Popular Lawyers',
+  });
+
+  /// When true, lists `isTop` lawyers instead of `isPopular` ones.
+  final bool onlyTop;
+
+  /// Header text, so one screen can serve both menu entries.
+  final String title;
 
   @override
   State<PopularLawyersScreen> createState() => _PopularLawyersScreenState();
@@ -40,8 +56,10 @@ class _PopularLawyersScreenState extends State<PopularLawyersScreen> {
   }
 
   Future<void> _reload() {
-    final future =
-        SessionScope.read(context).repository.fetchLawyers(isPopular: true);
+    final future = SessionScope.read(context).repository.fetchLawyers(
+      isPopular: widget.onlyTop ? null : true,
+      isTop: widget.onlyTop ? true : null,
+    );
     setState(() {
       _lawyers = future;
     });
@@ -58,7 +76,7 @@ class _PopularLawyersScreenState extends State<PopularLawyersScreen> {
             children: [
               const SizedBox(height: 12),
 
-              const CustomAppBar(text: 'Popular Lawyers', text1: ''),
+              CustomAppBar(text: widget.title, text1: ''),
               const SizedBox(height: 12),
 
               Expanded(
@@ -80,11 +98,16 @@ class _PopularLawyersScreenState extends State<PopularLawyersScreen> {
                     }
                     final lawyers = snapshot.data ?? const <Product>[];
                     if (lawyers.isEmpty) {
-                      return const _Status(
+                      return _Status(
                         icon: Icons.search_off,
-                        title: 'No lawyers listed yet',
-                        detail:
-                            'Lawyers added by an administrator will appear here.',
+                        title: widget.onlyTop
+                            ? 'No top-rated lawyers yet'
+                            : 'No lawyers listed yet',
+                        detail: widget.onlyTop
+                            ? 'Lawyers marked as top-rated by an administrator '
+                                'will appear here.'
+                            : 'Lawyers added by an administrator will appear '
+                                'here.',
                       );
                     }
 

@@ -33,6 +33,14 @@ class FakeAuthGateway implements AuthGateway {
   int signInCalls = 0;
   int deleteCalls = 0;
   int signOutCalls = 0;
+  int changePasswordCalls = 0;
+
+  /// Arguments of the last [changePassword] call, for assertions.
+  String? lastCurrentPassword;
+  String? lastNewPassword;
+
+  /// Failure the next [changePassword] should throw, or `null` for success.
+  AuthException? changePasswordError;
 
   @override
   Stream<AuthUser?> get authStateChanges => _changes.stream;
@@ -79,6 +87,18 @@ class FakeAuthGateway implements AuthGateway {
   Future<void> signOut() async {
     signOutCalls++;
     _set(null);
+  }
+
+  @override
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    changePasswordCalls++;
+    lastCurrentPassword = currentPassword;
+    lastNewPassword = newPassword;
+    final error = changePasswordError;
+    if (error != null) throw error;
   }
 
   /// Emits an auth change, as the Firebase stream would.

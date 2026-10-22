@@ -1,376 +1,345 @@
-# 🏛️ Legal Services App — Backend, Database & Admin Panel
+# Legal Services Platform
 
-This folder contains everything needed to run the Legal Services application with a
-real database and an admin dashboard.
+A legal-services product with three parts:
 
-```
-تطبيق/
-├── legal_app/                 → The Flutter mobile app (connected to the API)
-├── backend/                   → REST API server (Node.js + Express + Cloud Firestore)
-└── admin_panel/               → Admin dashboard (Flutter Web)
-```
+| Part | Path | What it is |
+|------|------|------------|
+| API | `backend/` | Node.js + Express REST API over Firebase Firestore, authenticated with Firebase ID tokens |
+| Admin console | `admin_panel/` | Flutter (web/desktop) admin app for users, lawyers, cases, bookings and the rest |
+| Mobile app | `legal_app/` | Flutter client for clients and lawyers |
+
+Firebase Authentication owns credentials. Firestore owns the data. **Every
+business read and write goes through the API** — the mobile app has no Firestore
+client dependency at all, and the admin console uses the Firestore SDK for
+exactly one document (its own profile, to check its role). See section 7.
 
 ---
 
 ## 1. Architecture
 
 ```
-  Flutter Mobile App  ──┐
-  (Firebase Auth)       │   Authorization: Bearer <Firebase ID Token>
-                        ├──►  REST API (backend:5000)  ──►  Cloud Firestore
-  Flutter Web Admin  ───┘
+legal_app (Flutter) ──┐
+                      ├── HTTPS + Firebase ID token ──> backend (Express) ──> Firestore
+admin_panel (Flutter) ┘                                   Firebase Admin SDK
+        │
+        └── Firestore SDK: reads ONLY users/{own uid} (role check) ──> Firestore
 ```
 
-- **Firebase Authentication** — sign in / sign up for both the app and the admin panel.
-- **Cloud Firestore** — the database (collections listed below).
-- **Backend (Express)** — a REST API in front of Firestore that validates every request,
-  enforces roles, and serves both clients.
-- **Admin panel (Flutter Web)** — manages users, lawyers, cases, bookings, reviews,
-  plans, notifications and chats.
+- `backend/src/index.js` — Express app: helmet, CORS allowlist, rate limit, routes, error handler.
+- `backend/src/routes/*.js` — one router per resource, mounted under `/api`.
+- `backend/src/middleware/auth.js` — token verification and the authorization helpers (`requireRole`, `requireSelfOrAdmin`, `ownerIdFor`, `isOwner`, `lockOwnerOnUpdate`).
+- `backend/src/utils/validators.js` — Joi schemas; `validate(schema, body)` strips unknown keys, which is what makes `role`/`uid` injection impossible.
+- `backend/src/utils/firestore.js` — the only module that touches collections (`listDocs`, `getDocById`, `createDoc`, `updateDoc`, `deleteDoc`).
+- `legal_app/lib/state/session_controller.dart` — the single source of authentication truth for the mobile app (a `ChangeNotifier` behind `SessionScope`).
+- `legal_app/lib/services/` — `api_client.dart` (transport), `auth_service.dart` (auth rules), `app_repository.dart` (collection reads/writes).
 
 ---
 
-## 2. Firestore collections
+## 2. Data model: Firebase Authentication vs. `users/{uid}`
 
-| Collection              | Purpose                                          |
-|-------------------------|--------------------------------------------------|
-| `users`                 | App users (client / lawyer / admin) with roles   |
-| `lawyers`               | Lawyers & services (price, specialty, rating...)  |
-| `cases`                 | Legal cases / matters                             |
-| `tasks`                 | Case-related tasks with priority & status         |
-| `bookings`              | Appointments (Pending / Active / Completed / Cancelled) |
-| `reviews`               | Client reviews with ratings                       |
-| `plans`                 | Subscription plans (Basic / Silver / Premium)     |
-| `subscriptions`         | Active user subscriptions                         |
-| `notifications`         | Notifications sent to users                       |
-| `chats` (+`messages`)   | Conversations between users                       |
-| `wallets`               | Wallet balances                                   |
-| `wallet_transactions`   | Wallet credit/debit history                       |
-| `earnings`              | Earnings overview per user                        |
-| `availability`          | Lawyers' available slots by date                  |
-| `favorites`             | Favorite lawyers per user                         |
+These are two different things and the distinction matters:
+
+- **Firebase Authentication** holds the *credential*: email, password hash, uid.
+  It is the only place a password exists.
+- **Firestore `users/{uid}`** holds the *profile*: name, email, phone, address,
+  `role`. The document id is always the Firebase uid.
+
+An account can therefore authenticate and still have no profile (a uid created
+by hand in the Firebase console, or by the old seed script). The app treats that
+as recoverable rather than broken: `POST /api/users/me` creates the missing
+document, with the uid and email taken from the **verified token**.
+
+```
+sign-up:  Firebase signUp ──► POST /api/users/me ──► users/{uid} (role: client)
+                    │                    │
+                    │                    └─ on failure: delete the account just created
+                    └─ token carries uid + email; the body carries only `name`
+```
+
+Roles: **`client`, `lawyer`, `admin`** — three, no others. Self-service
+registration always produces `client`; `role` is stripped from every
+self-service payload, so a caller cannot promote themselves. Promotion is
+`PATCH /api/users/:id/role`, admin-only.
+
+Collections: `users`, `lawyers`, `cases`, `bookings`, `tasks`, `chats`
+(+ `messages` subcollection), `reviews`, `favorites`, `wallet`,
+`transactions`, `idempotency`, `plans`, `subscriptions`, `notifications`,
+`availability`, `earnings`.
 
 ---
 
 ## 3. Setup
 
-### Step A — Firebase console
+### Step A — Firebase project
 
-1. Create (or open) your Firebase project.
-2. **Authentication** → Sign-in method → enable **Email/Password**.
-3. **Firestore Database** → create in production mode.
-4. **Project Settings → General → Your apps** → register a **Web app**.
-5. **Project Settings → Service accounts** → **Generate new private key** and save the
-   downloaded JSON.
+1. Create the project, enable **Authentication → Email/Password**.
+2. Create a **Firestore** database in **production mode**. Deploy the rules in
+   `firestore.rules` (section 9) — do not run with test rules.
+3. **Project settings → Service accounts → Generate new private key** and save
+   the JSON as `backend/serviceAccount.json`. This file is a private key and is
+   git-ignored. Never commit it, never paste it into an issue.
+4. Register the Android app (`flutterfire configure`) for both Flutter apps.
+   The committed `google-services.json` / `firebase_options.dart` files are
+   project identifiers, not secrets, and are required for the build.
 
 ### Step B — Backend
-
-```powershell
-cd backend
-npm install
-Copy-Item .env.example .env         # then edit if needed
-# Put the downloaded service-account JSON here:
-#   backend/serviceAccount.json
-npm run seed                        # creates sample data + the admin account
-npm start                           # http://localhost:5000
-```
-
-Check it is alive: <http://localhost:5000/api/health>
-
-The seed creates the sample accounts (admin, client, lawyer). Their passwords
-come from the environment and are never stored in this repository:
-
-```powershell
-$env:SEED_ADMIN_PASSWORD  = "<choose one>"
-$env:SEED_CLIENT_PASSWORD = "<choose one>"
-$env:SEED_LAWYER_PASSWORD = "<choose one>"
-npm run seed
-```
-
-Each value must be at least 12 characters. If any of them is missing the seed
-stops before writing anything and names the variables it needs. See
-`backend/.env.example` for the variable names.
-
-### Step C — Fill in the Firebase options
-
-Two files contain placeholders — replace the values with your project's `firebaseConfig`:
-
-| File                                                   | Used by          |
-|--------------------------------------------------------|------------------|
-| `backend/serviceAccount.json`                          | backend          |
-| `admin_panel/lib/config/firebase_options.dart`         | admin panel      |
-| `legal_app/lib/config/firebase_options.dart`            | mobile app      |
-
-Both `firebase_options.dart` files must point to the **same** Firebase project.
-
-### Step D — Run the admin panel
-
-```powershell
-cd admin_panel
-flutter pub get
-flutter run -d chrome
-```
-
-Sign in with `admin@legalapp.com` and the password you supplied in `SEED_ADMIN_PASSWORD`.
-
-> If the admin panel's API base URL needs changing (e.g. deployed backend):
-> `flutter run -d chrome --dart-define=API_BASE_URL=https://your-domain.com/api`
-
-### Step E — Run the mobile app
-
-```powershell
-cd legal_app
-flutter pub get
-flutter run
-```
-
-The app picks a default base URL per platform, and `--dart-define=API_BASE_URL`
-always overrides it:
-
-| Target | Without `--dart-define` | Notes |
-|--------|------------------------|-------|
-| Android emulator | `http://10.0.2.2:5000/api` | `10.0.2.2` is the emulator's alias for your computer. `localhost` would be the emulated device itself. |
-| Web (`flutter run -d chrome`), Linux/Windows/macOS desktop, iOS simulator | `http://localhost:5000/api` | The backend must be running on the same machine. |
-| Physical Android/iOS device | **must** be set | No default can reach your computer; pass its LAN IP. |
-
-```powershell
-flutter run --dart-define=API_BASE_URL=http://192.168.1.10:5000/api
-```
-
-For a physical device the phone and the computer must be on the same network, the
-backend must listen on `0.0.0.0` (not only `127.0.0.1`), and port 5000 must be
-allowed through the firewall. The Android manifest already permits cleartext
-HTTP for local development.
-
-> Registration and sign-in need **real** Firebase options. `legal_app` currently
-> ships working `android` values only; the `web` and `ios` blocks are still
-> placeholders, so `Firebase.initializeApp` fails there and authentication
-> reports "authentication is not configured for this build".
-
----
-
-## 4. API reference
-
-Base URL: `http://localhost:5000/api`
-All protected routes require `Authorization: Bearer <Firebase ID Token>`.
-
-### Public
-
-| Method | Path                  | Description                |
-|--------|-----------------------|----------------------------|
-| GET    | `/health`             | Service status             |
-
-### Lawyers
-
-| Method | Path                  | Description                       |
-|--------|-----------------------|-----------------------------------|
-| GET    | `/lawyers`            | List (supports `search`, `isPopular`, `isTop`, paging) |
-| GET    | `/lawyers/:id`        | Single lawyer                    |
-| POST   | `/lawyers`            | Create *(admin/lawyer)*           |
-| PUT    | `/lawyers/:id`        | Update *(admin/lawyer)*           |
-| DELETE | `/lawyers/:id`        | Delete *(admin)*                  |
-
-### Cases / Tasks / Bookings / Subscriptions
-
-Standard CRUD under `/cases`, `/tasks`, `/bookings`, `/subscriptions`.
-Non-admins can only access their own records.
-
-### Registration and profiles
-
-Registration is split in two so the password never reaches this backend:
-the Firebase client SDK creates the Authentication account, then the app calls
-the route below to create the matching Firestore document.
-
-| Method | Path             | Description                                                        |
-|--------|------------------|--------------------------------------------------------------------|
-| POST   | `/users/me`      | Provision the caller's own `users/{uid}` profile. Authenticated. Body: `{ name, phone?, avatar?, address? }`. `uid` and `email` come from the verified ID token; `role` is always `client`. Answers `409` when a profile already exists. |
-
-Roles are never granted here: an administrator promotes a user with
-`PATCH /users/:id/role`.
-
-#### Sign-up sequence (one flow, no password on the wire)
-
-1. `createUserWithEmailAndPassword` on the Firebase **client** SDK. Firebase
-   owns the credential and the uid; the password never leaves the device.
-2. `POST /api/users/me` with the fresh ID token and `{ name }`. The backend
-   writes `users/{uid}` with `role: 'client'`, taking the uid and the email from
-   the verified token. A `role` or `email` sent in the body is stripped.
-3. Only when both steps succeed does the app load the profile and show the Home
-   screen. A failed registration never navigates to Home.
-
-If step 2 fails, the app deletes **the account created by that attempt** so no
-half-registered user is left behind (an Auth account without a profile cannot
-hold a role and is invisible to the admin panel). The rollback is deliberately
-scoped: a pre-existing account — created by hand in the Firebase console, or by
-an earlier attempt — is never deleted.
-
-Sign-in reuses the same provisioning route. When an account authenticates but
-has no profile (a legacy or console-created user), the app calls
-`POST /api/users/me` once with a name derived from the email, which yields an
-ordinary `client` profile. An existing profile is never rewritten: the route
-answers `409` and the stored document — including a `lawyer` or `admin` role —
-is read back untouched.
-
-#### Firebase Auth accounts vs `users/{uid}` profiles
-
-These are two different things and the app treats them as such:
-
-| | Firebase Authentication | Firestore `users/{uid}` |
-|---|---|---|
-| Created by | the client SDK on sign-up | `POST /api/users/me` |
-| Holds | email, password hash, uid, disabled flag | `name`, `phone`, `address`, `avatar`, `role`, `email` |
-| Joined by | the document id **is** the Auth uid | |
-| Admin list shows | nothing | every profile document |
-
-A signed-in Firebase user is therefore *not* automatically a client with a
-profile, and the admin Users list only reflects provisioning. That is why the
-app provisions before entering protected screens.
-
-Trusted fields — writable by no client, whatever the app sends:
-
-- `role` is set by the server (`client` on provisioning) and only changes via
-  the admin-only `PATCH /users/:id/role`.
-- `uid` is the verified token's uid; it is never read from a request body.
-- `email` is taken from the token on provisioning; a non-admin change through
-  `PUT /users/:id` is rejected.
-
-The Flutter app never treats "authenticated" as "administrator": the only
-admin signal it uses is a profile whose `role` is exactly `admin`, and no screen
-was wired to admin-only backend routes in this phase.
-
-### Users (admin)
-
-| Method | Path                  | Description                                    |
-|--------|-----------------------|------------------------------------------------|
-| GET    | `/users`              | List (supports `search`, `role`, paging) *(admin)* |
-| GET    | `/users/:id`          | Single profile *(self or admin)*               |
-| PUT    | `/users/:id`          | Update profile; `role` is stripped *(self or admin)* |
-| PATCH  | `/users/:id/role`     | `{ role }` *(admin)*                           |
-| DELETE | `/users/:id`          | Delete profile + Auth account *(admin)*        |
-
-### Wallet
-
-| Method | Path                          | Description                     |
-|--------|-------------------------------|---------------------------------|
-| GET    | `/wallet/:userId`             | Balance + recent transactions   |
-| POST   | `/wallet/transactions`        | `{ userId, type, amount, description }` |
-
-### Chats / Notifications / Reviews / Plans / Availability / Favorites / Earnings
-
-See `backend/src/routes/` — each file is a self-contained, documented router.
-
-### Dashboard
-
-| Method | Path               | Description                       |
-|--------|--------------------|-----------------------------------|
-| GET    | `/dashboard/stats` | Aggregate metrics *(admin only)*  |
-
----
-
-## 5. Running the tests
-
-**Backend** (Node's built-in runner, in-memory Firebase doubles — no project,
-no credentials, no writes):
 
 ```bash
 cd backend
 npm ci
-npm test
+cp .env.example .env          # then edit it
+npm test                      # 420 tests, no Firebase project required
+npm run dev                   # http://localhost:5000/api/health
 ```
 
-Single suite: `node --test test/profile_security.test.js`.
+The API needs nothing but the service account to start. There is no signing
+secret to configure: authorization comes from the verified ID token plus the
+`role` on the caller's profile document.
 
-| Suite | Covers |
-|-------|--------|
-| `test/registration.test.js` | profile provisioning contract, duplicate/overwrite rules, admin-list visibility after provisioning |
-| `test/profile_security.test.js` | role escalation attempts, malformed/legacy profile documents, admin-only routes, token-vs-body precedence |
+**Seeding (optional, never against production).** `npm run seed` creates demo
+accounts and documents. It is *not* idempotent — every run adds another copy of
+the demo data — and it refuses to start unless a password is supplied for each
+account it creates:
 
-**Flutter** (requires a Flutter SDK; there is no local SDK in the environment
-this phase was developed in, so these run in CI only):
+```bash
+SEED_ADMIN_PASSWORD=... SEED_CLIENT_PASSWORD=... SEED_LAWYER_PASSWORD=... npm run seed
+```
+
+Each value must be at least 12 characters and is never defaulted, printed or
+committed; the variables are documented in `.env.example` and nowhere with a
+value. `SEED_ON_START` stays `false`: turning it on re-seeds on every boot.
+
+### Step C — Admin console
+
+```bash
+cd admin_panel
+flutter pub get
+flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:5000/api
+```
+
+The admin console refuses to continue unless the signed-in account's
+`users/{uid}` document says `role: "admin"`.
+
+### Step D — Mobile app
 
 ```bash
 cd legal_app
 flutter pub get
-flutter analyze --no-fatal-infos --no-fatal-warnings   # compile gate
-flutter test
-dart format --output=none --show=changed lib test      # report only
+flutter run --dart-define=API_BASE_URL=http://10.0.2.2:5000/api
 ```
 
-The `Mobile app (analyze + test)` job in `.github/workflows/ci.yml` runs exactly
-these on every push and pull request. Analysis is a *compile* gate: errors fail
-the job, pre-existing info/warning lints are printed but do not. Formatting is
-reported, never gated, because most of the app predates `dart format`.
+---
 
-| Test | Covers |
+## 4. Choosing the API base URL
+
+`ApiClient` resolves the base URL once, at compile time:
+
+1. `--dart-define=API_BASE_URL=...` always wins.
+2. Otherwise Android gets `http://10.0.2.2:5000/api` (the emulator's alias for
+   the host machine's loopback).
+3. Otherwise `http://localhost:5000/api`.
+
+| Target | Command |
+|--------|---------|
+| Android emulator | `flutter run --dart-define=API_BASE_URL=http://10.0.2.2:5000/api` |
+| Physical Android device | `flutter run --dart-define=API_BASE_URL=http://<your-lan-ip>:5000/api` (backend must listen on `0.0.0.0`, port 5000 open) |
+| Web / desktop / iOS simulator | `flutter run --dart-define=API_BASE_URL=http://localhost:5000/api` |
+
+`localhost` inside an Android emulator is the *emulated device itself*, which is
+why the emulator default is `10.0.2.2` and why a physical device needs the LAN
+address.
+
+**Cleartext HTTP is permitted only in debug and profile builds.** The release
+manifest has no `usesCleartextTraffic`, so a release APK must point at an HTTPS
+backend:
+
+```bash
+flutter build apk --dart-define=API_BASE_URL=https://api.example.com/api
+```
+
+---
+
+## 5. API reference
+
+All responses use `{ success, message, data }`. Lists use
+`{ items, total, page, limit, totalPages }` inside `data`. Protected routes
+require `Authorization: Bearer <Firebase ID token>`.
+
+### Public
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/health` | Liveness |
+| GET | `/api/lawyers` | `?search=&isPopular=&isTop=&page=&limit=` — searches name, specialty, location; sorted by rating |
+| GET | `/api/lawyers/:id` | |
+| GET | `/api/availability` | Lawyer slots |
+| GET | `/api/availability/:id` | |
+| GET | `/api/plans`, `/api/plans/:id` | Subscription plans |
+| GET | `/api/reviews`, `/api/reviews/:id` | Author ids are stripped from the payload |
+
+### Registration and profiles
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/api/users/me` | Provisions the caller's profile. `name` required (2–80 chars). uid and email come from the token; `role`/`uid` in the body are stripped. **201** created, **409** already exists (the existing document is never overwritten), **401** no/invalid token, unverified email allowed (this build has no verification flow) |
+| GET | `/api/users/:id` | Self or admin |
+| PUT | `/api/users/:id` | Self or admin. `name` + `email` required. Non-admins cannot change `email`, `role`, `uid` or `userId` |
+| GET | `/api/users` | Admin. `?role=&search=&page=&limit=` |
+| PATCH | `/api/users/:id/role` | Admin. Body `{ role: client\|lawyer\|admin }` |
+| DELETE | `/api/users/:id` | Admin |
+
+### Authenticated resources
+
+Each of `cases`, `bookings`, `tasks`, `subscriptions` supports
+`GET /`, `GET /:id`, `POST /`, `PUT /:id`, `DELETE /:id`. Non-admins are always
+scoped to their own records; `userId` in a body cannot transfer ownership.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/favorites/:userId`, POST `/api/favorites`, DELETE `/api/favorites/:id` | Self-scoped; the POST body has no `userId` — it comes from the token |
+| GET | `/api/wallet/:userId` | Self or admin; balance + recent transactions |
+| POST | `/api/wallet/transactions` | A user may **debit** their own wallet; only an admin may **credit** (there is no payment provider integration yet). Idempotent per `idempotencyKey` |
+| GET/POST | `/api/chats` | `POST /api/chats/:id/messages`; participants only |
+| GET | `/api/notifications/:userId` | Self or admin |
+| GET/POST/PUT/DELETE | `/api/notifications` | Admin-only cross-user routes |
+| GET | `/api/earnings/:userId` | Self or admin |
+| GET | `/api/dashboard/stats` | Admin |
+| POST | `/api/reviews` | One review per (author, lawyer); author comes from the token |
+
+---
+
+## 6. Running the tests
+
+```bash
+cd backend      && npm test                 # 420 tests, Node 22, in-memory Firestore double
+cd admin_panel   && flutter analyze && flutter test
+cd legal_app     && flutter analyze && flutter test
+```
+
+Backend tests never touch a real Firebase project: `backend/test/helpers/harness.js`
+provides an in-memory Firestore double and a stubbed token verifier.
+
+Notable suites:
+
+| File | Covers |
 |------|--------|
-| `test/api_client_test.dart` | base-URL selection, bearer header, envelope unwrapping, 401 refresh retry, non-JSON and error responses, provisioning 409 fallback, no `role` in update bodies |
-| `test/auth_lifecycle_test.dart` | registration/provisioning/rollback scoping, legacy-profile provisioning, sign-in failures, session restoration, sign-out, routing gate |
-| `test/widget_test.dart` | the auth boundary: no protected UI while resolving, auth flow when signed out, signed-in shell, sign-out |
+| `registration.test.js` | provisioning, 409 on duplicate, token-derived identity, no self-promotion |
+| `profile_security.test.js` | role/uid injection, admin-only promotion, self-serve profile updates |
+| `ownership.test.js`, `cases/…` | per-record ownership across resources |
+| `chats_authorization.test.js`, `chats_identity.test.js` | participant-only access, identity spoofing |
+| `wallet.test.js` | credits admin-only, insufficient funds, idempotency, currency |
+| `legal_app/test/` | API client, auth lifecycle, session gate, search screen — all with fakes |
 
-All Flutter tests use fakes (`test/support/fakes.dart`) and a `MockClient`; they
-never touch a live Firebase project.
-
----
-
-## 6. Security notes
-
-- Passwords are handled by Firebase Authentication (never stored in Firestore).
-- The API verifies the ID token on every protected request and checks the user's role.
-- Firestore should stay in **production mode** (rules locked down) since all access goes
-  through the backend / authenticated clients.
-- Change `ADMIN_JWT_SECRET`, and never deploy with a seed password you have used anywhere else.
+CI (`.github/workflows/ci.yml`) runs the backend suite, then `flutter analyze`
+and `flutter test` for both Flutter apps. Analysis is a compile gate: errors
+fail the job, pre-existing info/warning lints are printed but do not.
 
 ---
 
-## 7. Known limitations
+## 7. Security notes
 
-Honest list of what this phase did **not** finish, so nothing here looks live
-when it is not:
+**Identity.** `authenticate()` verifies the ID token with the Admin SDK and
+takes `uid`/`email` from the *token*, not from the request. The profile document
+is loaded for `role` and `name` only; fields of the document cannot override the
+verified caller.
 
-- **Firebase options**: only the Android block in `legal_app/lib/config/firebase_options.dart`
-  holds real values. Web and iOS still have placeholders, so
-  `Firebase.initializeApp` fails there and the app reports "authentication is
-  not configured for this build". Sign-up/sign-in work on Android only.
-- **Screens still showing sample data**: case status detail
+**Roles.** Server-assigned. `role` is stripped from provisioning and
+self-service updates. `PATCH /users/:id/role` and `DELETE /users/:id` are
+admin-only. The Flutter apps never infer admin rights from "signed in".
+
+**Authorization.** Every collection route scopes reads and writes to
+`req.user.uid` unless the caller is an admin; a record with no owner id counts
+as *not owned*. Ownership cannot be transferred through an update.
+
+**Firestore rules.** `firestore.rules` allows a signed-in account to read its
+own `users/{uid}` document and denies everything else to the client SDK. That is
+exactly the access the admin console needs; all other data is server-only. The
+rules are **not deployed by this repository's CI** — see section 9.
+
+**Secrets.**
+- `backend/.env` and `backend/serviceAccount.json` are git-ignored.
+- No private key or service account has ever been committed (verified across the
+  full git history).
+- The AI screens read `GEMINI_API_KEY` from `--dart-define`; a literal key used
+  to be committed here and must be treated as compromised — see section 8.
+
+**Android.** `INTERNET` is declared in both apps' main manifests. Cleartext
+traffic is debug/profile only.
+
+---
+
+## 8. Known limitations
+
+Honest list. Nothing below is a working feature.
+
+- **Web and iOS Firebase options are placeholders.** `firebase_options.dart`
+  has real values for Android only, so `Firebase.initializeApp` fails on web/iOS
+  and the app reports "authentication is not configured for this build".
+  Registration and sign-in are Android-only today.
+- **No physical-device run.** All verification of the Flutter code in this
+  repository is static analysis and unit/widget tests. Nobody has signed up,
+  navigated and signed out on a real device as part of this work.
+- **AI features need a key.** `GEMINI_API_KEY` must be supplied at build time
+  (`--dart-define=GEMINI_API_KEY=...`); without it the three AI screens report
+  that they are not configured. A key compiled into a client binary can always
+  be extracted — for production, proxy these calls through the backend. A
+  literal key was previously committed in
+  `views/chatbot/chatbot.dart`, `views/aidocumentsreview/aireview.dart` and
+  `views/aicasepredictiontool/aicaseprditionaitool.dart`; it has been removed
+  from the code but remains in git history, so **it must be revoked** in the
+  Google Cloud console.
+- **Screens still showing sample data**: case detail
   (`views/cases/casedashboard.dart`), lawyer detail (`views/home/details.dart`),
-  edit-profile, address book, orders and most drawer destinations. The list
-  screens for cases, favorites and lawyers now read the backend; the detail
-  screens they open do not.
-- **Writes left unwired**: creating cases/bookings/favorites from the UI is not
-  connected. `AppRepository` already has the methods, but no screen calls them.
-- **Bookings, wallet, chat, reviews, earnings** are out of scope for this phase.
-- **Flutter verification**: no Flutter SDK is available in the development
-  environment (the SDK download host is blocked), so `flutter analyze` and
-  `flutter test` have never run locally. They are wired into CI
-  (`.github/workflows/ci.yml`, job `legal-app`) and that is the first place the
-  app's analysis and tests execute. The backend suite *was* run locally and
-  passes.
-- **No request-level retry/backoff**: `ApiClient` retries once after a forced
-  token refresh (401) and gives every attempt a 20 s deadline, but a transient
-  5xx is surfaced to the user rather than retried automatically.
-- **A revoked session is reported, not force-ended.** If Firebase rejects a
-  token even after a forced refresh, the screen shows the error; the app does
-  not sign itself out automatically, because no flow has demonstrated that
-  failure yet and an automatic sign-out on any 401 would also fire for
-  authorization mistakes.
-- **`PUT /users/:id` requires `name` and `email`** even for a partial update,
-  because `userSchema` marks them required. The app sends both (the stored
-  email unchanged); a future schema split would make partial updates natural.
+  the cart/order-history screens (`views/cartscreen/`, `views/order/`,
+  `views/profile/past_orders.dart`), the address book, wallet/top-up,
+  subscriptions, reviews, chat and settings. The lists that read the API today
+  are cases, favourites, popular lawyers, top lawyers, search and the profile.
+  Bookings exist in the API but no mobile screen lists them yet.
+- **`LegalServicesAppDoc/`** is a duplicate export of an older copy of the app
+  kept for documentation. It is not built and is not maintained.
+- **Wallet top-ups are not real**: crediting requires an administrator, because
+  there is no payment provider webhook to prove money arrived.
+- **Firestore rules are written but not deployed** (section 9).
+- **No composite indexes** are required: every query that would need one was
+  written to filter on a single field and sort in memory (see the comments in
+  `routes/chats.js` and `routes/wallet.js`). `firestore.indexes.json` is
+  therefore empty on purpose.
 
 ---
 
-## 8. Deploying
+## 9. Deployment
 
-**Backend** — deploy anywhere that runs Node (Render, Railway, Fly.io, VPS). Set the
-`SERVICE_ACCOUNT_PATH`, CORS origins, and `NODE_ENV=production`.
+Backend (any Node 22 host):
 
-**Admin panel** — build for web and host the output on any static host:
-
-```powershell
-cd admin_panel
-flutter build web --dart-define=API_BASE_URL=https://api.your-domain.com/api
-# publish build/web
+```bash
+cd backend
+npm ci --omit=dev
+NODE_ENV=production \
+SERVICE_ACCOUNT_PATH=/etc/legal/serviceAccount.json \
+CORS_ORIGINS=https://admin.example.com \
+npm start
 ```
 
-**Mobile app** — build with `flutter build apk` / `flutter build ipa`, passing the same
-`--dart-define=API_BASE_URL`.
+In production the API returns generic 5xx messages, requires the CORS allowlist
+(explicitly configured origins only) and never logs token contents.
+
+Firestore rules:
+
+```bash
+firebase deploy --only firestore:rules      # from the repository root
+```
+
+`firebase.json` at the repository root points at `firestore.rules` and
+`firestore.indexes.json`. Deploying indexes *synchronises* them, which removes
+indexes that are not listed; the file is empty because no composite index is
+needed, so read it before running `--only firestore:indexes`.
+
+Android release build:
+
+```bash
+cd legal_app
+flutter build apk --release --dart-define=API_BASE_URL=https://api.example.com/api
+```
+
+The release manifest does not permit cleartext HTTP, so a `http://` URL will
+fail at runtime by design.
