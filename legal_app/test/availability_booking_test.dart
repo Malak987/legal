@@ -260,7 +260,9 @@ void _screenTests() {
   Future<String> selectAnyDate(WidgetTester tester) async {
     for (var day = 1; day <= 31; day++) {
       final candidate = find.descendant(
-        of: find.byType(TableCalendar),
+        // `find.byType` compares `runtimeType` exactly, so the generic
+        // argument has to be spelled out or nothing matches.
+        of: find.byType(TableCalendar<int>),
         matching: find.text('$day'),
       );
       if (candidate.evaluate().isEmpty) continue;
@@ -303,7 +305,8 @@ void _screenTests() {
     final fake = _Fake();
     await pumpScreen(tester, fake, lawyerId: 'lawyer-1');
 
-    final calendar = tester.widget<TableCalendar>(find.byType(TableCalendar));
+    final calendar =
+        tester.widget<TableCalendar<int>>(find.byType(TableCalendar<int>));
     final today = DateTime.now();
     expect(calendar.firstDay.year, today.year);
     expect(calendar.firstDay.month, today.month);
@@ -317,7 +320,8 @@ void _screenTests() {
     final fake = _Fake();
     await pumpScreen(tester, fake, lawyerId: 'lawyer-1');
 
-    final calendar = tester.widget<TableCalendar>(find.byType(TableCalendar));
+    final calendar =
+        tester.widget<TableCalendar<int>>(find.byType(TableCalendar<int>));
     final isEnabled = calendar.enabledDayPredicate!;
     expect(isEnabled(DateTime.now()), isFalse);
 
