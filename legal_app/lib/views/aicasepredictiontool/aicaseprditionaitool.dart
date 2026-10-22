@@ -8,6 +8,7 @@ import 'package:flutter_vector_icons/flutter_vector_icons.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
 import '../../constants/colors.dart'; // Import flutter_markdown
+import '../../config/ai_config.dart';
 
 // --- UI Constants --- (Optional, but good practice)
  Color primaryTextColor = AppColors.buttonColor; // blueGrey[800]
@@ -220,27 +221,14 @@ class CasePredictionToolState extends State<CasePredictionTool>
   }  // --- END OF HELPER ---
 
   Future<http.Response> _fetchPrediction() async {
-    // IMPORTANT: Never hardcode API keys in production code.
-    // Use environment variables or a secure configuration service.
-    const String apiKey = "AIzaSyCMK7RTPGB2S3YowLkUGh8aYSi4G_bZJsg"; // <--- Your actual key
-
-    // REMOVE THIS CHECK:
-    /*
-    if (apiKey == "AIzaSyCMK7RTPGB2S3YowLkUGh8aYSi4G_bZJsg") {
-      throw Exception("API Key not set. Please replace 'YOUR_GEMINI_API_KEY'.");
+    // The key comes from --dart-define (see lib/config/ai_config.dart). It is
+    // never committed, and an unconfigured build fails with a clear message
+    // instead of calling Google with an empty key.
+    if (!AiConfig.isConfigured) {
+      throw Exception(AiConfig.notConfiguredMessage);
     }
-    */
-    // Or, if you want a check for a *placeholder*, change the comparison string:
-    /*
-    if (apiKey == "YOUR_GEMINI_API_KEY_PLACEHOLDER") { // Replace with your actual placeholder if you use one
-       throw Exception("API Key not set. Please replace the placeholder key.");
-    }
-    */
 
-
-    // The rest of the function remains the same
-    final Uri url = Uri.parse(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey");
+    final Uri url = AiConfig.generateContentUri();
 
     final prompt = """
     Analyze the following court case details and predict the likelihood of success.
@@ -302,7 +290,7 @@ class CasePredictionToolState extends State<CasePredictionTool>
 
     return await http.post(
       url,
-      headers: {"Content-Type": "application/json"},
+      headers: AiConfig.headers,
       body: body,
     ).timeout(const Duration(seconds: 90), onTimeout: () {
       throw TimeoutException('The request to the AI service timed out.');

@@ -222,11 +222,11 @@ class CasePredictionToolState extends State<CasePredictionTool>
   Future<http.Response> _fetchPrediction() async {
     // IMPORTANT: Never hardcode API keys in production code.
     // Use environment variables or a secure configuration service.
-    const String apiKey = "AIzaSyCMK7RTPGB2S3YowLkUGh8aYSi4G_bZJsg"; // <--- Your actual key
+    const String apiKey = "YOUR_GEMINI_API_KEY"; // <--- Your actual key
 
     // REMOVE THIS CHECK:
     /*
-    if (apiKey == "AIzaSyCMK7RTPGB2S3YowLkUGh8aYSi4G_bZJsg") {
+    if (apiKey == "YOUR_GEMINI_API_KEY") {
       throw Exception("API Key not set. Please replace 'YOUR_GEMINI_API_KEY'.");
     }
     */

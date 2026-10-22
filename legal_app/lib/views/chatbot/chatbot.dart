@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
+import '../../config/ai_config.dart';
 
 class LegalChatScreen extends StatefulWidget {
   const LegalChatScreen({super.key});
@@ -39,13 +40,15 @@ class LegalChatScreenState extends State<LegalChatScreen> {
   }
 
   Future<String?> fetchLegalResponse(String prompt) async {
-    final String apiKey = "AIzaSyCMK7RTPGB2S3YowLkUGh8aYSi4G_bZJsg"; // Replace with your API key
-    final Uri url = Uri.parse(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey");
+    // The key comes from --dart-define (see lib/config/ai_config.dart);
+    // it is never committed. Without it the chat reports the feature as
+    // not configured rather than sending an empty key to Google.
+    if (!AiConfig.isConfigured) return AiConfig.notConfiguredMessage;
+    final Uri url = AiConfig.generateContentUri();
 
     final response = await http.post(
       url,
-      headers: {"Content-Type": "application/json"},
+      headers: AiConfig.headers,
       body: jsonEncode({
         "contents": [
           {

@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
  import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
+import '../../config/ai_config.dart';
 import 'package:legalserviceapp/widgets/customapp_bar.dart';
 import 'package:legalserviceapp/constants/colors.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
@@ -115,11 +116,13 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
   }
 
   Future<String> fetchAIResponse(String text) async {
-    // IMPORTANT: Hardcoding API keys is insecure. Use environment variables or a secure config service.
-    const String apiKey = "AIzaSyCMK7RTPGB2S3YowLkUGh8aYSi4G_bZJsg"; // Replace with your actual key securely
-    final Uri url = Uri.parse(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
-    );
+    // The key comes from --dart-define (see lib/config/ai_config.dart):
+    // it is not committed, and a missing key is reported instead of being
+    // sent to Google as an empty string.
+    if (!AiConfig.isConfigured) {
+      throw Exception(AiConfig.notConfiguredMessage);
+    }
+    final Uri url = AiConfig.generateContentUri();
 
     final requestBody = jsonEncode({
       "contents": [{
@@ -150,7 +153,7 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
     try {
       final response = await http.post(
         url,
-        headers: {"Content-Type": "application/json"},
+        headers: AiConfig.headers,
         body: requestBody,
       ).timeout(const Duration(seconds: 90)); // Add timeout
 

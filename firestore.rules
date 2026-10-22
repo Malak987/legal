@@ -1,0 +1,61 @@
+rules_version = '2';
+
+// =============================================================================
+// Firestore security rules — Legal Services Platform
+// =============================================================================
+//
+// HOW THIS PROJECT ACTUALLY ACCESSES FIRESTORE
+// -------------------------------------------
+// 1. The Express API (backend/) is the only reader/writer of business data:
+//    users, lawyers, cases, bookings, tasks, chats, messages, reviews, wallet,
+//    transactions, plans, subscriptions, notifications, availability,
+//    favorites, earnings, dashboard aggregates.
+//    It authenticates with the Firebase **Admin SDK**, which bypasses these
+//    rules entirely. No rule below can weaken or strengthen it.
+//
+// 2. The Flutter mobile app (legal_app/) does NOT use the Firestore client SDK
+//    at all — it talks to the REST API with an ID token.
+//
+// 3. The only client-SDK Firestore access in this repository is the admin
+//    panel (admin_panel/lib/services/auth_service.dart), which reads exactly
+//    one document — its own `users/{uid}` — to check `role == 'admin'` before
+//    it shows any UI:
+//
+//        _db.collection('users').doc(firebaseUser.uid)
+//           .get(const GetOptions(source: Source.server));
+//
+//    It never reads another account's document and never writes.
+//
+// Therefore the correct ruleset is: an account may read its OWN profile
+// document, and nothing else is reachable with the client SDK. Every other
+// path in the database is denied, which is the intended state — those
+// collections are server-only.
+//
+// DEPLOYMENT: see README section 8 ("Deploying"). These rules are NOT
+// deployed automatically by this commit; they must be pushed with
+//   firebase deploy --only firestore:rules
+// using project owner credentials. Until then the live project keeps whatever
+// rules it already has, and this file is the intended contract.
+// =============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // `users/{uid}` holds name, email, phone, address, role, createdAt.
+    // The owning account may read it (the admin panel needs `role`), and NO
+    // client may write it: role assignment, profile edits and every other
+    // mutation go through the API, which validates and strips protected
+    // fields (see backend/src/routes/users.js, validators.js).
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Everything else is server-owned. `allow` rules are additive in
+    // Firestore, and no other rule grants access, so this block leaves every
+    // remaining collection unreadable and unwritable from a client SDK.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

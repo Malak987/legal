@@ -39,7 +39,7 @@ class LegalChatScreenState extends State<LegalChatScreen> {
   }
 
   Future<String?> fetchLegalResponse(String prompt) async {
-    final String apiKey = "AIzaSyCMK7RTPGB2S3YowLkUGh8aYSi4G_bZJsg"; // Replace with your API key
+    final String apiKey = "YOUR_GEMINI_API_KEY"; // Replace with your API key
     final Uri url = Uri.parse(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey");
 
