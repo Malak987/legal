@@ -76,6 +76,23 @@ export const userSchema = Joi.object({
 });
 
 /**
+ * Payload for provisioning the CALLER'S OWN profile (`POST /api/users/me`).
+ *
+ * Deliberately narrower than `userSchema`:
+ *  - no `role`: the route writes `role: 'client'` itself, so a body can never
+ *    grant `admin` or `lawyer`. `stripUnknown` also drops any attempt.
+ *  - no `email`: the address is taken from the verified ID token, so a caller
+ *    cannot register a profile that claims somebody else's mailbox.
+ *  - no `uid`/`userId`: the document id is the verified uid, never input.
+ */
+export const profileProvisionSchema = Joi.object({
+  name: Joi.string().trim().min(2).max(120).required(),
+  phone: Joi.string().trim().max(40).allow('', null),
+  avatar: Joi.string().trim().allow('', null),
+  address: Joi.string().trim().max(300).allow('', null),
+});
+
+/**
  * Role change payload — admin-only, and restricted to real roles.
  * `admin` is included so administrators can promote other administrators.
  */

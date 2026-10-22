@@ -1,20 +1,27 @@
 name: CI
 
-# Phase 0: the two applications the repository can actually verify today.
+# The three applications the repository verifies on every push and PR.
 #
 #   backend/     Express + Firestore API. Its test suite is self-contained
-#                (in-memory Firestore double, no credentials, no network), so
-#                it runs on every push and pull request.
+#                (in-memory Firestore double, no credentials, no network).
 #   admin_panel/ Flutter Web admin. `flutter analyze` + `flutter test`; the
 #                tests inject fake auth/API services, so no Firebase project is
 #                needed.
+#   legal_app/   Flutter mobile app. Gated since the authentication work: the
+#                stale counter-template widget test was replaced with real
+#                auth/session/API tests that use fakes and a MockClient, so the
+#                job needs no Firebase project, no credentials and no network.
 #
-# NOT GATED YET, DELIBERATELY: legal_app/ (the mobile app) and its stale copy
-# under LegalServicesAppDoc/. The only test in legal_app/test/widget_test.dart
-# is the untouched Flutter counter template (it asserts a '0' counter that this
-# app does not have), so it cannot pass. Adding it here with `|| true`,
-# `continue-on-error`, or a skip would produce a green check that hides a real
-# failure. It is wired up in Phase 5, when that test is replaced with real ones.
+# STILL NOT GATED: LegalServicesAppDoc/, the stale copy of the mobile app. It
+# is not the app under development and has never been verified.
+#
+# Note on scope: `flutter analyze` here runs with `--no-fatal-infos` and
+# `--no-fatal-warnings`, so the gate is "the app compiles", not "the whole
+# codebase is lint-clean". legal_app carries older screens with info-level
+# lints that predate this work; gating on those would hide real errors behind
+# noise. The full analyzer output is still printed and published on failure.
+# Formatting is reported, never gated: most of the app predates `dart format`
+# and reformatting it is unrelated to behavioural verification.
 
 # Every branch, not only `main`: work in this repository lands on short-lived
 # `arena/*` branches and is merged through pull requests. Limiting `push` to
@@ -115,4 +122,67 @@ jobs:
           publish "$RUNNER_TEMP/analyze.log" "flutter analyze" \
             '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
           publish "$RUNNER_TEMP/test.log" "flutter test" \
+            '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'
+
+  legal-app:
+    name: Mobile app (analyze + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: legal_app
+    steps:
+      - uses: actions/checkout@v4
+
+      # legal_app/pubspec.yaml requires Dart ^3.7.2, which stable satisfies.
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Report only (no --set-exit-if-changed): see the note at the top of this
+      # file. This lists files whose formatting differs without failing the job.
+      - name: Report formatting differences
+        shell: bash
+        run: dart format --output=none --show=changed lib test || true
+
+      # Compile gate: fails on analyzer errors, tolerates pre-existing
+      # info/warning-level lints.
+      - name: Analyze
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee "$RUNNER_TEMP/analyze.log"
+
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      # Same rationale as the admin-panel job: raw job logs are not always
+      # reachable from review environments, so failure details are also
+      # published as check-run annotations. Diagnostic only — it never changes
+      # a job's outcome.
+      - name: Publish failure details as annotations
+        if: failure()
+        shell: bash
+        run: |
+          publish() {
+            local log="$1" title="$2" pattern="$3" body encoded
+            [ -f "$log" ] || return 0
+            body="$(grep -E "$pattern" "$log" | head -60 || true)"
+            [ -n "$body" ] || body="$(tail -40 "$log")"
+            encoded="$(printf '%s\n' "$body" | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'NF { printf "%s%%0A", $0 }')"
+            echo "::error title=${title}::${encoded}"
+            echo "----- ${title} (last 60 lines) -----"
+            tail -60 "$log"
+          }
+          publish "$RUNNER_TEMP/analyze.log" "flutter analyze (legal_app)" \
+            '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
+          publish "$RUNNER_TEMP/test.log" "flutter test (legal_app)" \
             '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'

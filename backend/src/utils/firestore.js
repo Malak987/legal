@@ -108,6 +108,44 @@ export async function createDoc(db, collection, data) {
   return { id: snap.id, ...snap.data() };
 }
 
+/**
+ * True when a Firestore write was rejected because the document exists.
+ *
+ * firebase-admin surfaces `ALREADY_EXISTS` either as the gRPC code `6` or as
+ * the string `'already-exists'`, depending on the transport in use.
+ */
+function isAlreadyExists(error) {
+  const code = error?.code;
+  return code === 6 || code === 'already-exists' || code === 'ALREADY_EXISTS';
+}
+
+/**
+ * Creates a document with a CALLER-CHOSEN id, refusing to overwrite.
+ *
+ * `set()` replaces a document silently; `create()` is atomic and rejects with
+ * `ALREADY_EXISTS` when it is already there. That is what makes "provision this
+ * profile exactly once" safe against two concurrent requests, instead of a
+ * read-then-write that two callers can interleave.
+ *
+ * Returns the stored document, or `null` when it already existed (callers map
+ * that to a 409 rather than treating it as an error).
+ */
+export async function createDocWithId(db, collection, id, data) {
+  const ref = db.collection(collection).doc(id);
+  try {
+    await ref.create({
+      ...data,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    if (isAlreadyExists(error)) return null;
+    throw error;
+  }
+  const snap = await ref.get();
+  return { id: snap.id, ...snap.data() };
+}
+
 export async function updateDoc(db, collection, id, data) {
   const ref = db.collection(collection).doc(id);
   const snap = await ref.get();

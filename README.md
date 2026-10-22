@@ -5,7 +5,7 @@ real database and an admin dashboard.
 
 ```
 تطبيق/
-├── LegalServicesApp-code/     → The Flutter mobile app (connected to the API)
+├── legal_app/                 → The Flutter mobile app (connected to the API)
 ├── backend/                   → REST API server (Node.js + Express + Cloud Firestore)
 └── admin_panel/               → Admin dashboard (Flutter Web)
 ```
@@ -99,7 +99,7 @@ Two files contain placeholders — replace the values with your project's `fireb
 |--------------------------------------------------------|------------------|
 | `backend/serviceAccount.json`                          | backend          |
 | `admin_panel/lib/config/firebase_options.dart`         | admin panel      |
-| `LegalServicesApp-code/lib/config/firebase_options.dart` | mobile app    |
+| `legal_app/lib/config/firebase_options.dart`            | mobile app      |
 
 Both `firebase_options.dart` files must point to the **same** Firebase project.
 
@@ -119,17 +119,33 @@ Sign in with `admin@legalapp.com` and the password you supplied in `SEED_ADMIN_P
 ### Step E — Run the mobile app
 
 ```powershell
-cd LegalServicesApp-code
+cd legal_app
 flutter pub get
 flutter run
 ```
 
-The app defaults to `http://10.0.2.2:5000/api` (Android emulator). For a physical device
-or another platform pass your computer's LAN IP:
+The app picks a default base URL per platform, and `--dart-define=API_BASE_URL`
+always overrides it:
+
+| Target | Without `--dart-define` | Notes |
+|--------|------------------------|-------|
+| Android emulator | `http://10.0.2.2:5000/api` | `10.0.2.2` is the emulator's alias for your computer. `localhost` would be the emulated device itself. |
+| Web (`flutter run -d chrome`), Linux/Windows/macOS desktop, iOS simulator | `http://localhost:5000/api` | The backend must be running on the same machine. |
+| Physical Android/iOS device | **must** be set | No default can reach your computer; pass its LAN IP. |
 
 ```powershell
 flutter run --dart-define=API_BASE_URL=http://192.168.1.10:5000/api
 ```
+
+For a physical device the phone and the computer must be on the same network, the
+backend must listen on `0.0.0.0` (not only `127.0.0.1`), and port 5000 must be
+allowed through the firewall. The Android manifest already permits cleartext
+HTTP for local development.
+
+> Registration and sign-in need **real** Firebase options. `legal_app` currently
+> ships working `android` values only; the `web` and `ios` blocks are still
+> placeholders, so `Firebase.initializeApp` fails there and authentication
+> reports "authentication is not configured for this build".
 
 ---
 
@@ -159,6 +175,79 @@ All protected routes require `Authorization: Bearer <Firebase ID Token>`.
 Standard CRUD under `/cases`, `/tasks`, `/bookings`, `/subscriptions`.
 Non-admins can only access their own records.
 
+### Registration and profiles
+
+Registration is split in two so the password never reaches this backend:
+the Firebase client SDK creates the Authentication account, then the app calls
+the route below to create the matching Firestore document.
+
+| Method | Path             | Description                                                        |
+|--------|------------------|--------------------------------------------------------------------|
+| POST   | `/users/me`      | Provision the caller's own `users/{uid}` profile. Authenticated. Body: `{ name, phone?, avatar?, address? }`. `uid` and `email` come from the verified ID token; `role` is always `client`. Answers `409` when a profile already exists. |
+
+Roles are never granted here: an administrator promotes a user with
+`PATCH /users/:id/role`.
+
+#### Sign-up sequence (one flow, no password on the wire)
+
+1. `createUserWithEmailAndPassword` on the Firebase **client** SDK. Firebase
+   owns the credential and the uid; the password never leaves the device.
+2. `POST /api/users/me` with the fresh ID token and `{ name }`. The backend
+   writes `users/{uid}` with `role: 'client'`, taking the uid and the email from
+   the verified token. A `role` or `email` sent in the body is stripped.
+3. Only when both steps succeed does the app load the profile and show the Home
+   screen. A failed registration never navigates to Home.
+
+If step 2 fails, the app deletes **the account created by that attempt** so no
+half-registered user is left behind (an Auth account without a profile cannot
+hold a role and is invisible to the admin panel). The rollback is deliberately
+scoped: a pre-existing account — created by hand in the Firebase console, or by
+an earlier attempt — is never deleted.
+
+Sign-in reuses the same provisioning route. When an account authenticates but
+has no profile (a legacy or console-created user), the app calls
+`POST /api/users/me` once with a name derived from the email, which yields an
+ordinary `client` profile. An existing profile is never rewritten: the route
+answers `409` and the stored document — including a `lawyer` or `admin` role —
+is read back untouched.
+
+#### Firebase Auth accounts vs `users/{uid}` profiles
+
+These are two different things and the app treats them as such:
+
+| | Firebase Authentication | Firestore `users/{uid}` |
+|---|---|---|
+| Created by | the client SDK on sign-up | `POST /api/users/me` |
+| Holds | email, password hash, uid, disabled flag | `name`, `phone`, `address`, `avatar`, `role`, `email` |
+| Joined by | the document id **is** the Auth uid | |
+| Admin list shows | nothing | every profile document |
+
+A signed-in Firebase user is therefore *not* automatically a client with a
+profile, and the admin Users list only reflects provisioning. That is why the
+app provisions before entering protected screens.
+
+Trusted fields — writable by no client, whatever the app sends:
+
+- `role` is set by the server (`client` on provisioning) and only changes via
+  the admin-only `PATCH /users/:id/role`.
+- `uid` is the verified token's uid; it is never read from a request body.
+- `email` is taken from the token on provisioning; a non-admin change through
+  `PUT /users/:id` is rejected.
+
+The Flutter app never treats "authenticated" as "administrator": the only
+admin signal it uses is a profile whose `role` is exactly `admin`, and no screen
+was wired to admin-only backend routes in this phase.
+
+### Users (admin)
+
+| Method | Path                  | Description                                    |
+|--------|-----------------------|------------------------------------------------|
+| GET    | `/users`              | List (supports `search`, `role`, paging) *(admin)* |
+| GET    | `/users/:id`          | Single profile *(self or admin)*               |
+| PUT    | `/users/:id`          | Update profile; `role` is stripped *(self or admin)* |
+| PATCH  | `/users/:id/role`     | `{ role }` *(admin)*                           |
+| DELETE | `/users/:id`          | Delete profile + Auth account *(admin)*        |
+
 ### Wallet
 
 | Method | Path                          | Description                     |
@@ -178,7 +267,52 @@ See `backend/src/routes/` — each file is a self-contained, documented router.
 
 ---
 
-## 5. Security notes
+## 5. Running the tests
+
+**Backend** (Node's built-in runner, in-memory Firebase doubles — no project,
+no credentials, no writes):
+
+```bash
+cd backend
+npm ci
+npm test
+```
+
+Single suite: `node --test test/profile_security.test.js`.
+
+| Suite | Covers |
+|-------|--------|
+| `test/registration.test.js` | profile provisioning contract, duplicate/overwrite rules, admin-list visibility after provisioning |
+| `test/profile_security.test.js` | role escalation attempts, malformed/legacy profile documents, admin-only routes, token-vs-body precedence |
+
+**Flutter** (requires a Flutter SDK; there is no local SDK in the environment
+this phase was developed in, so these run in CI only):
+
+```bash
+cd legal_app
+flutter pub get
+flutter analyze --no-fatal-infos --no-fatal-warnings   # compile gate
+flutter test
+dart format --output=none --show=changed lib test      # report only
+```
+
+The `Mobile app (analyze + test)` job in `.github/workflows/ci.yml` runs exactly
+these on every push and pull request. Analysis is a *compile* gate: errors fail
+the job, pre-existing info/warning lints are printed but do not. Formatting is
+reported, never gated, because most of the app predates `dart format`.
+
+| Test | Covers |
+|------|--------|
+| `test/api_client_test.dart` | base-URL selection, bearer header, envelope unwrapping, 401 refresh retry, non-JSON and error responses, provisioning 409 fallback, no `role` in update bodies |
+| `test/auth_lifecycle_test.dart` | registration/provisioning/rollback scoping, legacy-profile provisioning, sign-in failures, session restoration, sign-out, routing gate |
+| `test/widget_test.dart` | the auth boundary: no protected UI while resolving, auth flow when signed out, signed-in shell, sign-out |
+
+All Flutter tests use fakes (`test/support/fakes.dart`) and a `MockClient`; they
+never touch a live Firebase project.
+
+---
+
+## 6. Security notes
 
 - Passwords are handled by Firebase Authentication (never stored in Firestore).
 - The API verifies the ID token on every protected request and checks the user's role.
@@ -188,7 +322,44 @@ See `backend/src/routes/` — each file is a self-contained, documented router.
 
 ---
 
-## 6. Deploying
+## 7. Known limitations
+
+Honest list of what this phase did **not** finish, so nothing here looks live
+when it is not:
+
+- **Firebase options**: only the Android block in `legal_app/lib/config/firebase_options.dart`
+  holds real values. Web and iOS still have placeholders, so
+  `Firebase.initializeApp` fails there and the app reports "authentication is
+  not configured for this build". Sign-up/sign-in work on Android only.
+- **Screens still showing sample data**: case status detail
+  (`views/cases/casedashboard.dart`), lawyer detail (`views/home/details.dart`),
+  edit-profile, address book, orders and most drawer destinations. The list
+  screens for cases, favorites and lawyers now read the backend; the detail
+  screens they open do not.
+- **Writes left unwired**: creating cases/bookings/favorites from the UI is not
+  connected. `AppRepository` already has the methods, but no screen calls them.
+- **Bookings, wallet, chat, reviews, earnings** are out of scope for this phase.
+- **Flutter verification**: no Flutter SDK is available in the development
+  environment (the SDK download host is blocked), so `flutter analyze` and
+  `flutter test` have never run locally. They are wired into CI
+  (`.github/workflows/ci.yml`, job `legal-app`) and that is the first place the
+  app's analysis and tests execute. The backend suite *was* run locally and
+  passes.
+- **No request-level retry/backoff**: `ApiClient` retries once after a forced
+  token refresh (401) and gives every attempt a 20 s deadline, but a transient
+  5xx is surfaced to the user rather than retried automatically.
+- **A revoked session is reported, not force-ended.** If Firebase rejects a
+  token even after a forced refresh, the screen shows the error; the app does
+  not sign itself out automatically, because no flow has demonstrated that
+  failure yet and an automatic sign-out on any 401 would also fire for
+  authorization mistakes.
+- **`PUT /users/:id` requires `name` and `email`** even for a partial update,
+  because `userSchema` marks them required. The app sends both (the stored
+  email unchanged); a future schema split would make partial updates natural.
+
+---
+
+## 8. Deploying
 
 **Backend** — deploy anywhere that runs Node (Render, Railway, Fly.io, VPS). Set the
 `SERVICE_ACCOUNT_PATH`, CORS origins, and `NODE_ENV=production`.

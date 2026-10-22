@@ -4,6 +4,7 @@ import '../../constants/colors.dart';
 import '../../widgets/custombtn.dart';
 import '../../widgets/customtextfield.dart';
 import '../../widgets/detailstext1.dart';
+import '../../state/session_scope.dart';
 
 import '../home/homescreen.dart';
 import 'authwidgets/auth_tab.dart';
@@ -22,6 +23,18 @@ class _SignUpScreenState extends State<SignUpScreen>
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
+
+  /// Registration goes through Firebase Authentication (the account) and then
+  /// the backend (`users/{uid}`), both orchestrated by the session controller
+  /// so the rest of the app sees the new account immediately.
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmController = TextEditingController();
+  bool _isLoading = false;
+
+  /// Shown inline under the fields; a SnackBar can be missed on a tall form.
+  String? _error;
 
   @override
   void initState() {
@@ -47,7 +60,74 @@ class _SignUpScreenState extends State<SignUpScreen>
   @override
   void dispose() {
     _controller.dispose();
+    _nameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _confirmController.dispose();
     super.dispose();
+  }
+
+  /// Creates the Authentication account and its Firestore profile.
+  ///
+  /// Navigates to the home screen **only** when both succeeded: a half-finished
+  /// sign-up must never look like a successful one.
+  Future<void> _handleSignup() async {
+    final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+    final confirm = _confirmController.text;
+
+    if (name.isEmpty || email.isEmpty || password.isEmpty) {
+      _showMessage('Please fill in your name, email and password.');
+      return;
+    }
+    if (!email.contains('@') || !email.contains('.')) {
+      _showMessage('Please enter a valid email address.');
+      return;
+    }
+    if (password.length < 6) {
+      _showMessage('Choose a password with at least 6 characters.');
+      return;
+    }
+    if (password != confirm) {
+      _showMessage('The passwords do not match.');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    final session = SessionScope.read(context);
+    final ok = await session.register(
+      name: name,
+      email: email,
+      password: password,
+    );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (!ok) {
+      final message = session.error ?? 'Registration failed. Please try again.';
+      setState(() => _error = message);
+      _showMessage(message);
+      return;
+    }
+
+    // The account and its profile both exist. Replace the auth stack so the
+    // back gesture cannot return to the sign-up form.
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => HomePage()),
+      (route) => false,
+    );
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -101,19 +181,31 @@ class _SignUpScreenState extends State<SignUpScreen>
                             color: AppColors.buttonColor,
                           ),
                           const SizedBox(height: 20),
-                          const CustomTextField(
-                            label: 'Username',
+                          CustomTextField(
+                            controller: _nameController,
+                            label: 'Full name',
                             icon: Icons.person,
                           ),
-                          const CustomTextField(
+                          CustomTextField(
+                            controller: _emailController,
+                            label: 'Email',
+                            icon: Icons.email_outlined,
+                          ),
+                          // `obscureText` was never set here, so the password
+                          // fields rendered in clear text. Both are obscured now.
+                          CustomTextField(
+                            controller: _passwordController,
                             label: 'Password',
                             icon: Icons.lock,
                             icon2: Icons.visibility,
+                            obscureText: true,
                           ),
-                          const CustomTextField(
+                          CustomTextField(
+                            controller: _confirmController,
                             label: 'Confirm Password',
                             icon: Icons.lock,
                             icon2: Icons.visibility,
+                            obscureText: true,
                           ),
                           const SizedBox(height: 5),
                           Row(
@@ -136,13 +228,22 @@ class _SignUpScreenState extends State<SignUpScreen>
                             ],
                           ),
                           const SizedBox(height: 20),
-                          CustomButton(text: 'Signup', onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (context) =>  HomePage()),
-                            );
-                          }),
+                          if (_error != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text(
+                                _error!,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.redAccent,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          CustomButton(
+                            text: _isLoading ? 'Creating account...' : 'Signup',
+                            onTap: _isLoading ? null : _handleSignup,
+                          ),
                           const SizedBox(height: 20),
                           const Text('or continue with'),
                           const SizedBox(height: 20),

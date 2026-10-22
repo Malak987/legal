@@ -28,6 +28,18 @@ class AppRepository {
     return items.map(_toProduct).toList();
   }
 
+  /// Fetches a single lawyer, or `null` when the document is gone.
+  Future<Product?> fetchLawyer(String id) async {
+    if (id.isEmpty) return null;
+    try {
+      final data = await _api.get('lawyers/$id');
+      return _toProduct(data as Map<String, dynamic>);
+    } on ApiException catch (e) {
+      if (e.isNotFound) return null;
+      rethrow;
+    }
+  }
+
   Product _toProduct(Map<String, dynamic> json) {
     return Product(
       id: json['id']?.toString(),
@@ -195,11 +207,54 @@ class AppRepository {
     return (data as List).cast<Map<String, dynamic>>();
   }
 
-  Future<void> addFavorite(String userId, String lawyerId) async {
-    await _api.post('favorites', body: {'userId': userId, 'lawyerId': lawyerId});
+  /// The signed-in user's favorites, joined with the lawyer documents.
+  ///
+  /// `GET /api/favorites/:userId` returns rows that only carry `lawyerId`, so
+  /// each lawyer is fetched separately. A favorite whose lawyer was deleted is
+  /// skipped rather than rendered as an empty card — the backend does not
+  /// check that the lawyer still exists when the favorite is created.
+  Future<List<FavoriteEntry>> fetchMyFavorites() async {
+    final uid = _api.currentUid;
+    if (uid == null || uid.isEmpty) {
+      throw ApiException('You are not signed in.', 401);
+    }
+
+    final rows = await fetchFavorites(uid);
+    final entries = rows
+        .where((row) => (row['lawyerId']?.toString() ?? '').isNotEmpty)
+        .toList();
+
+    final joined = await Future.wait(entries.map((row) async {
+      final lawyerId = row['lawyerId'].toString();
+      final lawyer = await fetchLawyer(lawyerId);
+      if (lawyer == null) return null;
+      return FavoriteEntry(
+        favoriteId: row['id']?.toString() ?? '',
+        lawyer: lawyer,
+      );
+    }));
+
+    return joined.whereType<FavoriteEntry>().toList();
+  }
+
+  /// Adds a favorite. The owner comes from the verified token, so no uid is
+  /// sent — the backend ignores one anyway.
+  Future<void> addFavorite(String lawyerId) async {
+    await _api.post('favorites', body: {'lawyerId': lawyerId});
   }
 
   Future<void> removeFavorite(String favoriteId) async {
     await _api.delete('favorites/$favoriteId');
   }
+}
+
+/// One favorite row joined with the lawyer it points at.
+///
+/// `favoriteId` is the `favorites/{id}` document, which is what the delete
+/// endpoint needs; `lawyer.id` is the directory entry.
+class FavoriteEntry {
+  const FavoriteEntry({required this.favoriteId, required this.lawyer});
+
+  final String favoriteId;
+  final Product lawyer;
 }
