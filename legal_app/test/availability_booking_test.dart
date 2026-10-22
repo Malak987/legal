@@ -314,6 +314,21 @@ void _screenTests() {
     // Probe the one enabled day directly: does a raw tap at the cell's centre
     // change the selection, or is the pointer never reaching the calendar?
     var probe = 'probe=none';
+    final today = '${now.year}-${now.month}-${now.day}';
+    final byKey =
+        find.byKey(ValueKey<String>('CellContent-$today'));
+    probe = 'keyCells=$today:${byKey.evaluate().length} '
+        'focused=${widget?.focusedDay} '
+        'centers22=${dayCells(22).evaluate().map((e) => tester.getCenter(find.byElementPredicate((x) => identical(x, e)))).toList()}';
+    if (byKey.evaluate().isNotEmpty) {
+      await tester.ensureVisible(byKey.first);
+      await tester.pump();
+      await tester.tap(byKey.first, warnIfMissed: false);
+      await tester.pump();
+      probe += ' selectedAfterKeyTap='
+          '${tester.widget<TableCalendar<int>>(calendar.first).selectedDayPredicate?.call(DateTime(now.year, now.month, now.day))}'
+          ' headerAfterKeyTap=${find.textContaining(prefix).evaluate().length}';
+    }
     final enabledDay = enabled.isEmpty ? null : int.parse(enabled.first);
     if (enabledDay != null) {
       final cell = dayCells(enabledDay).last;
