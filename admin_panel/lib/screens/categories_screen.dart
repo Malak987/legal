@@ -71,7 +71,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (!mounted || confirmed != true) return;
 
     try {
       await AuthProvider.of(context).api.delete('categories/${category.id}');

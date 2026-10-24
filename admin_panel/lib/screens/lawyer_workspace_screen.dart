@@ -308,11 +308,15 @@ class _LawyerBookingsScreenState extends State<LawyerBookingsScreen> {
   }
 
   Future<List<Booking>> _fetch() async {
-    final response = await AuthProvider.of(context).api.get('bookings', query: {
+    final query = <String, String>{
       'page': '1',
       'limit': '$kMaxPageSize',
-      if (_status != null) 'status': _status!,
-    });
+    };
+    final status = _status;
+    if (status != null) query['status'] = status;
+
+    final response =
+        await AuthProvider.of(context).api.get('bookings', query: query);
     return itemsOf(response).map(Booking.fromJson).toList(growable: false);
   }
 

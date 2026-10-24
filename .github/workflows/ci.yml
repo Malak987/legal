@@ -3,9 +3,9 @@ name: CI
 # Verifies all three parts of the platform on every push and PR:
 #
 #   backend/     1) Fast unit + Cloud Functions contract suite (`npm test`)
-#                2) Full end-to-end integration test against real Firebase
-#                   Auth + Cloud Firestore + Cloud Functions Gen 2 + Firebase
-#                   Hosting Emulators (`npm run test:emulator`)
+#                2) Emulator integration for Hosting + Cloud Functions Gen 2,
+#                   proving Firebase ID tokens cannot enter the Supabase-only
+#                   profile API or create legacy Firestore profiles.
 #   admin_panel/ Flutter Web admin (`flutter analyze`, `flutter test`, and
 #                production `flutter build web` targeting Firebase Hosting)
 #   legal_app/   Flutter mobile app (`flutter analyze` compile gate + `flutter test`)
@@ -47,7 +47,7 @@ jobs:
           set -o pipefail
           npm test 2>&1 | tee "$RUNNER_TEMP/backend-unit.log"
 
-      - name: Run full Firebase Hosting + Functions Gen 2 + Auth + Firestore Emulator E2E suite
+      - name: Verify Supabase-only auth boundary through Hosting + Functions emulators
         shell: bash
         run: |
           set -o pipefail
@@ -166,6 +166,8 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          # legal_app/pubspec.lock requires Flutter >= 3.47.0.
+          flutter-version: '3.47.0'
           channel: stable
           cache: true
 

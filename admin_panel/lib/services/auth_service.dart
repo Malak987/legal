@@ -139,7 +139,6 @@ class AuthService {
       StreamController<AdminAuthUser?>.broadcast();
 
   AdminAuthUser? _authUser;
-  AdminSession? _session;
   String? _accessToken;
   String? _refreshToken;
   DateTime? _accessTokenExpiresAt;
@@ -189,7 +188,6 @@ class AuthService {
     final user = await _installTokenResponse(decoded, email.trim());
     try {
       final session = await _loadAdminSession(user);
-      _session = session;
       if (!_authController.isClosed) _authController.add(user);
       return session;
     } on AdminProfileMissingException {
@@ -233,7 +231,6 @@ class AuthService {
 
     try {
       final session = await _loadAdminSession(user);
-      _session = session;
       return session;
     } on ProfileReadException {
       rethrow;
@@ -445,7 +442,6 @@ class AuthService {
   Future<void> _clearSession({required bool notify}) async {
     final token = _accessToken;
     _authUser = null;
-    _session = null;
     _accessToken = null;
     _refreshToken = null;
     _accessTokenExpiresAt = null;
@@ -536,7 +532,6 @@ class AuthService {
     );
   }
 
-  @override
   Future<void> signOut() => _clearSession(notify: true);
 
   void dispose() {
