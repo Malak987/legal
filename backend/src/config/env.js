@@ -6,10 +6,29 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backendRoot = path.resolve(__dirname, '../..');
 
-/** Default Firebase Hosting project retained for the legacy Express deployment. */
 export const DEFAULT_FIREBASE_PROJECT_ID = 'legal-102026';
+export const DEFAULT_SUPABASE_PROJECT_REF = 'qqfzbecwhewswkyxgebu';
+export const DEFAULT_SUPABASE_URL = `https://${DEFAULT_SUPABASE_PROJECT_REF}.supabase.co`;
 
-/** Extract the project ID from the managed Firebase runtime configuration. */
+/**
+ * Cloud Functions / Cloud Run and the Firebase Functions emulator receive
+ * configuration from their runtime. Do not load a developer's local `.env`
+ * there: local NODE_ENV, seed flags, or credentials must not leak into runtime.
+ */
+export function isCloudFunctionsRuntime(envVars = process.env) {
+  return Boolean(
+    envVars.K_SERVICE ||
+      envVars.FUNCTION_TARGET ||
+      envVars.FUNCTIONS_EMULATOR === 'true',
+  );
+}
+
+const isCloudFunction = isCloudFunctionsRuntime();
+if (!isCloudFunction) {
+  dotenv.config({ path: path.join(backendRoot, '.env') });
+}
+
+/** Extract Firebase's projectId from the managed runtime FIREBASE_CONFIG JSON. */
 export function parseFirebaseConfigProjectId(rawFirebaseConfig) {
   if (typeof rawFirebaseConfig !== 'string' || !rawFirebaseConfig.trim().startsWith('{')) {
     return '';
@@ -33,16 +52,30 @@ export function resolveFirebaseProjectId(envVars = process.env) {
   ).trim();
 }
 
-/** Detect Cloud Run, Cloud Functions Gen 2, or the local Functions emulator. */
-export function isCloudFunctionsRuntime(envVars = process.env) {
-  return Boolean(
-    envVars.K_SERVICE ||
-      envVars.FUNCTION_TARGET ||
-      envVars.FUNCTIONS_EMULATOR === 'true',
-  );
+/** Resolve a comma-separated CORS override or environment-appropriate defaults. */
+export function resolveCorsOrigins(envVars = process.env) {
+  const explicit = (envVars.CORS_ORIGINS || '').trim();
+  if (explicit) {
+    return explicit.split(',').map((value) => value.trim()).filter(Boolean);
+  }
+
+  const nodeEnv = (envVars.NODE_ENV || 'development').trim();
+  if (nodeEnv !== 'production') {
+    return ['http://localhost:3000', 'http://localhost:5173'];
+  }
+
+  const projectId = resolveFirebaseProjectId(envVars) || DEFAULT_FIREBASE_PROJECT_ID;
+  return [
+    `https://${projectId}.web.app`,
+    `https://${projectId}.firebaseapp.com`,
+  ];
 }
 
-/** Resolve the optional local Firebase Admin key path without reading it. */
+/**
+ * Resolve the optional local Firebase Admin key path without reading it.
+ * Explicit relative paths are resolved from `backend/`; an existing legacy
+ * `src/serviceAccount.json` is accepted, but never copied into configuration.
+ */
 export function resolveServiceAccountPath({
   serviceAccountEnv = process.env.SERVICE_ACCOUNT_PATH,
   rootDir = backendRoot,
@@ -57,37 +90,34 @@ export function resolveServiceAccountPath({
   return existsSync(legacy) ? legacy : preferred;
 }
 
-dotenv.config({ path: path.join(backendRoot, '.env') });
-
-export function resolveCorsOrigins(envVars = process.env) {
-  const explicit = (envVars.CORS_ORIGINS || '').trim();
-  if (explicit) {
-    return explicit.split(',').map((value) => value.trim()).filter(Boolean);
-  }
-  const nodeEnv = (envVars.NODE_ENV || 'development').trim();
-  if (nodeEnv !== 'production') {
-    return ['http://localhost:3000', 'http://localhost:5173'];
-  }
-  const projectId = resolveFirebaseProjectId(envVars) || DEFAULT_FIREBASE_PROJECT_ID;
-  return [
-    `https://${projectId}.web.app`,
-    `https://${projectId}.firebaseapp.com`,
-  ];
-}
-
-const nodeEnv = (process.env.NODE_ENV || 'development').trim();
+const nodeEnv = (
+  process.env.NODE_ENV || (isCloudFunction ? 'production' : 'development')
+).trim();
 
 export const env = {
   port: Number.parseInt(process.env.PORT || '5000', 10),
   nodeEnv,
+  isCloudFunction,
   corsOrigins: resolveCorsOrigins({ ...process.env, NODE_ENV: nodeEnv }),
   firebaseProjectId: resolveFirebaseProjectId(),
   serviceAccountPath: resolveServiceAccountPath(),
+  supabaseProjectRef: (
+    process.env.SUPABASE_PROJECT_REF || DEFAULT_SUPABASE_PROJECT_REF
+  ).trim(),
   supabaseUrl: (process.env.SUPABASE_URL || '').trim(),
   supabaseAnonKey: (process.env.SUPABASE_ANON_KEY || '').trim(),
-  supabaseServiceRoleKey: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim(),
+  supabaseServiceRoleKey: (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    ''
+  ).trim(),
   supabaseAuthRedirectUrl: (process.env.SUPABASE_AUTH_REDIRECT_URL || '').trim(),
   lawyerSignupRedirectUrl: (process.env.LAWYER_SIGNUP_REDIRECT_URL || '').trim(),
+  // Startup seeding is never enabled in Cloud Functions or production.
+  seedOnStart:
+    !isCloudFunction &&
+    nodeEnv !== 'production' &&
+    process.env.SEED_ON_START === 'true',
 };
 
 /**
