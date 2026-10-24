@@ -36,7 +36,7 @@ class AppScaffold extends StatelessWidget {
       appBar: AppBar(
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
         actions: actions,
-        automaticallyImplyLeading: showBack,
+        automaticallyImplyLeading: showBack || !isWide,
       ),
       drawer: isWide ? null : const _AdminDrawer(),
       body: body,

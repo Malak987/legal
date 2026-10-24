@@ -37,7 +37,12 @@ class _LawyersScreenState extends State<LawyersScreen> {
     return itemsOf(res).map(Lawyer.fromJson).toList();
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   Future<void> _openForm({Lawyer? lawyer}) async {
     final saved = await showDialog<bool>(
@@ -381,7 +386,11 @@ class _LawyerDialogState extends State<LawyerDialog> {
                     return Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton.icon(
-                        onPressed: () => setState(() => _categoriesFuture = _fetchCategories()),
+                        onPressed: () {
+                          setState(() {
+                            _categoriesFuture = _fetchCategories();
+                          });
+                        },
                         icon: const Icon(Icons.refresh),
                         label: const Text('Could not load categories. Retry'),
                       ),

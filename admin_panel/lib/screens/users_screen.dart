@@ -45,7 +45,12 @@ class _UsersScreenState extends State<UsersScreen> {
     return itemsOf(res).map(AppUser.fromJson).toList();
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   Future<void> _openEdit(AppUser user) async {
     final saved = await showDialog<bool>(

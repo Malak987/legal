@@ -46,7 +46,12 @@ class _CasesScreenState extends State<CasesScreen> {
     return itemsOf(res).map(CaseItem.fromJson).toList();
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   Future<void> _openForm({CaseItem? item}) async {
     final saved = await showDialog<bool>(

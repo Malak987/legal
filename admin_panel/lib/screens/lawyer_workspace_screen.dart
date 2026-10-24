@@ -41,7 +41,12 @@ class _LawyerOverviewScreenState extends State<LawyerOverviewScreen> {
     );
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -191,7 +196,12 @@ class _LawyerCasesScreenState extends State<LawyerCasesScreen> {
     return itemsOf(response).map(CaseItem.fromJson).toList(growable: false);
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -320,7 +330,12 @@ class _LawyerBookingsScreenState extends State<LawyerBookingsScreen> {
     return itemsOf(response).map(Booking.fromJson).toList(growable: false);
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -425,7 +440,12 @@ class _LawyerAvailabilityScreenState extends State<LawyerAvailabilityScreen> {
     return itemsOf(response);
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

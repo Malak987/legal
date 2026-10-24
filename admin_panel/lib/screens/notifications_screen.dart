@@ -30,7 +30,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     return itemsOf(res).map(NotificationItem.fromJson).toList();
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   Future<void> _openForm() async {
     final saved = await showDialog<bool>(

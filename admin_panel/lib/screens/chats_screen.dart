@@ -28,7 +28,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
     return listDataOf(res);
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   Future<void> _openChat(Map<String, dynamic> chat) async {
     setState(() => _selectedChatId = chat['id']);
@@ -149,7 +154,12 @@ class _MessagesPaneState extends State<_MessagesPane> {
     return objectDataOf(res);
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

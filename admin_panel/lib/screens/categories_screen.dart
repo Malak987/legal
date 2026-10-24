@@ -40,7 +40,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   void _reload() {
-    if (mounted) setState(() => _future = _fetch());
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
   }
 
   Future<void> _openForm({LegalCategory? category}) async {

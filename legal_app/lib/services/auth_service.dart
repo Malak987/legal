@@ -96,6 +96,8 @@ abstract interface class AuthGateway {
   /// a short-lived recovery session.
   Future<void> setPasswordFromRecovery(String newPassword);
 
+  Future<void> signOut();
+
   bool get isPasswordRecovery;
   void dispose();
 }
@@ -571,13 +573,6 @@ class SupabaseAuthGateway implements AuthGateway {
       queryParameters: query == null || query.isEmpty ? null : query,
     );
   }
-
-  Map<String, String> _headers({String? bearerToken}) => <String, String>{
-        'Content-Type': 'application/json',
-        'apikey': _supabaseAnonKey,
-        if (bearerToken != null && bearerToken.isNotEmpty)
-          'Authorization': 'Bearer $bearerToken',
-      };
 
   static Map<String, dynamic> _decodeJson(String raw) {
     if (raw.trim().isEmpty) return <String, dynamic>{};

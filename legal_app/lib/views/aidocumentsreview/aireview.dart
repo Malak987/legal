@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -37,17 +35,14 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
     if (isLoading) return;
     setState(() => isLoading = true);
     try {
-      final selection = await FilePicker.platform.pickFiles(
+      final picked = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: const ['pdf'],
-        withData: true,
       );
-      if (selection == null || selection.files.isEmpty) return;
+      if (picked == null) return;
 
-      final picked = selection.files.single;
-      final bytes = picked.bytes ??
-          (picked.path == null ? null : await File(picked.path!).readAsBytes());
-      if (bytes == null || bytes.isEmpty || bytes.length > 10 * 1024 * 1024) {
+      final bytes = await picked.readAsBytes();
+      if (bytes.isEmpty || bytes.length > 10 * 1024 * 1024) {
         throw const FormatException('Choose a non-empty PDF no larger than 10 MiB.');
       }
       if (bytes.length < 5 ||

@@ -688,7 +688,7 @@ void main() {
 
       await gateway.signOut();
       expect(gateway.currentUser, isNull);
-      expect(gateway.accessToken, isNull);
+      expect(await gateway.getAccessToken(), isNull);
     });
 
     test('restores the encrypted refresh-token session and persists rotation', () async {

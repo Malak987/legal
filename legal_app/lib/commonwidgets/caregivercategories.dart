@@ -35,7 +35,7 @@ class LegalServiceCategories extends StatelessWidget {
     Colors.blueGrey,
   ];
 
-  IconData _iconFor(LegalCategory category) {
+  FaIconData _iconFor(LegalCategory category) {
     final label = '${category.slug} ${category.name}'.toLowerCase();
     if (label.contains('family') || label.contains('divorce')) {
       return FontAwesomeIcons.users;
