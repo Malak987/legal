@@ -111,6 +111,7 @@ Future<void> openDialog(
   await tester.pump(const Duration(milliseconds: 400)); // transition
   await tester.pump(); // initial users request
   await tester.pump(); // rebuild with results
+  await tester.pumpAndSettle(); // categories and lawyer lookup responses
 }
 
 /// Types into a labelled text field.

@@ -22,19 +22,21 @@ Future<void> pumpApp(WidgetTester tester, AuthProvider provider) async {
   await tester.pump();
 }
 
-/// Types a password so the login form validates.
-///
-/// `LoginScreen._submit()` returns early when `Form.validate()` fails, and the
-/// password field is required. The email field is pre-filled with the default
-/// admin address, so only the password is missing from a freshly mounted form.
+/// Fills both required login fields so the submit handler reaches AuthProvider.
 Future<void> enterPassword(
-  WidgetTester tester, [
+  WidgetTester tester, {
+  String email = 'admin@legalapp.com',
   String password = 'secret-password',
-]) async {
+}) async {
+  final emailField = find.byWidgetPredicate(
+    (widget) => widget is TextField && widget.decoration.labelText == 'Email',
+  );
   final passwordField = find.byWidgetPredicate(
     (widget) => widget is TextField && widget.obscureText,
   );
+  expect(emailField, findsOneWidget);
   expect(passwordField, findsOneWidget);
+  await tester.enterText(emailField, email);
   await tester.enterText(passwordField, password);
   await tester.pump();
 }
@@ -142,7 +144,7 @@ void main() {
       'GET availability/mine',
     ]));
 
-    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
     expect(find.text('My Cases'), findsWidgets);
     expect(find.text('My Bookings'), findsWidgets);
@@ -164,7 +166,7 @@ void main() {
     expect(find.byIcon(Icons.edit), findsNothing);
     expect(find.byIcon(Icons.delete), findsNothing);
 
-    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
     await tester.tap(find.descendant(
       of: find.byType(Drawer),
@@ -263,7 +265,7 @@ void main() {
     await provider.restore();
     await tester.pump();
 
-    await enterPassword(tester);
+    await enterPassword(tester, email: 'client@example.com');
     await tester.tap(find.text('Sign In'));
     await tester.pump();
     await tester.pump();

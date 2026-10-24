@@ -291,8 +291,12 @@ void main() {
 
       expect(provider.status, AuthStatus.unauthenticated);
       expect(provider.isAuthenticated, isFalse);
-      expect(provider.error, contains('No user profile found'));
-      expect(provider.error, contains('users/admin-uid'));
+      expect(
+        provider.error,
+        contains('No application profile is linked to this Auth account'),
+      );
+      expect(provider.error, contains('admin-uid'));
+      expect(provider.error, contains('Ask an administrator to provision the account'));
     });
 
     test('a restored non-admin is rejected', () async {

@@ -56,7 +56,7 @@ jobs:
           npx --yes firebase-tools@15.34.1 emulators:exec \
             --project legal-102026 \
             --only auth,firestore,functions,hosting \
-            "RUN_FIRESTORE_E2E=1 npm --prefix backend run test:emulator" \
+            "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 RUN_FIRESTORE_E2E=1 npm --prefix backend run test:emulator" \
             2>&1 | tee "$RUNNER_TEMP/backend-emulator.log"
 
       - name: Publish failure details as annotations
@@ -139,7 +139,7 @@ jobs:
           publish() {
             local log="$1" title="$2" pattern="$3" body encoded
             [ -f "$log" ] || return 0
-            body="$(grep -E "$pattern" "$log" | head -60 || true)"
+            body="$(grep -B 6 -A 18 -E "$pattern" "$log" | head -120 || true)"
             [ -n "$body" ] || body="$(tail -40 "$log")"
             encoded="$(printf '%s\n' "$body" | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'NF { printf "%s%%0A", $0 }')"
             echo "::error title=${title}::${encoded}"
@@ -172,7 +172,10 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee "$RUNNER_TEMP/pub-get.log"
 
       - name: Report formatting differences
         shell: bash
@@ -218,6 +221,8 @@ jobs:
             echo "----- ${title} -----"
             printf '%s\n' "$body"
           }
+          publish "$RUNNER_TEMP/pub-get.log" "flutter pub get (legal_app)" \
+            'Error:|Exception|Because|version solving|Failed|SocketException'
           publish "$RUNNER_TEMP/analyze.log" "flutter analyze (legal_app)" \
             '^[[:space:]]*(error|warning)[[:space:]]*[•-]'
           publish "$RUNNER_TEMP/test.log" "flutter test (legal_app)" \

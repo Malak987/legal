@@ -14,6 +14,7 @@
  */
 
 import assert from 'node:assert/strict';
+import admin from 'firebase-admin';
 import net from 'node:net';
 import { describe, it } from 'node:test';
 
@@ -160,14 +161,35 @@ describe(
         return;
       }
 
-      // The rejected request must not fall back to Firebase Admin and create a
-      // document. Inspect the emulator directly; production is never touched.
-      const firestoreBase = `http://${firestoreHost}`;
-      const profileUrl =
-        `${firestoreBase}/v1/projects/${encodeURIComponent(PROJECT_ID)}` +
-        `/databases/(default)/documents/users/${encodeURIComponent(authUser.localId)}`;
-      const profileRes = await fetch(profileUrl);
-      assert.equal(profileRes.status, 404, await profileRes.text());
+      // Firestore rules intentionally deny client REST reads. Inspect only an
+      // explicitly configured local emulator with Firebase Admin; this check
+      // cannot touch a production project or credential.
+      assert.ok(
+        process.env.FIRESTORE_EMULATOR_HOST,
+        'FIRESTORE_EMULATOR_HOST must explicitly identify the local emulator',
+      );
+      const firestoreHostname = firestoreHost.startsWith('[')
+        ? firestoreHost.slice(1, firestoreHost.indexOf(']'))
+        : firestoreHost.slice(0, firestoreHost.lastIndexOf(':'));
+      assert.ok(
+        ['127.0.0.1', 'localhost', '::1'].includes(firestoreHostname),
+        `Refusing non-local Firestore host: ${firestoreHostname}`,
+      );
+
+      const firestoreApp = admin.initializeApp(
+        { projectId: PROJECT_ID },
+        `supabase-migration-check-${Date.now()}`,
+      );
+      try {
+        const profile = await admin
+          .firestore(firestoreApp)
+          .collection('users')
+          .doc(authUser.localId)
+          .get();
+        assert.equal(profile.exists, false, 'no legacy Firestore profile is created');
+      } finally {
+        await firestoreApp.delete();
+      }
     });
   },
 );
