@@ -128,11 +128,16 @@ Future<void> tapSave(WidgetTester tester) async {
 }
 
 Future<void> chooseFamilyAssignment(WidgetTester tester) async {
-  await tester.tap(find.text('Select a legal category'));
+  final categoryField = find.text('Select a legal category');
+  await tester.ensureVisible(categoryField);
+  await tester.tap(categoryField);
   await tester.pumpAndSettle();
   await tester.tap(find.text('Family Law'));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Select a lawyer'));
+
+  final lawyerField = find.text('Select a lawyer');
+  await tester.ensureVisible(lawyerField);
+  await tester.tap(lawyerField);
   await tester.pumpAndSettle();
   await tester.tap(find.text('Family Counsel'));
   await tester.pumpAndSettle();

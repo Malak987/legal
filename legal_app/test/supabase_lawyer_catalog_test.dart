@@ -77,7 +77,11 @@ void main() {
       );
       expect(request.url.queryParameters['is_popular'], 'eq.true');
       expect(request.url.queryParameters['is_top'], 'eq.false');
-      expect(tokenReads, 0, 'public catalogue access must not depend on a user session');
+      expect(
+        tokenReads,
+        0,
+        reason: 'public catalogue access must not depend on a user session',
+      );
 
       expect(lawyers, hasLength(1));
       final lawyer = lawyers.single;
