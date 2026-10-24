@@ -36,7 +36,9 @@ class _OrdersHistoryState extends State<OrdersHistory> {
 
   Future<void> _reload() {
     final future = SessionScope.read(context).repository.fetchBookings();
-    setState(() => _bookings = future);
+    setState(() {
+      _bookings = future;
+    });
     return future.then<void>((_) {}, onError: (_) {});
   }
 

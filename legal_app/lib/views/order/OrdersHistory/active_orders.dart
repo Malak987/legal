@@ -36,7 +36,9 @@ class _ActiveOrdersState extends State<ActiveOrders> {
     final future = SessionScope.read(context).repository.fetchBookings().then(
           (rows) => rows.where(_isCurrent).toList(growable: false),
         );
-    setState(() => _bookings = future);
+    setState(() {
+      _bookings = future;
+    });
     return future.then<void>((_) {}, onError: (_) {});
   }
 

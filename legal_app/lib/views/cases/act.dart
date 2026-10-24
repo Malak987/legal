@@ -37,7 +37,9 @@ class _CaseDetailsScreenState extends State<CaseDetailsScreen> {
 
   Future<void> _reload() {
     final future = SessionScope.read(context).repository.fetchCase(widget.caseId);
-    setState(() => _case = future);
+    setState(() {
+      _case = future;
+    });
     // FutureBuilder owns error presentation; do not rethrow through
     // RefreshIndicator and surface the same failure twice.
     return future.then<void>((_) {}, onError: (_) {});
