@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../providers/auth_provider.dart';
 
-/// Admin sign-in screen (Firebase Authentication).
+/// Internal-panel sign-in using Supabase Auth and a server-owned profile role.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -13,7 +13,7 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController(text: 'admin@legalapp.com');
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscure = true;
 
@@ -40,6 +40,31 @@ class _LoginScreenState extends State<LoginScreen> {
 
     // Failures are rendered by the persistent banner in build(), which reads
     // auth.error. No BuildContext is touched after the await.
+  }
+
+  Future<void> _requestPasswordReset() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter your account email first.')),
+      );
+      return;
+    }
+    final auth = AuthProvider.of(context);
+    try {
+      await auth.requestPasswordReset(email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('If an account exists for this email, a reset link has been sent.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
   }
 
   @override
@@ -83,7 +108,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const Text(
-                        'Admin Panel',
+                        'Admin & Lawyer Workspace',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.grey),
                       ),
@@ -151,7 +176,14 @@ class _LoginScreenState extends State<LoginScreen> {
                             (v == null || v.isEmpty) ? 'Password is required' : null,
                         onFieldSubmitted: (_) => _submit(),
                       ),
-                      const SizedBox(height: 24),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: auth.isLoading ? null : _requestPasswordReset,
+                          child: const Text('Forgot password?'),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       SizedBox(
                         height: 50,
                         child: ElevatedButton(
@@ -170,12 +202,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                   style: TextStyle(fontSize: 16),
                                 ),
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Default admin: admin@legalapp.com',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
                       ),
                     ],
                   ),

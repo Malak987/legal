@@ -68,12 +68,12 @@ const OWNED = [
     path: 'tasks',
     body: { title: 'Prepare memo' },
     // `title` stays required on this route — pre-existing contract.
-    patch: { title: 'Updated memo', status: 'Done' },
-    expect: { title: 'Updated memo', status: 'Done' },
+    patch: { title: 'Updated memo', status: 'Completed' },
+    expect: { title: 'Updated memo', status: 'Completed' },
     records: [
-      { id: 'rec-a', userId: 'client-1', status: 'To Do' },
-      { id: 'rec-b', userId: 'client-2', status: 'To Do' },
-      { id: 'rec-orphan', status: 'To Do' },
+      { id: 'rec-a', userId: 'client-1', status: 'Pending' },
+      { id: 'rec-b', userId: 'client-2', status: 'Pending' },
+      { id: 'rec-orphan', status: 'Pending' },
     ],
   },
   {
@@ -261,12 +261,16 @@ for (const resource of OWNED) {
         body: { ...patch, userId: 'client-2' },
       });
 
-      assert.equal(res.status, 200);
-      assert.equal(res.body.data.userId, 'client-1');
+      if (path === 'subscriptions') {
+        assert.equal(res.status, 403);
+      } else {
+        assert.equal(res.status, 200);
+        assert.equal(res.body.data.userId, 'client-1');
+      }
       assert.equal(docs(path).find((d) => d.id === 'rec-a').userId, 'client-1');
     });
 
-    it('lets an admin reassign a record through the update body', async () => {
+    it('applies the resource-specific owner reassignment rule for admins', async () => {
       signIn('admin1');
 
       const res = await put(`${BASE}/rec-a`, {
@@ -274,8 +278,16 @@ for (const resource of OWNED) {
         body: { ...patch, userId: 'client-2' },
       });
 
-      assert.equal(res.status, 200);
-      assert.equal(res.body.data.userId, 'client-2');
+      if (path === 'cases') {
+        assert.equal(res.status, 200);
+        assert.equal(res.body.data.userId, 'client-2');
+      } else {
+        // Bookings, tasks, and subscriptions are immutable in ownership after
+        // creation; admin authorization does not turn reassignment into a
+        // supported update operation.
+        assert.equal(res.status, path === 'bookings' ? 400 : 403);
+        assert.equal(docs(path).find((d) => d.id === 'rec-a').userId, 'client-1');
+      }
     });
 
     it('denies deleting another user\'s record and keeps it', async () => {
@@ -320,8 +332,13 @@ for (const resource of OWNED) {
       assert.equal(update.status, 200);
 
       const remove = await del(`${BASE}/rec-orphan`, { token: tokenFor('admin1') });
-      assert.equal(remove.status, 200);
-      assert.equal(docs(path).some((d) => d.id === 'rec-orphan'), false);
+      if (path === 'subscriptions') {
+        assert.equal(remove.status, 403, 'active subscription history is retained for admins too');
+        assert.ok(docs(path).some((d) => d.id === 'rec-orphan'));
+      } else {
+        assert.equal(remove.status, 200);
+        assert.equal(docs(path).some((d) => d.id === 'rec-orphan'), false);
+      }
     });
 
     it('answers 404 for a missing record', async () => {
@@ -339,6 +356,7 @@ describe('reviews: author is taken from the token', () => {
     reset({
       collections: {
         users: users('client1', 'client2'),
+        lawyers: [{ id: 'lawyer-1', name: 'Lawyer One', priceValue: 100 }],
         reviews: [{ id: 'rev-1', userId: 'client-2', userName: 'Client Two', rating: 5, comment: 'ok' }],
       },
     }),
@@ -353,8 +371,9 @@ describe('reviews: author is taken from the token', () => {
     });
 
     assert.equal(res.status, 201);
-    assert.equal(res.body.data.userId, 'client-1');
+    assert.equal(res.body.data.userId, undefined, 'public review response omits author IDs');
     assert.equal(res.body.data.userName, 'Client One');
+    assert.equal(docs('reviews').filter((r) => r.userId === 'client-1').length, 1);
     assert.equal(docs('reviews').filter((r) => r.userId === 'client-2').length, 1);
   });
 

@@ -37,7 +37,12 @@ class _LawyersScreenState extends State<LawyersScreen> {
     return itemsOf(res).map(Lawyer.fromJson).toList();
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   Future<void> _openForm({Lawyer? lawyer}) async {
     final saved = await showDialog<bool>(
@@ -106,7 +111,13 @@ class _LawyersScreenState extends State<LawyersScreen> {
                   },
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: 'Refresh lawyers',
+                onPressed: _reload,
+                icon: const Icon(Icons.refresh),
+              ),
+              const SizedBox(width: 8),
               ElevatedButton.icon(
                 onPressed: () => _openForm(),
                 icon: const Icon(Icons.add),
@@ -140,6 +151,9 @@ class _LawyersScreenState extends State<LawyersScreen> {
                 itemCount: lawyers.length,
                 itemBuilder: (context, i) {
                   final l = lawyers[i];
+                  final experience = l.experience.trim().isEmpty
+                      ? 'Experience not set'
+                      : l.experience.trim();
                   return Card(
                     child: ListTile(
                       leading: CircleAvatar(
@@ -149,7 +163,8 @@ class _LawyersScreenState extends State<LawyersScreen> {
                       title: Text(l.name,
                           style: const TextStyle(fontWeight: FontWeight.w600)),
                       subtitle: Text(
-                        '${l.specialty}  •  ${l.price}  •  ⭐ ${l.rating}',
+                        '${l.specialty}  •  $experience  •  '
+                        '${l.price}  •  ⭐ ${l.rating}',
                       ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -203,24 +218,29 @@ class LawyerDialog extends StatefulWidget {
 
 class _LawyerDialogState extends State<LawyerDialog> {
   late final TextEditingController _name;
-  late final TextEditingController _specialty;
   late final TextEditingController _price;
   late final TextEditingController _priceValue;
+  late final TextEditingController _experience;
   late final TextEditingController _location;
   late final TextEditingController _image;
   late double _rating;
   bool _isPopular = false;
   bool _isTop = false;
   bool _saving = false;
+  bool _categoriesStarted = false;
+  bool _categoryChanged = false;
+  String? _categoryId;
+  late Future<List<LegalCategory>> _categoriesFuture;
 
   @override
   void initState() {
     super.initState();
     final l = widget.lawyer;
     _name = TextEditingController(text: l?.name ?? '');
-    _specialty = TextEditingController(text: l?.specialty ?? '');
     _price = TextEditingController(text: l?.price ?? '');
+    _categoryId = l?.categoryId.isNotEmpty == true ? l!.categoryId : null;
     _priceValue = TextEditingController(text: _formatRate(l?.priceValue));
+    _experience = TextEditingController(text: l?.experience ?? '');
     _location = TextEditingController(text: l?.location ?? '');
     _image = TextEditingController(text: l?.image ?? '');
     _rating = l?.rating ?? 4.5;
@@ -231,12 +251,31 @@ class _LawyerDialogState extends State<LawyerDialog> {
   @override
   void dispose() {
     _name.dispose();
-    _specialty.dispose();
     _price.dispose();
     _priceValue.dispose();
+    _experience.dispose();
     _location.dispose();
     _image.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_categoriesStarted) return;
+    _categoriesStarted = true;
+    _categoriesFuture = _fetchCategories();
+  }
+
+  Future<List<LegalCategory>> _fetchCategories() async {
+    final response = await AuthProvider.of(context).api.get('categories', query: {
+      'page': '1',
+      'limit': '$kMaxPageSize',
+    });
+    return itemsOf(response)
+        .map(LegalCategory.fromJson)
+        .where((category) => category.id.isNotEmpty && category.name.isNotEmpty)
+        .toList(growable: false);
   }
 
   /// Shows a rate without a pointless trailing `.0`.
@@ -251,6 +290,12 @@ class _LawyerDialogState extends State<LawyerDialog> {
     if (_name.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Name is required')),
+      );
+      return;
+    }
+    if (widget.lawyer == null && (_categoryId == null || _categoryId!.isEmpty)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a legal category for this lawyer')),
       );
       return;
     }
@@ -283,7 +328,7 @@ class _LawyerDialogState extends State<LawyerDialog> {
     setState(() => _saving = true);
     final body = <String, dynamic>{
       'name': _name.text.trim(),
-      'specialty': _specialty.text.trim(),
+      'experience': _experience.text.trim(),
       'price': _price.text.trim(),
       'location': _location.text.trim(),
       'image': _image.text.trim(),
@@ -291,6 +336,11 @@ class _LawyerDialogState extends State<LawyerDialog> {
       'isPopular': _isPopular,
       'isTop': _isTop,
     };
+    // Keep the category relation unchanged unless selected on this form; the
+    // backend derives the legacy specialty label from the category name.
+    if (widget.lawyer == null || _categoryChanged) {
+      body['categoryId'] = _categoryId ?? '';
+    }
     // Added after the literal instead of with a collection-`if`: the stored
     // rate must simply be absent when the field was left empty on edit.
     if (rate != null) body['priceValue'] = rate;
@@ -326,9 +376,73 @@ class _LawyerDialogState extends State<LawyerDialog> {
                 decoration: const InputDecoration(labelText: 'Name'),
               ),
               const SizedBox(height: 12),
+              FutureBuilder<List<LegalCategory>>(
+                future: _categoriesFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const LinearProgressIndicator();
+                  }
+                  if (snapshot.hasError) {
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () {
+                          setState(() {
+                            _categoriesFuture = _fetchCategories();
+                          });
+                        },
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Could not load categories. Retry'),
+                      ),
+                    );
+                  }
+                  final categories = snapshot.data ?? const <LegalCategory>[];
+                  if (categories.isEmpty) {
+                    return const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          'No legal categories are available. Add a category before assigning one to a new lawyer.',
+                        ),
+                      ),
+                    );
+                  }
+                  final currentId = categories.any((category) => category.id == _categoryId)
+                      ? _categoryId
+                      : null;
+                  return DropdownButtonFormField<String>(
+                    initialValue: currentId ?? '',
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Legal category'),
+                    items: [
+                      DropdownMenuItem<String>(
+                        value: '',
+                        child: Text(widget.lawyer == null
+                            ? 'Select a category'
+                            : 'No category (legacy profile)'),
+                      ),
+                      ...categories.map(
+                        (category) => DropdownMenuItem<String>(
+                          value: category.id,
+                          child: Text(category.name),
+                        ),
+                      ),
+                    ],
+                    onChanged: (value) => setState(() {
+                      _categoryId = value == null || value.isEmpty ? null : value;
+                      _categoryChanged = true;
+                    }),
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
               TextField(
-                controller: _specialty,
-                decoration: const InputDecoration(labelText: 'Specialty'),
+                controller: _experience,
+                decoration: const InputDecoration(
+                  labelText: 'Experience',
+                  hintText: 'e.g. 8 years or Senior counsel',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(

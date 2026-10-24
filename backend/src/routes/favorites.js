@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getDb } from '../config/firebase.js';
+import { requestDatabase, callUserRpc, rpcRow } from '../utils/supabase_rpc.js';
 import {
   authenticate,
   requireSelfOrAdmin,
@@ -8,7 +8,7 @@ import {
 } from '../middleware/auth.js';
 import { ok, created, notFound, badRequest } from '../utils/response.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { getDocById, createDoc, deleteDoc } from '../utils/firestore.js';
+import { getDocById, deleteDoc } from '../utils/supabase_database.js';
 
 const router = Router();
 const COLLECTION = 'favorites';
@@ -20,7 +20,7 @@ router.get(
   requireSelfOrAdmin('userId'),
   asyncHandler(async (req, res) => {
     const { userId } = req.params;
-    const snap = await getDb()
+    const snap = await requestDatabase(req)
       .collection(COLLECTION)
       .where('userId', '==', userId)
       .get();
@@ -44,7 +44,7 @@ router.post(
     // list; it is now ignored.
     const userId = req.user.uid;
 
-    const existing = await getDb()
+    const existing = await requestDatabase(req)
       .collection(COLLECTION)
       .where('userId', '==', userId)
       .where('lawyerId', '==', lawyerId)
@@ -53,8 +53,18 @@ router.post(
     if (!existing.empty) {
       return ok(res, { id: existing.docs[0].id, ...existing.docs[0].data() }, 'Already favorited');
     }
-    const createdDoc = await createDoc(getDb(), COLLECTION, { userId, lawyerId });
-    created(res, createdDoc, 'Added to favorites');
+    try {
+      const outcome = await callUserRpc(req, 'rpc_favorite_add', {
+        p_lawyer_id: lawyerId,
+      });
+      const favorite = rpcRow(COLLECTION, outcome);
+      if (!favorite) throw new Error('Supabase favorite RPC returned an unexpected result.');
+      return created(res, favorite, 'Added to favorites');
+    } catch (error) {
+      if (error.code === '42501') return forbidden(res, 'Forbidden. You can only add favorites for yourself.');
+      if (error.code === '23503') return badRequest(res, 'lawyerId does not identify an available lawyer');
+      throw error;
+    }
   }),
 );
 
@@ -63,13 +73,13 @@ router.delete(
   '/:id',
   authenticate,
   asyncHandler(async (req, res) => {
-    const existing = await getDocById(getDb(), COLLECTION, req.params.id);
+    const existing = await getDocById(requestDatabase(req), COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Favorite not found');
     if (!isOwner(existing, req)) {
       return forbidden(res, 'Forbidden. You can only remove your own favorites.');
     }
 
-    const deleted = await deleteDoc(getDb(), COLLECTION, req.params.id);
+    const deleted = await deleteDoc(requestDatabase(req), COLLECTION, req.params.id);
     if (!deleted) return notFound(res, 'Favorite not found');
     ok(res, { id: req.params.id }, 'Removed from favorites');
   }),

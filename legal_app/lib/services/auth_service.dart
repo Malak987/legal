@@ -1,12 +1,16 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
+import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+
+import '../config/supabase_config.dart';
 import '../models/app_profile.dart';
 import 'api_client.dart';
 
-/// The signed-in Firebase account, reduced to what this app needs.
-///
-/// A plain value object rather than the plugin's `User`, so the session logic
-/// can be exercised in tests without a live Firebase project.
+/// The signed-in Supabase Auth account. Its UUID is the canonical identity;
+/// public profile fields and roles are always loaded from `public.users`.
 class AuthUser {
   const AuthUser({required this.uid, this.email});
 
@@ -16,84 +20,222 @@ class AuthUser {
   String get emailOrEmpty => email ?? '';
 }
 
-/// A sign-in/registration failure with a message that can be shown as-is.
+/// A Supabase Auth failure with a safe message suitable for the UI.
 class AuthException implements Exception {
   AuthException(this.message, {this.code, this.accountCreated = false});
 
   final String message;
-
-  /// Firebase's error code, when the failure came from Authentication.
   final String? code;
 
-  /// True when registration left an Authentication account behind because the
-  /// rollback itself failed. The UI says so instead of pretending nothing was
-  /// created.
+  /// The Auth account was created, but confirmation/profile/session setup is
+  /// incomplete. The UI must not suggest that the user register again.
   final bool accountCreated;
 
   @override
   String toString() => message;
 }
 
-/// The Firebase Authentication operations the app performs.
+/// Secure persistence for the rotating Supabase refresh token.
 ///
-/// Abstract so `SessionController` can be tested with a fake; the production
-/// implementation is [FirebaseAuthGateway].
-abstract class AuthGateway {
-  /// Emits on sign-in, sign-out and token invalidation.
+/// Access tokens remain in memory only. Implementations used by tests should be
+/// ephemeral; production uses the platform secure-storage/keychain facility.
+abstract interface class AuthSessionStore {
+  Future<String?> readRefreshToken();
+  Future<void> writeRefreshToken(String token);
+  Future<void> clear();
+}
+
+class SecureAuthSessionStore implements AuthSessionStore {
+  SecureAuthSessionStore({FlutterSecureStorage? storage})
+      : _storage = storage ?? const FlutterSecureStorage();
+
+  static const String _key = 'legal_supabase_refresh_token_v1';
+  final FlutterSecureStorage _storage;
+
+  @override
+  Future<String?> readRefreshToken() => _storage.read(key: _key);
+
+  @override
+  Future<void> writeRefreshToken(String token) =>
+      _storage.write(key: _key, value: token);
+
+  @override
+  Future<void> clear() => _storage.delete(key: _key);
+}
+
+/// Auth operations used by the application/session controller.
+abstract interface class AuthGateway {
+  /// Emits explicit sign-in/sign-out changes. Implementations do not emit an
+  /// initial `null`; startup restoration is performed by [restoreSession].
   Stream<AuthUser?> get authStateChanges;
 
-  /// The currently signed-in account, or `null`.
   AuthUser? get currentUser;
+
+  Future<AuthUser?> restoreSession({Uri? callbackUri});
 
   Future<AuthUser> signIn({required String email, required String password});
 
+  /// Creates a public client account only. No role is accepted from the caller.
   Future<AuthUser> createAccount({
     required String email,
     required String password,
+    String? displayName,
   });
 
-  /// Deletes the account that is signed in **right now**.
-  ///
-  /// Used only to roll back an account created by the sign-up attempt that is
-  /// still on the stack — never to "clean up" a pre-existing account.
-  Future<void> deleteCurrentAccount();
+  Future<void> requestPasswordReset({
+    required String email,
+    String? redirectTo,
+  });
 
-  Future<void> signOut();
-
-  /// Changes the signed-in account's password.
-  ///
-  /// Firebase requires a *recent* sign-in for this, so the current password is
-  /// re-verified first: without that the call fails with `requires-recent-login`
-  /// instead of succeeding, and the user gets no explanation.
   Future<void> changePassword({
     required String currentPassword,
     required String newPassword,
   });
+
+  /// Sets a new password after the Supabase recovery callback has established
+  /// a short-lived recovery session.
+  Future<void> setPasswordFromRecovery(String newPassword);
+
+  Future<void> signOut();
+
+  bool get isPasswordRecovery;
+  void dispose();
 }
 
-/// [AuthGateway] backed by the Firebase Authentication client SDK.
-class FirebaseAuthGateway implements AuthGateway {
-  /// Resolved per use, not in a field initialiser: `FirebaseAuth.instance`
-  /// throws `[core/no-app]` when `Firebase.initializeApp` failed, which is the
-  /// case on platforms whose options are still placeholders. `main()` catches
-  /// that so the UI can load; the failure must surface here as a message, not
-  /// as a crash while a screen is building.
-  FirebaseAuth get _auth => FirebaseAuth.instance;
+/// Supabase Auth REST gateway with rotating, securely persisted refresh-token
+/// sessions. Only the public anon/publishable key is accepted by this client.
+class SupabaseAuthGateway implements AuthGateway {
+  SupabaseAuthGateway({
+    http.Client? client,
+    String? supabaseUrl,
+    String? supabaseAnonKey,
+    AuthSessionStore? sessionStore,
+    String? authRedirectUrl,
+    bool? allowClientSignup,
+  })  : _client = client ?? http.Client(),
+        _allowClientSignup =
+            allowClientSignup ?? SupabaseConfig.enableClientSignup,
+        _ownsClient = client == null,
+        _supabaseUrl = (supabaseUrl ?? SupabaseConfig.supabaseUrl).trim(),
+        _supabaseAnonKey =
+            (supabaseAnonKey ?? SupabaseConfig.supabaseAnonKey).trim(),
+        _sessionStore = sessionStore ?? SecureAuthSessionStore(),
+        _authRedirectUrl =
+            (authRedirectUrl ?? SupabaseConfig.authRedirectUrl).trim();
 
-  AuthUser _map(User user) => AuthUser(uid: user.uid, email: user.email);
+  static const Duration _requestTimeout = Duration(seconds: 20);
+  static const Duration _refreshSkew = Duration(seconds: 60);
+
+  final http.Client _client;
+  final bool _allowClientSignup;
+  final bool _ownsClient;
+  final String _supabaseUrl;
+  final String _supabaseAnonKey;
+  final AuthSessionStore _sessionStore;
+  final String _authRedirectUrl;
+  final StreamController<AuthUser?> _authController =
+      StreamController<AuthUser?>.broadcast();
+
+  AuthUser? _currentUser;
+  String? _accessToken;
+  String? _refreshToken;
+  DateTime? _accessTokenExpiresAt;
+  Future<void>? _refreshInFlight;
+  bool _isPasswordRecovery = false;
+  bool _disposed = false;
 
   @override
-  Stream<AuthUser?> get authStateChanges =>
-      _auth.authStateChanges().map((user) => user == null ? null : _map(user));
+  Stream<AuthUser?> get authStateChanges => _authController.stream;
 
   @override
-  AuthUser? get currentUser {
+  AuthUser? get currentUser => _currentUser;
+
+  @override
+  bool get isPasswordRecovery => _isPasswordRecovery;
+
+  /// Current bearer token, refreshed before expiry or on an explicit 401 retry.
+  Future<String?> getAccessToken({bool forceRefresh = false}) async {
+    final expiresAt = _accessTokenExpiresAt;
+    final stillFresh = _accessToken != null &&
+        (expiresAt == null || DateTime.now().add(_refreshSkew).isBefore(expiresAt));
+    if (!forceRefresh && stillFresh) return _accessToken;
+
+    final refreshToken = _refreshToken ?? await _sessionStore.readRefreshToken();
+    if (refreshToken == null || refreshToken.isEmpty) return _accessToken;
+
     try {
-      final user = _auth.currentUser;
-      return user == null ? null : _map(user);
+      await _refreshSession(refreshToken);
+    } on AuthException catch (error) {
+      if (_isInvalidRefreshToken(error)) {
+        await _clearSession(notify: true);
+      }
+      // Preserve the last access token on transient network/server errors. The
+      // caller's request may still succeed; a 401 retry can force another try.
     } catch (_) {
-      return null;
+      // A secure-storage/network plugin error must not crash a widget build.
     }
+    return _accessToken;
+  }
+
+  @override
+  Future<AuthUser?> restoreSession({Uri? callbackUri}) async {
+    _ensureConfigured();
+    if (callbackUri != null) {
+      final callbackUser = await _restoreCallbackSession(callbackUri);
+      if (callbackUser != null) return callbackUser;
+    }
+
+    if (_currentUser != null) return _currentUser;
+    final storedRefreshToken = await _sessionStore.readRefreshToken();
+    if (storedRefreshToken == null || storedRefreshToken.isEmpty) return null;
+
+    try {
+      await _refreshSession(storedRefreshToken);
+      return _currentUser;
+    } on AuthException catch (error) {
+      if (_isInvalidRefreshToken(error)) {
+        await _clearSession(notify: true);
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  Future<AuthUser?> _restoreCallbackSession(Uri callbackUri) async {
+    final callback = <String, String>{...callbackUri.queryParameters};
+    if (callbackUri.fragment.isNotEmpty) {
+      try {
+        callback.addAll(Uri.splitQueryString(callbackUri.fragment));
+      } catch (_) {
+        // A non-auth fragment is an ordinary in-app URL; ignore it.
+      }
+    }
+
+    final accessToken = (callback['access_token'] ?? '').trim();
+    final refreshToken = (callback['refresh_token'] ?? '').trim();
+    if (accessToken.isEmpty || refreshToken.isEmpty) return null;
+
+    final response = await _send(
+      'GET',
+      _authUri('user'),
+      bearerToken: accessToken,
+    );
+    final decoded = _decodeJson(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _mapSupabaseError(decoded, response.statusCode);
+    }
+
+    final type = (callback['type'] ?? '').toLowerCase();
+    _isPasswordRecovery = type == 'recovery';
+    return _installSession(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+      user: _extractUser(decoded),
+      expiresIn: int.tryParse(callback['expires_in'] ?? ''),
+      emit: true,
+      persistenceRequired: true,
+      accountCreated: false,
+    );
   }
 
   @override
@@ -101,146 +243,440 @@ class FirebaseAuthGateway implements AuthGateway {
     required String email,
     required String password,
   }) async {
-    try {
-      final credential = await _auth.signInWithEmailAndPassword(
-        email: email.trim(),
-        password: password,
-      );
-      final user = credential.user;
-      if (user == null) {
-        throw AuthException('Sign-in failed. Please try again.');
-      }
-      return _map(user);
-    } on FirebaseAuthException catch (e) {
-      throw AuthException(messageForAuthError(e), code: e.code);
-    } on AuthException {
-      rethrow;
-    } catch (e) {
-      throw AuthException(messageForSetupError(e));
+    _ensureConfigured();
+    final response = await _send(
+      'POST',
+      _authUri('token', const <String, String>{'grant_type': 'password'}),
+      body: <String, dynamic>{'email': email.trim(), 'password': password},
+    );
+    final decoded = _decodeJson(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _mapSupabaseError(decoded, response.statusCode);
     }
+    _isPasswordRecovery = false;
+    return _installTokenResponse(
+      decoded,
+      fallbackEmail: email.trim(),
+      emit: true,
+      persistenceRequired: true,
+      accountCreated: false,
+    );
   }
 
   @override
   Future<AuthUser> createAccount({
     required String email,
     required String password,
+    String? displayName,
   }) async {
-    try {
-      final credential = await _auth.createUserWithEmailAndPassword(
-        email: email.trim(),
-        password: password,
+    _ensureConfigured();
+    if (!_allowClientSignup) {
+      throw AuthException(
+        'Client registration is paused until secure profile linking is deployed and verified.',
+        code: 'signup-not-enabled',
       );
-      final user = credential.user;
-      if (user == null) {
-        throw AuthException('Sign-up failed: no account was created.');
-      }
-      return _map(user);
-    } on FirebaseAuthException catch (e) {
-      throw AuthException(messageForAuthError(e), code: e.code);
-    } on AuthException {
-      rethrow;
-    } catch (e) {
-      throw AuthException(messageForSetupError(e));
+    }
+
+    final redirect = _authRedirectUrl;
+    if (redirect.isEmpty) {
+      throw AuthException(
+        'Email confirmation is enabled, but this build has no allowed auth redirect. Configure SUPABASE_AUTH_REDIRECT_URL and the project redirect allow-list before registering.',
+        code: 'auth-redirect-not-configured',
+      );
+    }
+    final response = await _send(
+      'POST',
+      _authUri(
+        'signup',
+        redirect.isEmpty ? null : <String, String>{'redirect_to': redirect},
+      ),
+      body: <String, dynamic>{
+        'email': email.trim(),
+        'password': password,
+        // This is untrusted profile display data only. The client sends no role;
+        // the trusted database Auth lifecycle creates the fixed `client` role.
+        'data': <String, dynamic>{
+          if (displayName?.trim().isNotEmpty == true) 'name': displayName!.trim(),
+        },
+      },
+    );
+    final decoded = _decodeJson(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _mapSupabaseError(decoded, response.statusCode);
+    }
+
+    final accessToken = (decoded['access_token'] ?? '').toString().trim();
+    final refreshToken = (decoded['refresh_token'] ?? '').toString().trim();
+    if (accessToken.isEmpty || refreshToken.isEmpty) {
+      // Supabase is configured to require email confirmation. A user object may
+      // be returned, but without a session the app must not enter protected UI.
+      _currentUser = null;
+      _accessToken = null;
+      _refreshToken = null;
+      _accessTokenExpiresAt = null;
+      _isPasswordRecovery = false;
+      throw AuthException(
+        'Your account was created. Check your email to confirm it, then sign in.',
+        code: 'email-confirmation-required',
+        accountCreated: true,
+      );
+    }
+
+    _isPasswordRecovery = false;
+    return _installTokenResponse(
+      decoded,
+      fallbackEmail: email.trim(),
+      emit: true,
+      persistenceRequired: true,
+      accountCreated: true,
+    );
+  }
+
+  @override
+  Future<void> requestPasswordReset({
+    required String email,
+    String? redirectTo,
+  }) async {
+    _ensureConfigured();
+    final redirect = (redirectTo ?? _authRedirectUrl).trim();
+    if (redirect.isEmpty) {
+      throw AuthException(
+        'Password recovery is not configured for this build. Set SUPABASE_AUTH_REDIRECT_URL and allow it in the Supabase Auth settings.',
+        code: 'auth-redirect-not-configured',
+      );
+    }
+    final response = await _send(
+      'POST',
+      _authUri(
+        'recover',
+        redirect.isEmpty ? null : <String, String>{'redirect_to': redirect},
+      ),
+      body: <String, dynamic>{'email': email.trim()},
+    );
+    final decoded = _decodeJson(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _mapSupabaseError(decoded, response.statusCode);
     }
   }
-
-  @override
-  Future<void> deleteCurrentAccount() async {
-    final user = _auth.currentUser;
-    if (user == null) return;
-    await user.delete();
-  }
-
-  @override
-  Future<void> signOut() => _auth.signOut();
 
   @override
   Future<void> changePassword({
     required String currentPassword,
     required String newPassword,
   }) async {
-    final user = _auth.currentUser;
-    if (user == null) {
-      throw AuthException('You are not signed in.');
-    }
-
+    final user = _currentUser;
+    if (user == null) throw AuthException('You are not signed in.');
     final email = user.email;
     if (email == null || email.isEmpty) {
-      throw AuthException(
-        'This account has no email address, so its password cannot be changed here.',
-      );
+      throw AuthException('This account has no email address.');
     }
+
+    // Supabase Auth does not expose Firebase-style reauthenticate. A fresh
+    // password grant is the reauthentication step and rotates this session.
+    await signIn(email: email, password: currentPassword);
+    await _putPassword(newPassword);
+  }
+
+  @override
+  Future<void> setPasswordFromRecovery(String newPassword) async {
+    if (!_isPasswordRecovery || _currentUser == null) {
+      throw AuthException('Open the password-reset link from your email first.');
+    }
+    await _putPassword(newPassword);
+    _isPasswordRecovery = false;
+  }
+
+  Future<void> _putPassword(String newPassword) async {
+    final token = await getAccessToken();
+    if (token == null || token.isEmpty) {
+      throw AuthException('Your session expired. Request a new password-reset link.');
+    }
+    final response = await _send(
+      'PUT',
+      _authUri('user'),
+      bearerToken: token,
+      body: <String, dynamic>{'password': newPassword},
+    );
+    final decoded = _decodeJson(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _mapSupabaseError(decoded, response.statusCode);
+    }
+  }
+
+  Future<AuthUser> _installTokenResponse(
+    Map<String, dynamic> response, {
+    required String fallbackEmail,
+    required bool emit,
+    required bool persistenceRequired,
+    required bool accountCreated,
+  }) async {
+    final accessToken = (response['access_token'] ?? '').toString().trim();
+    final refreshToken = (response['refresh_token'] ?? '').toString().trim();
+    if (accessToken.isEmpty || refreshToken.isEmpty) {
+      throw AuthException('Authentication failed: no active session was returned.');
+    }
+    final user = _extractUser(response, fallbackEmail: fallbackEmail);
+    return _installSession(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+      user: user,
+      expiresIn: int.tryParse((response['expires_in'] ?? '').toString()),
+      emit: emit,
+      persistenceRequired: persistenceRequired,
+      accountCreated: accountCreated,
+    );
+  }
+
+  Future<AuthUser> _installSession({
+    required String accessToken,
+    required String refreshToken,
+    required AuthUser user,
+    required bool emit,
+    required bool persistenceRequired,
+    required bool accountCreated,
+    int? expiresIn,
+  }) async {
+    try {
+      await _sessionStore.writeRefreshToken(refreshToken);
+    } catch (_) {
+      if (persistenceRequired) {
+        await _bestEffortLogout(accessToken);
+        await _clearSession(notify: false);
+        throw AuthException(
+          'Could not securely save this session on the device. Please retry.',
+          code: 'session-storage-failed',
+          accountCreated: accountCreated,
+        );
+      }
+    }
+
+    _accessToken = accessToken;
+    _refreshToken = refreshToken;
+    _currentUser = user;
+    _accessTokenExpiresAt = expiresIn == null
+        ? null
+        : DateTime.now().add(Duration(seconds: expiresIn));
+    if (emit && !_authController.isClosed) _authController.add(user);
+    return user;
+  }
+
+  Future<void> _refreshSession(String refreshToken) {
+    final existing = _refreshInFlight;
+    if (existing != null) return existing;
+    final pending = _performRefresh(refreshToken);
+    _refreshInFlight = pending;
+    return pending.whenComplete(() => _refreshInFlight = null);
+  }
+
+  Future<void> _performRefresh(String refreshToken) async {
+    _ensureConfigured();
+    final previousUid = _currentUser?.uid;
+    final response = await _send(
+      'POST',
+      _authUri('token', const <String, String>{'grant_type': 'refresh_token'}),
+      body: <String, dynamic>{'refresh_token': refreshToken},
+    );
+    final decoded = _decodeJson(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _mapSupabaseError(decoded, response.statusCode);
+    }
+
+    final renewedUser = await _installTokenResponse(
+      decoded,
+      fallbackEmail: _currentUser?.email ?? '',
+      emit: false,
+      persistenceRequired: false,
+      accountCreated: false,
+    );
+    // Refreshes must not silently change account identity.
+    if (previousUid != null && previousUid != renewedUser.uid) {
+      await _clearSession(notify: true);
+      throw AuthException('The refreshed session belongs to a different account.');
+    }
+  }
+
+  Future<http.Response> _send(
+    String method,
+    Uri uri, {
+    Object? body,
+    String? bearerToken,
+  }) async {
+    final request = http.Request(method, uri)
+      ..headers.addAll(<String, String>{
+        'apikey': _supabaseAnonKey,
+        'Content-Type': 'application/json',
+        if (bearerToken != null && bearerToken.isNotEmpty)
+          'Authorization': 'Bearer $bearerToken',
+      });
+    if (body != null) request.body = jsonEncode(body);
 
     try {
-      // Re-authenticate first: `updatePassword` on a session older than a few
-      // minutes is rejected with `requires-recent-login`, and a successful
-      // re-auth is also what proves the person at the keyboard knows the
-      // current password.
-      final credential = EmailAuthProvider.credential(
-        email: email,
-        password: currentPassword,
+      final streamed = await _client.send(request).timeout(_requestTimeout);
+      return await http.Response.fromStream(streamed).timeout(_requestTimeout);
+    } on TimeoutException {
+      throw AuthException(
+        'The authentication service took too long to respond. Try again.',
+        code: 'network-request-failed',
       );
-      await user.reauthenticateWithCredential(credential);
-      await user.updatePassword(newPassword);
-    } on FirebaseAuthException catch (e) {
-      throw AuthException(messageForAuthError(e), code: e.code);
     } on AuthException {
       rethrow;
-    } catch (e) {
-      throw AuthException(messageForSetupError(e));
+    } catch (_) {
+      throw AuthException(
+        'Network error. Check your connection and try again.',
+        code: 'network-request-failed',
+      );
     }
   }
 
-  /// Maps Firebase error codes onto user-facing text.
-  static String messageForAuthError(FirebaseAuthException e) {
-    switch (e.code) {
-      case 'email-already-in-use':
-        return 'An account with this email already exists. Try signing in.';
-      case 'invalid-email':
-        return 'Please enter a valid email address.';
-      case 'weak-password':
-        return 'Choose a stronger password (at least 6 characters).';
-      case 'user-not-found':
-      case 'wrong-password':
-      case 'invalid-credential':
-        return 'Incorrect email or password.';
-      case 'user-disabled':
-        return 'This account has been disabled. Contact support.';
-      case 'too-many-requests':
-        return 'Too many attempts. Please wait a moment and try again.';
-      case 'network-request-failed':
-        return 'Network error. Check your connection and try again.';
-      case 'operation-not-allowed':
-        return 'Email/password sign-in is not enabled for this project.';
-      case 'requires-recent-login':
-        return 'Please sign in again to finish this action.';
-      default:
-        return e.message ?? 'Authentication failed. Please try again.';
+  Future<void> _bestEffortLogout(String token) async {
+    try {
+      await _send('POST', _authUri('logout'), bearerToken: token);
+    } catch (_) {}
+  }
+
+  Future<void> _clearSession({required bool notify}) async {
+    _currentUser = null;
+    _accessToken = null;
+    _refreshToken = null;
+    _accessTokenExpiresAt = null;
+    _isPasswordRecovery = false;
+    try {
+      await _sessionStore.clear();
+    } catch (_) {}
+    if (notify && !_authController.isClosed) _authController.add(null);
+  }
+
+  bool _isInvalidRefreshToken(AuthException error) {
+    final code = (error.code ?? '').toLowerCase();
+    final message = error.message.toLowerCase();
+    return code.contains('invalid_grant') ||
+        code.contains('refresh_token_not_found') ||
+        message.contains('invalid refresh token') ||
+        message.contains('refresh token not found');
+  }
+
+  void _ensureConfigured() {
+    if (_supabaseUrl.isEmpty || _supabaseAnonKey.isEmpty) {
+      throw AuthException(
+        'Supabase authentication is not configured for this build. Provide the project URL and public anon/publishable key.',
+        code: 'auth-not-configured',
+      );
     }
   }
 
-  /// Failures that are not `FirebaseAuthException`: most often a build whose
-  /// Firebase options are still placeholders.
-  static String messageForSetupError(Object error) {
-    final text = error.toString().toLowerCase();
-    if (text.contains('no-app') || text.contains('no firebase app')) {
-      return 'Authentication is not configured for this build.';
+  Uri _authUri(String path, [Map<String, String>? query]) {
+    final base = _supabaseUrl.endsWith('/')
+        ? _supabaseUrl.substring(0, _supabaseUrl.length - 1)
+        : _supabaseUrl;
+    final clean = path.startsWith('/') ? path.substring(1) : path;
+    return Uri.parse('$base/auth/v1/$clean').replace(
+      queryParameters: query == null || query.isEmpty ? null : query,
+    );
+  }
+
+  static Map<String, dynamic> _decodeJson(String raw) {
+    if (raw.trim().isEmpty) return <String, dynamic>{};
+    try {
+      final parsed = jsonDecode(raw);
+      if (parsed is Map) return Map<String, dynamic>.from(parsed);
+    } catch (_) {}
+    return <String, dynamic>{};
+  }
+
+  static AuthUser _extractUser(
+    Map<String, dynamic> response, {
+    String fallbackEmail = '',
+  }) {
+    final rawUser = response['user'] is Map ? response['user'] : response;
+    final user = Map<String, dynamic>.from(rawUser as Map);
+    final uid = (user['id'] ?? '').toString().trim();
+    if (uid.isEmpty) throw AuthException('Authentication failed: no user id returned.');
+    final email = (user['email'] ?? fallbackEmail).toString().trim();
+    return AuthUser(uid: uid, email: email.isEmpty ? null : email);
+  }
+
+  static AuthException _mapSupabaseError(
+    Map<String, dynamic> body,
+    int statusCode,
+  ) {
+    final code = (body['error_code'] ?? body['code'] ?? body['error'] ?? '')
+        .toString()
+        .toLowerCase();
+    final message = (body['msg'] ??
+            body['error_description'] ??
+            body['message'] ??
+            '')
+        .toString();
+    final combined = '$code ${message.toLowerCase()}';
+
+    if (combined.contains('user_already_exists') ||
+        combined.contains('already registered') ||
+        combined.contains('already exists')) {
+      return AuthException(
+        'An account with this email already exists. Try signing in.',
+        code: 'email-already-in-use',
+      );
     }
-    return 'Could not reach authentication. Check your connection and retry.';
+    if (combined.contains('invalid_credentials') ||
+        combined.contains('invalid login credentials')) {
+      return AuthException('Incorrect email or password.', code: 'invalid-credential');
+    }
+    if (combined.contains('weak_password') ||
+        combined.contains('password should be at least')) {
+      return AuthException(
+        'Choose a stronger password (at least 8 characters).',
+        code: 'weak-password',
+      );
+    }
+    if (combined.contains('invalid email') ||
+        combined.contains('email address is invalid')) {
+      return AuthException('Please enter a valid email address.', code: 'invalid-email');
+    }
+    if (combined.contains('refresh token') &&
+        (combined.contains('invalid') || combined.contains('not found'))) {
+      return AuthException(
+        'This session has expired. Please sign in again.',
+        code: 'refresh_token_not_found',
+      );
+    }
+    if (statusCode == 429 || combined.contains('over_request_rate_limit')) {
+      return AuthException(
+        'Too many attempts. Please wait a moment and try again.',
+        code: 'too-many-requests',
+      );
+    }
+    if (message.isNotEmpty) {
+      return AuthException(message, code: code.isEmpty ? null : code);
+    }
+    return AuthException(
+      'Authentication failed. Please try again.',
+      code: code.isEmpty ? null : code,
+    );
+  }
+
+  @override
+  Future<void> signOut() async {
+    final token = _accessToken;
+    await _clearSession(notify: true);
+    if (token != null && token.isNotEmpty && _supabaseAnonKey.isNotEmpty) {
+      try {
+        await _send('POST', _authUri('logout'), bearerToken: token);
+      } catch (_) {
+        // Local and secure-storage state is already cleared.
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _authController.close();
+    if (_ownsClient) _client.close();
   }
 }
 
-/// Sign-in, registration and profile loading — the rules, not the transport.
-///
-/// Registration is split so the password never reaches this backend:
-///
-///  1. the Firebase client SDK creates the Authentication account;
-///  2. `POST /api/users/me` creates `users/{uid}` with the server-assigned
-///     `client` role (uid and email come from the verified token).
-///
-/// Step 2 failing rolls step 1 back, so a failed sign-up cannot leave an
-/// account that authenticates but has no profile — invisible to the admin
-/// panel, which lists Firestore rather than Authentication.
+/// Supabase-only sign-in, registration and profile loading rules.
 class AuthService {
   AuthService({required this.gateway, required this.api});
 
@@ -248,100 +684,105 @@ class AuthService {
   final ApiClient api;
 
   Stream<AuthUser?> get authStateChanges => gateway.authStateChanges;
-
   AuthUser? get currentUser => gateway.currentUser;
+  bool get isPasswordRecovery => gateway.isPasswordRecovery;
 
-  /// Signs in and returns the account's profile, provisioning it when missing.
-  ///
-  /// A pre-existing profile is never overwritten: provisioning answers 409 and
-  /// the stored document (including a `lawyer`/`admin` role) is left as it is.
+  /// Restores a persisted Supabase session and, when possible, consumes the
+  /// recovery/access-token fragment supplied by the configured email redirect.
+  Future<AuthUser?> restoreSession() => gateway.restoreSession(
+        callbackUri: kIsWeb ? Uri.base : null,
+      );
+
   Future<AppProfile> signIn({
     required String email,
     required String password,
   }) async {
     await gateway.signIn(email: email, password: password);
-    return loadOrProvisionProfile();
+    return loadProfile();
   }
 
-  /// Creates the Authentication account and its Firestore profile.
-  ///
-  /// Throws [AuthException] on any failure. When the profile cannot be created
-  /// the account created by *this call* is deleted again; if that rollback
-  /// fails too, the exception reports `accountCreated: true`.
+  /// Creates a public client account only. The role is never supplied by the
+  /// UI or Auth user metadata; a trusted server/database flow must provision it.
   Future<AppProfile> register({
     required String name,
     required String email,
     required String password,
   }) async {
-    await gateway.createAccount(email: email, password: password);
+    await gateway.createAccount(
+      email: email,
+      password: password,
+      displayName: name.trim(),
+    );
 
-    try {
-      await api.provisionProfile(name: name);
-    } catch (e) {
-      // Only this attempt's account is removed: `createAccount` succeeded
-      // immediately above, so the current session is the one just created.
-      var leftOver = false;
-      try {
-        await gateway.deleteCurrentAccount();
-      } catch (_) {
-        leftOver = true;
-      }
-      final base = e is ApiException
-          ? 'Your account could not be finished setting up: ${e.message}'
-          : 'Your account could not be finished setting up.';
+    final user = gateway.currentUser;
+    if (user == null) {
       throw AuthException(
-        // If the rollback failed, the user must know an account exists —
-        // otherwise "try signing up again" just reports "email already in use".
-        leftOver
-            ? '$base The sign-in account was created but its profile is '
-                'missing; sign in to finish setting it up.'
-            : base,
-        accountCreated: leftOver,
+        'Your account was created. Confirm your email before signing in.',
+        code: 'email-confirmation-required',
+        accountCreated: true,
       );
     }
-
-    // The profile now exists. A failure to read it back is a transient
-    // problem, so it must NOT roll back a successfully created account.
-    return api.getMyProfile();
+    try {
+      return await loadProfile();
+    } catch (error) {
+      final detail = error is AuthException || error is ApiException
+          ? ' ${error.toString()}'
+          : '';
+      throw AuthException(
+        'Your account was created, but its client profile is not ready.$detail '
+        'Retry sign-in later or contact support; do not register again.',
+        code: 'profile-provisioning-failed',
+        accountCreated: true,
+      );
+    }
   }
 
-  /// Returns the signed-in account's profile, creating it when absent.
-  ///
-  /// Accounts that predate registration (created by hand in the Firebase
-  /// console, or by the old seed script) have an Authentication record and no
-  /// `users/{uid}` document. Provisioning gives them a `client` profile, which
-  /// is exactly what self-service registration would have produced — it cannot
-  /// grant `lawyer` or `admin`, and it cannot touch an existing document.
-  Future<AppProfile> loadOrProvisionProfile({String? fallbackName}) async {
-    final user = gateway.currentUser;
-    if (user == null) throw AuthException('You are not signed in.');
+  Future<AppProfile> loadProfile() async {
+    if (gateway.currentUser == null) throw AuthException('You are not signed in.');
 
+    late final AppProfile profile;
     try {
-      return await api.getMyProfile();
-    } on ApiException catch (e) {
-      if (!e.isNotFound) rethrow; // 401/403/5xx are real problems
+      profile = await api.getMyProfile();
+    } on ApiException catch (error) {
+      if (error.statusCode == 404) {
+        await _clearRejectedSession();
+        throw AuthException(
+          'No application profile is linked to this Auth account. Access is denied; ask support to verify the account.',
+          code: 'profile-not-found',
+        );
+      }
+      rethrow;
     }
 
-    await api.provisionProfile(name: fallbackName ?? defaultName(user));
-    return api.getMyProfile();
+    if (!profile.hasValidRole || !profile.isClient) {
+      await _clearRejectedSession();
+      throw AuthException(
+        'This app is available to client accounts only.',
+        code: 'role-not-authorized',
+      );
+    }
+    if (profile.uid.trim().isEmpty) {
+      await _clearRejectedSession();
+      throw AuthException(
+        'The application profile has no valid identity. Access is denied.',
+        code: 'profile-invalid',
+      );
+    }
+    return profile;
   }
 
-  /// A name that satisfies the backend's 2-character minimum, derived from the
-  /// account when the user has not typed one.
-  static String defaultName(AuthUser user) {
-    final email = user.emailOrEmpty;
-    final at = email.indexOf('@');
-    final local = at > 0 ? email.substring(0, at) : email;
-    final trimmed = local.trim();
-    return trimmed.length >= 2 ? trimmed : 'Client';
+  Future<void> _clearRejectedSession() async {
+    api.clearApplicationUid();
+    try {
+      await gateway.signOut();
+    } catch (_) {
+      // Local Auth state is cleared by the gateway even when logout is offline.
+    }
   }
 
-  Future<void> signOut() => gateway.signOut();
+  Future<void> requestPasswordReset(String email) =>
+      gateway.requestPasswordReset(email: email);
 
-  /// Changes the password of the signed-in account.
-  ///
-  /// Deliberately does not touch the backend: the password is Firebase
-  /// Authentication's, and no server-side record of it exists.
   Future<void> changePassword({
     required String currentPassword,
     required String newPassword,
@@ -351,6 +792,16 @@ class AuthService {
         newPassword: newPassword,
       );
 
-  /// Releases the HTTP client held by [api].
-  void dispose() => api.dispose();
+  Future<void> setPasswordFromRecovery(String newPassword) =>
+      gateway.setPasswordFromRecovery(newPassword);
+
+  Future<void> signOut() async {
+    await gateway.signOut();
+    api.clearApplicationUid();
+  }
+
+  void dispose() {
+    gateway.dispose();
+    api.dispose();
+  }
 }

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getDb } from '../config/firebase.js';
+import { requestDatabase } from '../utils/supabase_rpc.js';
 import {
   authenticate,
   isOwner,
@@ -7,97 +7,127 @@ import {
   ownerIdFor,
   isAdmin,
   lockOwnerOnUpdate,
+  requireRole,
 } from '../middleware/auth.js';
 import {
   ok,
   created,
   notFound,
   badRequest,
+  conflict,
   parseListQuery,
   cleanObject,
 } from '../utils/response.js';
 import { validate, caseSchema, caseUpdateSchema } from '../utils/validators.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { listDocs, getDocById, createDoc, updateDoc, deleteDoc } from '../utils/firestore.js';
+import { listDocs, getDocById, createDoc, updateDoc, deleteDoc } from '../utils/supabase_database.js';
+import { isAssignedLawyer, resolveOwnLawyerId } from '../utils/lawyer_identity.js';
 
 const router = Router();
 const COLLECTION = 'cases';
 const USERS_COLLECTION = 'users';
+const LAWYERS_COLLECTION = 'lawyers';
+const CATEGORIES_COLLECTION = 'legalCategories';
 
-/**
- * Roles that may own a case.
- *
- * An administrator is deliberately excluded: a case belongs to a service user
- * (client, or the lawyer handling their own matter). "Owned by an admin" is the
- * exact symptom of the admin panel creating a case without a client id — see
- * `resolveOwner` below and the Phase 1 report.
- */
-const CASE_OWNER_ROLES = ['client', 'lawyer'];
+/** Cases are owned by a client; the handling lawyer is a separate relation. */
+const CASE_OWNER_ROLES = ['client'];
 
-/// Machine-readable marker on a creation that has no client yet.
-const CASE_WITHOUT_CLIENT = 'CASE_WITHOUT_CLIENT';
-
-/**
- * Validates the owner an administrator is assigning a case to.
- *
- * Only administrators can choose an owner: `ownerIdFor()` binds every other
- * caller to their own uid and ignores a `userId` in the body (the ownership
- * tests assert that a forged id is ignored, not rejected — so this helper must
- * not turn that 201 into a 403).
- *
- * Returns `{ error }` (→ 400) or `{ warning }` (→ 201 plus a `warnings` entry).
- */
+/** Validate that an administrator assigns a case to a real client or lawyer. */
 async function resolveOwner(db, req) {
+  if (!isAdmin(req)) return {};
   const requested = req.body?.userId;
-  const admin = isAdmin(req);
-
-  if (!admin) return {}; // owner is always req.user.uid; nothing to validate
-
   if (!requested) {
-    // Backward compatibility: the admin panel has no client picker yet, so it
-    // posts cases without a `userId`. Rejecting that would break the only
-    // working admin flow; silently attributing the case to the administrator
-    // would hide a data defect. It is therefore accepted AND reported.
-    return { warning: CASE_WITHOUT_CLIENT };
+    return { error: 'userId is required: select a client or lawyer who will own this case.' };
   }
-
   const profile = await getDocById(db, USERS_COLLECTION, requested);
-  if (!profile) {
-    return { error: `userId "${requested}" does not match an existing user.` };
-  }
+  if (!profile) return { error: `userId "${requested}" does not match an existing user.` };
   if (!CASE_OWNER_ROLES.includes(profile.role)) {
     return {
-      error:
-        `userId "${requested}" is not an eligible case owner ` +
+      error: `userId "${requested}" is not an eligible case owner ` +
         `(role: ${profile.role || 'unset'}; expected ${CASE_OWNER_ROLES.join(' or ')}).`,
     };
   }
   return {};
 }
 
-// GET /api/cases?userId=&status=&priority=&search=
+async function resolveAssignment(db, lawyerId, categoryId) {
+  if (!lawyerId || !categoryId) {
+    return { error: 'Select both a lawyer and legal category for this case.' };
+  }
+  const [lawyer, category] = await Promise.all([
+    getDocById(db, LAWYERS_COLLECTION, lawyerId),
+    getDocById(db, CATEGORIES_COLLECTION, categoryId),
+  ]);
+  if (!lawyer) return { error: `lawyerId "${lawyerId}" does not match an existing lawyer.` };
+  if (!category) return { error: `categoryId "${categoryId}" does not match an existing legal category.` };
+  if (lawyer.categoryId !== categoryId) {
+    return { error: 'The selected lawyer is not assigned to the selected legal category.' };
+  }
+  return { lawyer, category };
+}
+
+function isForeignKeyViolation(error) {
+  return error?.code === '23503' || /foreign key constraint/i.test(error?.message || '');
+}
+
+/** Fetches the public display names for one page of case relationships. */
+async function labelsById(db, collection, ids) {
+  const uniqueIds = [...new Set(ids.filter((id) => typeof id === 'string' && id))];
+  if (uniqueIds.length === 0) return new Map();
+  const snapshot = await db.collection(collection).where('id', 'in', uniqueIds).get();
+  return new Map(snapshot.docs.map((doc) => [doc.id, doc.data()]));
+}
+
+async function enrichCaseRelations(db, cases) {
+  const [categories, lawyers] = await Promise.all([
+    labelsById(db, CATEGORIES_COLLECTION, cases.map((item) => item.categoryId)),
+    labelsById(db, LAWYERS_COLLECTION, cases.map((item) => item.lawyerId)),
+  ]);
+  return cases.map((item) => ({
+    ...item,
+    categoryName: categories.get(item.categoryId)?.name || item.caseType || '',
+    lawyerName: lawyers.get(item.lawyerId)?.name || '',
+  }));
+}
+
+// GET /api/cases?userId=&status=&priority=&lawyerId=&categoryId=&search=
 router.get(
   '/',
   authenticate,
+  requireRole('client', 'lawyer', 'admin'),
   asyncHandler(async (req, res) => {
     const q = parseListQuery(req);
     const filters = cleanObject({
       userId: req.query.userId,
       status: req.query.status,
       priority: req.query.priority,
+      lawyerId: req.query.lawyerId,
+      categoryId: req.query.categoryId,
     });
-    // A non-admin is always scoped to their own records. The old test only
-    // applied the scope when `?userId=` was absent, so passing somebody
-    // else's id returned their records instead.
-    if (!isAdmin(req)) filters.userId = req.user.uid;
+    // Never trust a caller-supplied owner/assignment filter. Clients read only
+    // their own records; lawyers read only rows assigned to their linked
+    // lawyer catalogue row; admin/owner accounts may filter across all rows.
+    if (!isAdmin(req) && req.user.role === 'client') {
+      filters.userId = req.user.uid;
+      delete filters.lawyerId;
+    } else if (req.user.role === 'lawyer') {
+      const lawyerId = await resolveOwnLawyerId(req);
+      if (!lawyerId) {
+        return forbidden(res, 'No unique lawyer profile is linked to this account.');
+      }
+      delete filters.userId;
+      filters.lawyerId = lawyerId;
+    }
 
-    const result = await listDocs(getDb(), COLLECTION, {
+    const db = requestDatabase(req);
+    const result = await listDocs(db, COLLECTION, {
       search: q.search,
       searchFields: ['title', 'description', 'clientName', 'caseType'],
       filters,
       page: q.page,
       limit: q.limit,
     });
+    result.items = await enrichCaseRelations(db, result.items);
     ok(res, result);
   }),
 );
@@ -106,13 +136,17 @@ router.get(
 router.get(
   '/:id',
   authenticate,
+  requireRole('client', 'lawyer', 'admin'),
   asyncHandler(async (req, res) => {
-    const item = await getDocById(getDb(), COLLECTION, req.params.id);
+    const db = requestDatabase(req);
+    const item = await getDocById(db, COLLECTION, req.params.id);
     if (!item) return notFound(res, 'Case not found');
-    if (!isOwner(item, req)) {
+    const canRead = isOwner(item, req) || await isAssignedLawyer(req, item.lawyerId);
+    if (!canRead) {
       return forbidden(res);
     }
-    ok(res, item);
+    const [enriched] = await enrichCaseRelations(db, [item]);
+    ok(res, enriched);
   }),
 );
 
@@ -120,23 +154,30 @@ router.get(
 router.post(
   '/',
   authenticate,
+  requireRole('client', 'admin'),
   asyncHandler(async (req, res) => {
-    const db = getDb();
+    const db = requestDatabase(req);
     const owner = await resolveOwner(db, req);
     if (owner.error) return badRequest(res, owner.error);
 
     const data = validate(caseSchema, { ...req.body, userId: ownerIdFor(req) });
-    const createdDoc = await createDoc(db, COLLECTION, data);
-
-    if (!owner.warning) return created(res, createdDoc, 'Case created');
-
-    // Ids only — no profile contents in the log.
-    console.log(
-      `[cases] admin_created_without_client actor=${req.user.uid} ` +
-        `case=${createdDoc.id} owner=${createdDoc.userId} ` +
-        `note="admin panel has no client picker yet; see Phase 1 report"`,
-    );
-    return created(res, createdDoc, 'Case created', { warnings: [owner.warning] });
+    const hasAssignment = Boolean(data.lawyerId || data.categoryId);
+    if (hasAssignment) {
+      const assignment = await resolveAssignment(db, data.lawyerId, data.categoryId);
+      if (assignment.error) return badRequest(res, assignment.error);
+      data.categoryId = assignment.category.id;
+      data.lawyerId = assignment.lawyer.id;
+      data.caseType = assignment.category.name;
+    }
+    try {
+      const createdDoc = await createDoc(db, COLLECTION, data);
+      return created(res, createdDoc, 'Case created');
+    } catch (error) {
+      if (isForeignKeyViolation(error)) {
+        return conflict(res, 'The selected lawyer or category changed before the case could be saved. Refresh and try again.');
+      }
+      throw error;
+    }
   }),
 );
 
@@ -144,8 +185,9 @@ router.post(
 router.put(
   '/:id',
   authenticate,
+  requireRole('client', 'admin'),
   asyncHandler(async (req, res) => {
-    const db = getDb();
+    const db = requestDatabase(req);
     const existing = await getDocById(db, COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Case not found');
     if (!isOwner(existing, req)) {
@@ -183,12 +225,44 @@ router.put(
       }
     }
 
+    const assignmentTouched = data.lawyerId !== undefined || data.categoryId !== undefined;
+    if (assignmentTouched) {
+      const assignment = await resolveAssignment(
+        db,
+        data.lawyerId ?? existing.lawyerId,
+        data.categoryId ?? existing.categoryId,
+      );
+      if (assignment.error) return badRequest(res, assignment.error);
+      data.lawyerId = assignment.lawyer.id;
+      data.categoryId = assignment.category.id;
+      data.caseType = assignment.category.name;
+    }
+    if (existing.categoryId && data.categoryId === undefined) {
+      // Normalized category is authoritative for newly categorized cases.
+      delete data.caseType;
+    }
+
     // Ownership is immutable here: `userId` in the body cannot reassign a
     // record to another account (admin-only operation).
     lockOwnerOnUpdate(data, existing, req);
 
-    const updated = await updateDoc(db, COLLECTION, req.params.id, data);
-    ok(res, updated, 'Case updated');
+    // The verified caller's request-scoped PostgREST client is the live
+    // contract for case reads/writes; the earlier local-only rpc_case_update
+    // candidate is not present in the connected project's migration history.
+    // Omit an unchanged owner so least-privilege column grants remain usable.
+    if (data.userId === existing.userId) delete data.userId;
+    if (Object.keys(data).length === 0) return ok(res, existing, 'Case unchanged');
+
+    try {
+      const updated = await updateDoc(db, COLLECTION, req.params.id, data);
+      if (!updated) return notFound(res, 'Case not found');
+      return ok(res, updated, 'Case updated');
+    } catch (error) {
+      if (isForeignKeyViolation(error)) {
+        return conflict(res, 'The selected lawyer or category changed before the case could be saved. Refresh and try again.');
+      }
+      throw error;
+    }
   }),
 );
 
@@ -196,13 +270,14 @@ router.put(
 router.delete(
   '/:id',
   authenticate,
+  requireRole('client', 'admin'),
   asyncHandler(async (req, res) => {
-    const existing = await getDocById(getDb(), COLLECTION, req.params.id);
+    const existing = await getDocById(requestDatabase(req), COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Case not found');
     if (!isOwner(existing, req)) {
       return forbidden(res);
     }
-    await deleteDoc(getDb(), COLLECTION, req.params.id);
+    await deleteDoc(requestDatabase(req), COLLECTION, req.params.id);
     ok(res, { id: req.params.id }, 'Case deleted');
   }),
 );

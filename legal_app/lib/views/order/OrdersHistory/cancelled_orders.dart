@@ -1,17 +1,15 @@
-import 'package:legalserviceapp/views/booking/booking.dart';
 import 'package:flutter/material.dart';
 
-
-import '../../../commonwidgets/product_data.dart';
 import '../../../constants/colors.dart';
-import '../../../widgets/custom_outline_button.dart';
+import '../../../services/api_client.dart';
+import '../../../state/session_scope.dart';
 import '../../../widgets/customapp_bar.dart';
 import '../../../widgets/custombtn.dart';
-import '../../../widgets/customtextfield.dart';
 import '../../../widgets/detailstext1.dart';
 import '../../../widgets/detailstext2.dart';
-import '../../../models/product_model.dart';
+import '../../availablitycalendar/avaialblity_calendar.dart';
 
+/// Cancelled bookings backed by `GET /api/bookings?status=Cancelled`.
 class CancelledOrders extends StatefulWidget {
   const CancelledOrders({super.key});
 
@@ -19,92 +17,38 @@ class CancelledOrders extends StatefulWidget {
   CancelledOrdersState createState() => CancelledOrdersState();
 }
 
-class CancelledOrdersState extends State<CancelledOrders>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<Offset> _slideFromLeftAnimation;
-
-  final List<Product> products = ProductData().products;
+class CancelledOrdersState extends State<CancelledOrders> {
+  late Future<List<Map<String, dynamic>>> _bookings;
+  bool _loaded = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    );
-
-    _slideFromLeftAnimation = Tween<Offset>(
-      begin: const Offset(-1.0, 0.0),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeInOut,
-    ));
-
-    _controller.forward();
+    _bookings = Future.value(const <Map<String, dynamic>>[]);
   }
 
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_loaded) return;
+    _loaded = true;
+    _reload();
   }
 
-  void _showRatingDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: AppColors.bgColor,
-          title: const Text1(
-            text1: 'Rate Care',
-            size: 16,
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text1(text1: 'Please rate your care:'),
-              const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: List.generate(5, (index) {
-                  return const Icon(
-                    Icons.star_border,
-                    size: 30,
-                    color: Colors.orange,
-                  );
-                }),
-              ),
-              const SizedBox(height: 20),
-              const CustomTextField(
-                label: 'Leave a comment',
-                icon: Icons.comment,
-              ),
-              Row(
-                children: [
-                  Flexible(
-                      child: CustomOutlinedButton(
-                          text: 'Cancel',
-                          onTap: () {
-                            Navigator.pop(context);
-                          })),
-                  const SizedBox(
-                    width: 10,
-                  ),
-                  Flexible(
-                      child: CustomButton(
-                          text: 'Submit',
-                          onTap: () {
-                            Navigator.pop(context);
-                          })),
-                ],
-              )
-            ],
-          ),
-        );
-      },
-    );
+  Future<void> _reload() {
+    final future = SessionScope.read(context)
+        .repository
+        .fetchBookings(status: 'Cancelled')
+        .then((rows) => rows.where(_isCancelled).toList());
+    setState(() {
+      _bookings = future;
+    });
+    return future.then((_) {}, onError: (_) {});
+  }
+
+  static bool _isCancelled(Map<String, dynamic> b) {
+    final status = (b['status']?.toString() ?? '').toLowerCase();
+    return status == 'cancelled';
   }
 
   @override
@@ -119,22 +63,53 @@ class CancelledOrdersState extends State<CancelledOrders>
               const CustomAppBar(text: 'Cancelled Bookings', text1: ''),
               const SizedBox(height: 20),
               Expanded(
-                child: AnimatedBuilder(
-                  animation: _controller,
-                  builder: (context, child) {
-                    return ListView.builder(
-                      itemCount: products.length,
-                      itemBuilder: (context, index) {
-                        return SlideTransition(
-                          position: _slideFromLeftAnimation,
-                          child: Padding(
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _bookings,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return _CancelledPlaceholder(
+                        icon: Icons.error_outline,
+                        title: 'Could not load cancelled bookings',
+                        detail: snapshot.error is ApiException
+                            ? (snapshot.error as ApiException).message
+                            : 'Please try again.',
+                        onRetry: _reload,
+                      );
+                    }
+                    final bookings =
+                        snapshot.data ?? const <Map<String, dynamic>>[];
+                    if (bookings.isEmpty) {
+                      return const _CancelledPlaceholder(
+                        icon: Icons.event_busy_outlined,
+                        title: 'No cancelled bookings',
+                        detail: 'Appointments you cancel will appear here.',
+                      );
+                    }
+
+                    return RefreshIndicator(
+                      onRefresh: _reload,
+                      child: ListView.builder(
+                        itemCount: bookings.length,
+                        itemBuilder: (context, index) {
+                          final b = bookings[index];
+                          final lawyerId = b['lawyerId']?.toString() ?? '';
+                          final lawyerName =
+                              (b['lawyerName']?.toString() ?? '').trim();
+                          final date = b['date']?.toString() ?? '';
+                          final time = b['time']?.toString() ?? '';
+                          final hours = b['hours']?.toString() ?? '1';
+                          final price = b['totalPrice']?.toString() ?? '0';
+
+                          return Padding(
                             padding: const EdgeInsets.only(bottom: 10),
                             child: Card(
                               color: Colors.white,
-
-
+                              elevation: 2,
                               child: Padding(
-                                padding: const EdgeInsets.all(8.0),
+                                padding: const EdgeInsets.all(10.0),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -143,24 +118,28 @@ class CancelledOrdersState extends State<CancelledOrders>
                                           CrossAxisAlignment.start,
                                       children: [
                                         Padding(
-                                          padding: const EdgeInsets.only(top: 6),
+                                          padding:
+                                              const EdgeInsets.only(top: 6),
                                           child: SizedBox(
-                                            height: 80, // Adjusted height for visibility
-                                            width: 110, // Adjusted width for visibility
+                                            height: 80,
+                                            width: 110,
                                             child: ClipRRect(
-                                              borderRadius: BorderRadius.circular(8),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
                                               child: Image.asset(
-                                                products[index].imagePath,
-                                                fit: BoxFit.cover,  // You can change to BoxFit.contain or BoxFit.fill if needed
-                                                errorBuilder: (context, error, stackTrace) {
-                                                  // Handle image loading errors gracefully
-                                                  return Center(child: Icon(Icons.error, color: Colors.red));
-                                                },
+                                                'images/lawyer2.png',
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (_, __, ___) =>
+                                                    const Center(
+                                                  child: Icon(
+                                                    Icons.person,
+                                                    color: AppColors.text3Color,
+                                                  ),
+                                                ),
                                               ),
                                             ),
                                           ),
                                         ),
-
                                         const SizedBox(width: 14),
                                         Expanded(
                                           child: Column(
@@ -168,61 +147,99 @@ class CancelledOrdersState extends State<CancelledOrders>
                                                 CrossAxisAlignment.start,
                                             children: [
                                               Text1(
-                                                text1: products[index].name,
+                                                text1: lawyerName.isEmpty
+                                                    ? 'Lawyer'
+                                                    : lawyerName,
                                               ),
-                                              const Text2(
-                                                  text2:
-                                                      'May 23, 4.3PM Delivered'),
-                                              Text1(
-                                                text1: products[index].price,
+                                              Text2(
+                                                text2: '$date • $time (${hours}h)',
                                               ),
+                                              Text1(text1: '\$$price'),
                                             ],
                                           ),
                                         ),
                                       ],
                                     ),
                                     Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Row(
-                                        children: [
-                                          Flexible(
-                                            child: CustomOutlinedButton(
-                                              text: 'Rate',
-                                              onTap: () {
-                                                _showRatingDialog(context);
-                                              },
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: CustomButton(
+                                        text: 'Re-Book',
+                                        onTap: () {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                                  AvailabilityCalendarScheduleScreen(
+                                                lawyerId: lawyerId.isEmpty
+                                                    ? null
+                                                    : lawyerId,
+                                                lawyerName: lawyerName.isEmpty
+                                                    ? null
+                                                    : lawyerName,
+                                              ),
                                             ),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Flexible(
-                                            child: CustomButton(
-                                              text: 'Re Booking',
-                                              onTap: () {
-                                                Navigator.push(
-                                                  context,
-                                                  MaterialPageRoute(
-                                                    builder: (context) => const BookingScreen(),
-                                                  ),
-                                                );
-                                              },
-                                            ),
-                                          ),
-                                        ],
+                                          );
+                                        },
                                       ),
                                     ),
                                   ],
                                 ),
                               ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     );
                   },
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CancelledPlaceholder extends StatelessWidget {
+  const _CancelledPlaceholder({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.onRetry,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 42, color: AppColors.text3Color),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              detail,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: AppColors.text2Color),
+            ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 12),
+              TextButton(onPressed: onRetry, child: const Text('Retry')),
+            ],
+          ],
         ),
       ),
     );

@@ -51,7 +51,7 @@ export function parseListQuery(req, defaultLimit = 20, maxLimit = 100) {
 }
 
 /**
- * Removes undefined/null values from an object (Firestore-safe).
+ * Removes undefined/null values from an object (JSON-safe).
  */
 export function cleanObject(obj) {
   return Object.fromEntries(

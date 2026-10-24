@@ -37,6 +37,9 @@ after(stopApp);
 function seed() {
   return {
     users: users('client1', 'lawyer1', 'lawyer2', 'admin1'),
+    legalCategories: [
+      { id: 'category-criminal', name: 'Criminal Law', slug: 'criminal-law' },
+    ],
     lawyers: [
       { id: 'law-A', name: 'Lawyer A', specialty: 'Tax', rating: 3, isTop: false, isPopular: false },
       { id: 'law-B', name: 'Lawyer B', specialty: 'Family', rating: 4, isTop: false, isPopular: false },
@@ -205,7 +208,7 @@ describe('lawyers 1.1: administrative operations still work', () => {
 
     const res = await post(BASE, {
       token: tokenFor('admin1'),
-      body: { name: 'Lawyer C', specialty: 'Criminal' },
+      body: { name: 'Lawyer C', categoryId: 'category-criminal' },
     });
 
     assert.equal(res.status, 201);

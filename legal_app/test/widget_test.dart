@@ -168,7 +168,14 @@ SessionController _searchSession({
   return SessionController(
     auth: AuthService(
       gateway: FakeAuthGateway(),
-      api: testApiClient(handler: handler),
+      api: testApiClient(
+        handler: (request, attempt) async {
+          if (request.url.path == '/api/categories') {
+            return jsonOk({'items': const <Object>[]});
+          }
+          return handler(request, attempt);
+        },
+      ),
     ),
   );
 }
@@ -192,7 +199,7 @@ void _searchTests() {
         ],
         'total': 2,
         'page': 1,
-        'limit': 100,
+        'limit': 20,
         'totalPages': 1,
       }),
     );
@@ -214,8 +221,8 @@ void _searchTests() {
         'items': const <Object>[],
         'total': 0,
         'page': 1,
-        'limit': 100,
-        'totalPages': 0,
+        'limit': 20,
+        'totalPages': 1,
       }),
     );
     addTearDown(session.dispose);

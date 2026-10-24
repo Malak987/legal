@@ -1,34 +1,24 @@
 import { env } from './config/env.js';
-import { initializeFirebase } from './config/firebase.js';
+import { initializeSupabase } from './config/supabase.js';
 import app from './app.js';
 
-async function start() {
-  try {
-    initializeFirebase();
-    console.log('✅ Firebase Admin SDK initialized');
-  } catch (err) {
-    console.error('❌ Failed to initialize Firebase:\n' + err.message);
-    process.exit(1);
-  }
+initializeSupabase();
 
-  // Automatic seeding is disabled in Cloud Functions and production, and only
-  // runs locally when explicitly requested with SEED_ON_START=true.
-  if (env.seedOnStart && !env.isCloudFunction && env.nodeEnv !== 'production') {
-    console.log('🌱 Running seed check (SEED_ON_START=true)...');
-    const { seed } = await import('./seed.js');
-    await seed();
-  }
+const server = app.listen(env.port, '0.0.0.0', () => {
+  console.log(`Legal Services API listening on 0.0.0.0:${env.port} (${env.nodeEnv})`);
+});
 
-  app.listen(env.port, () => {
-    console.log('=====================================================');
-    console.log('🚀 Legal Services Backend Running (Standalone Dev Mode)');
-    console.log(`   URL:         http://localhost:${env.port}/api`);
-    console.log(`   Health:      http://localhost:${env.port}/api/health`);
-    console.log(`   Environment: ${env.nodeEnv}`);
-    console.log('=====================================================');
+function shutdown(signal) {
+  console.log(`Received ${signal}; closing HTTP server.`);
+  server.close((error) => {
+    if (error) {
+      console.error('Failed to close HTTP server cleanly.');
+      process.exitCode = 1;
+    }
   });
 }
 
-start();
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 export default app;

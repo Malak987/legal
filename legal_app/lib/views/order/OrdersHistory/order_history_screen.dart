@@ -1,76 +1,53 @@
 import 'package:flutter/material.dart';
 
 import '../../../constants/colors.dart';
-import '../../../widgets/custombtn.dart';
-import '../../../widgets/detailstext1.dart';
-import '../../../widgets/detailstext2.dart';
-import '../../../widgets/text11.dart';
-import '../../../commonwidgets/product_data.dart' show ProductData;
-import '../../../widgets/custom_outline_button.dart';
+import '../../../services/api_client.dart';
+import '../../../state/session_scope.dart';
 import '../../../widgets/customapp_bar.dart';
-import '../../../models/product_model.dart';
-import '../../checkout/trackmyorder.dart';
 import 'active_orders.dart';
 import 'cancelled_orders.dart';
 import 'completed_orders.dart';
 
+/// Booking overview backed by the signed-in user's `/api/bookings` list.
 class OrdersHistory extends StatefulWidget {
   const OrdersHistory({super.key});
 
   @override
-  OrdersHistoryState createState() => OrdersHistoryState();
+  State<OrdersHistory> createState() => _OrdersHistoryState();
 }
 
-class OrdersHistoryState extends State<OrdersHistory>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _opacityAnimation;
-  late Animation<Offset> _slideFromLeftAnimation;
-  late Animation<Offset> _slideFromRightAnimation;
+class _OrdersHistoryState extends State<OrdersHistory> {
+  late Future<List<Map<String, dynamic>>> _bookings;
+  bool _loaded = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2800),
-    );
-
-    _opacityAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
-
-    _slideFromLeftAnimation = Tween<Offset>(
-      begin: const Offset(-1.0, 0.0),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeInOut,
-    ));
-
-    _slideFromRightAnimation = Tween<Offset>(
-      begin: const Offset(1.0, 0.0),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeInOut,
-    ));
-
-    _controller.forward();
+    _bookings = Future.value(const <Map<String, dynamic>>[]);
   }
 
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_loaded) return;
+    _loaded = true;
+    _reload();
   }
-  final List<Product> products = ProductData().products;
-  final List<Product> products1 = ProductData().products;
-  final List<Product> products3 = ProductData().products;
 
+  Future<void> _reload() {
+    final future = SessionScope.read(context).repository.fetchBookings();
+    setState(() {
+      _bookings = future;
+    });
+    return future.then<void>((_) {}, onError: (_) {});
+  }
 
-
-
+  Future<void> _open(Widget screen) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => screen),
+    );
+    if (mounted) _reload();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -78,387 +55,214 @@ class OrdersHistoryState extends State<OrdersHistory>
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 14),
-          child: AnimatedBuilder(
-            animation: _controller,
-            builder: (context, child) {
-              return FadeTransition(
-                opacity: _opacityAnimation,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const CustomAppBar(text: 'My Bookings', text1: ''),
-                    const SizedBox(height: 34),
-                    InkWell(
-                      onTap: () {
-                        Navigator.of(context).push(MaterialPageRoute(
-                            builder: (context) => const ActiveOrders()));
-                      },
-                      child: SlideTransition(
-                        position: _slideFromLeftAnimation,
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text1(
-                              text1: 'Active Bookings',
-                              size: 14,
-                            ),
-                            Text11(
-                              text2: 'See All',
-                              color: AppColors.text3Color,
-                            )
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    SlideTransition(
-                      position: _slideFromLeftAnimation,
-                      child: SizedBox(
-                        height: 185,
-                        child: ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          shrinkWrap: true,
-                          itemCount: products.length,
-                          itemBuilder: (context, index) {
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Container(
-                                margin: const EdgeInsets.only(right: 10),
-                                width: 250,
-                                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(8),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Color.fromARGB((0.2 * 255).toInt(), 128, 128, 128),
-                                      spreadRadius: 2,
-                                      blurRadius: 5,
-                                      offset: const Offset(0, 3),
-                                    ),
-                                  ],
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Padding(
-                                          padding: const EdgeInsets.only(top: 6),
-                                          child: SizedBox(
-                                            height: 80, // Adjusted height for visibility
-                                            width: 110, // Adjusted width for visibility
-                                            child: ClipRRect(
-                                              borderRadius: BorderRadius.circular(8),
-                                              child: Image.asset(
-                                                products[index].imagePath,
-                                                fit: BoxFit.cover,  // You can change to BoxFit.contain or BoxFit.fill if needed
-                                                errorBuilder: (context, error, stackTrace) {
-                                                  // Handle image loading errors gracefully
-                                                  return Center(child: Icon(Icons.error, color: Colors.red));
-                                                },
-                                              ),
-                                            ),
-                                          ),
-                                        ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const CustomAppBar(text: 'My Bookings', text1: ''),
+              const SizedBox(height: 12),
+              Expanded(
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _bookings,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      final error = snapshot.error;
+                      return _HistoryMessage(
+                        icon: Icons.error_outline,
+                        title: 'Could not load bookings',
+                        detail: error is ApiException
+                            ? error.message
+                            : 'Please try again.',
+                        onRetry: _reload,
+                      );
+                    }
 
-                                        const SizedBox(width: 14),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text1(
-                                                text1: products[index].name,
-                                              ),
-                                              const Text2(text2: 'May 23, 4.3PM'),
+                    final bookings =
+                        snapshot.data ?? const <Map<String, dynamic>>[];
+                    final active = bookings.where(_isCurrent).toList();
+                    final completed = bookings.where(_isCompleted).toList();
+                    final cancelled = bookings.where(_isCancelled).toList();
 
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Row(
-                                        children: [
-                                          Flexible(
-                                            child: CustomOutlinedButton(
-                                                text: 'Cancel', onTap: () {}),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Flexible(
-                                            child: CustomButton(
-                                                text: 'Track', onTap: () {
-                                              Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (context) => const TrackLegalServiceScreen(),
-                                                ),
-                                              );
-
-                                            }),
-                                          )
-                                        ],
-                                      ),
-                                    )
-                                  ],
-                                ),
+                    return RefreshIndicator(
+                      onRefresh: _reload,
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.only(bottom: 24),
+                        children: [
+                          _BookingSection(
+                            title: 'Active Bookings',
+                            count: active.length,
+                            onSeeAll: () => _open(const ActiveOrders()),
+                            bookings: active.take(3).toList(),
+                          ),
+                          _BookingSection(
+                            title: 'Completed Bookings',
+                            count: completed.length,
+                            onSeeAll: () => _open(const CompletedOrders()),
+                            bookings: completed.take(3).toList(),
+                          ),
+                          _BookingSection(
+                            title: 'Cancelled Bookings',
+                            count: cancelled.length,
+                            onSeeAll: () => _open(const CancelledOrders()),
+                            bookings: cancelled.take(3).toList(),
+                          ),
+                          if (bookings.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 8),
+                              child: Text(
+                                'Your appointments will appear here after you book a lawyer.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: AppColors.text2Color),
                               ),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                    InkWell(
-                      onTap: () {
-                        Navigator.of(context).push(MaterialPageRoute(
-                            builder: (context) => const CompletedOrders()));
-                      },
-                      child: SlideTransition(
-                        position: _slideFromRightAnimation,
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text1(
-                              text1: 'Completed Bookings',
-                              size: 14,
                             ),
-                            Text11(
-                              text2: 'See All',
-                              color: AppColors.text3Color,
-                            )
-                          ],
-                        ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    SlideTransition(
-                      position: _slideFromRightAnimation,
-                      child: SizedBox(
-                        height: 185,
-                        child: ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          shrinkWrap: true,
-                          itemCount: products1.length,
-                          itemBuilder: (context, index) {
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Container(
-                                margin: const EdgeInsets.only(right: 10),
-                                width: 250,
-                                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(8),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Color.fromARGB((0.2 * 255).toInt(), 128, 128, 128),
-                                      spreadRadius: 2,
-                                      blurRadius: 5,
-                                      offset: const Offset(0, 3),
-                                    ),
-                                  ],
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Padding(
-                                          padding: const EdgeInsets.only(top: 6),
-                                          child: SizedBox(
-                                            height: 80, // Adjusted height for visibility
-                                            width: 110, // Adjusted width for visibility
-                                            child: ClipRRect(
-                                              borderRadius: BorderRadius.circular(8),
-                                              child: Image.asset(
-                                                products[index].imagePath,
-                                                fit: BoxFit.cover,  // You can change to BoxFit.contain or BoxFit.fill if needed
-                                                errorBuilder: (context, error, stackTrace) {
-                                                  // Handle image loading errors gracefully
-                                                  return Center(child: Icon(Icons.error, color: Colors.red));
-                                                },
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-
-                                        const SizedBox(width: 14),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text1(
-                                                text1: products1[index].name,
-                                              ),
-                                              const Text2(text2: 'May 23, 4.3PM'),
-
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Row(
-                                        children: [
-                                          Flexible(
-                                            child: CustomOutlinedButton(
-                                                text: 'Cancel ', onTap: () {}),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Flexible(
-                                            child: CustomButton(
-                                                text: 'Track ', onTap: () {
-                                              Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (context) => const TrackLegalServiceScreen(),
-                                                ),
-                                              );
-                                            }),
-                                          )
-                                        ],
-                                      ),
-                                    )
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                    InkWell(
-                      onTap: () {
-                        Navigator.of(context).push(MaterialPageRoute(
-                            builder: (context) => const CancelledOrders()));
-                      },
-                      child: SlideTransition(
-                        position: _slideFromLeftAnimation,
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text1(
-                              text1: 'Cancelled Bookings',
-                              size: 14,
-                            ),
-                            Text11(
-                              text2: 'See All',
-                              color: AppColors.text3Color,
-                            )
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    SlideTransition(
-                      position: _slideFromLeftAnimation,
-                      child: SizedBox(
-                        height: 185,
-                        child: ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          shrinkWrap: true,
-                          itemCount: products3.length,
-                          itemBuilder: (context, index) {
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Container(
-                                margin: const EdgeInsets.only(right: 10),
-                                width: 250,
-                                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(8),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Color.fromARGB((0.2 * 255).toInt(), 128, 128, 128),
-                                      spreadRadius: 2,
-                                      blurRadius: 5,
-                                      offset: const Offset(0, 3),
-                                    ),
-                                  ],
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Padding(
-                                          padding: const EdgeInsets.only(top: 6),
-                                          child: SizedBox(
-                                            height: 80, // Adjusted height for visibility
-                                            width: 110, // Adjusted width for visibility
-                                            child: ClipRRect(
-                                              borderRadius: BorderRadius.circular(8),
-                                              child: Image.asset(
-                                                products[index].imagePath,
-                                                fit: BoxFit.cover,  // You can change to BoxFit.contain or BoxFit.fill if needed
-                                                errorBuilder: (context, error, stackTrace) {
-                                                  // Handle image loading errors gracefully
-                                                  return Center(child: Icon(Icons.error, color: Colors.red));
-                                                },
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-
-                                        const SizedBox(width: 14),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text1(
-                                                text1: products3[index].name,
-                                              ),
-                                              const Text2(text2: 'May 23, 4.3PM'),
-
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Row(
-                                        children: [
-                                          Flexible(
-                                            child: CustomOutlinedButton(
-                                                text: 'Cancel', onTap: () {}),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Flexible(
-                                            child: CustomButton(
-                                                text: 'Track ', onTap: () {
-                                              Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (context) => const TrackLegalServiceScreen(),
-                                                ),
-                                              );
-                                            }),
-                                          )
-                                        ],
-                                      ),
-                                    )
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
+                    );
+                  },
                 ),
-              );
-            },
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 }
+
+bool _isCurrent(Map<String, dynamic> booking) {
+  final status = _text(booking['status']).toLowerCase();
+  return status != 'completed' && status != 'cancelled';
+}
+
+bool _isCompleted(Map<String, dynamic> booking) =>
+    _text(booking['status']).toLowerCase() == 'completed';
+
+bool _isCancelled(Map<String, dynamic> booking) =>
+    _text(booking['status']).toLowerCase() == 'cancelled';
+
+class _BookingSection extends StatelessWidget {
+  const _BookingSection({
+    required this.title,
+    required this.count,
+    required this.onSeeAll,
+    required this.bookings,
+  });
+
+  final String title;
+  final int count;
+  final VoidCallback onSeeAll;
+  final List<Map<String, dynamic>> bookings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 10, bottom: 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '$title ($count)',
+                  style: const TextStyle(
+                    color: AppColors.text1Color,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              TextButton(onPressed: onSeeAll, child: const Text('See all')),
+            ],
+          ),
+        ),
+        if (bookings.isEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 4, 4, 10),
+            child: Text('No bookings in this section.',
+                style: TextStyle(color: AppColors.text2Color)),
+          )
+        else
+          ...bookings.map((booking) => _BookingPreview(booking: booking)),
+      ],
+    );
+  }
+}
+
+class _BookingPreview extends StatelessWidget {
+  const _BookingPreview({required this.booking});
+
+  final Map<String, dynamic> booking;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = _text(booking['lawyerName']);
+    final date = _text(booking['date']);
+    final time = _text(booking['time']);
+    final status = _text(booking['status']);
+    final amount = _text(booking['totalPrice']);
+    final schedule = [date, time].where((value) => value.isNotEmpty).join(' • ');
+    return Card(
+      margin: const EdgeInsets.only(bottom: 7),
+      color: Colors.white,
+      child: ListTile(
+        leading: const CircleAvatar(
+          backgroundColor: AppColors.bgColor,
+          child: Icon(Icons.person_outline, color: AppColors.buttonColor),
+        ),
+        title: Text(name.isEmpty ? 'Lawyer' : name),
+        subtitle: Text([
+          if (schedule.isNotEmpty) schedule,
+          if (status.isNotEmpty) status,
+        ].join(' • ')),
+        trailing: amount.isEmpty ? null : Text('\$$amount'),
+      ),
+    );
+  }
+}
+
+class _HistoryMessage extends StatelessWidget {
+  const _HistoryMessage({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.onRetry,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final Future<void> Function()? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 42, color: AppColors.text3Color),
+            const SizedBox(height: 12),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Text(detail, textAlign: TextAlign.center),
+            if (onRetry != null) ...[
+              const SizedBox(height: 14),
+              OutlinedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _text(dynamic value) => value?.toString().trim() ?? '';

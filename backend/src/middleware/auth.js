@@ -1,8 +1,6 @@
-import { getAuth, getDb } from '../config/firebase.js';
+import { getAuth } from '../config/supabase.js';
 
-/**
- * Extracts the bearer token from the Authorization header.
- */
+/** Extracts the bearer token from an Authorization header. */
 function extractToken(req) {
   const header = req.headers.authorization || '';
   if (!header.startsWith('Bearer ')) return null;
@@ -10,12 +8,9 @@ function extractToken(req) {
 }
 
 /**
- * Middleware: verifies a Firebase ID token and attaches the decoded user to req.
- *
- * The token is issued by Firebase Authentication on the client (the Flutter app
- * or the Flutter Web admin panel) after a successful sign-in.
- *
- * req.user = { uid, email, role, name, ... }
+ * Verifies a Supabase access token and creates a request-scoped PostgREST
+ * database client. Data routes use the caller JWT so PostgreSQL RLS—not the
+ * process-wide service role—decides the accessible rows and columns.
  */
 export async function authenticate(req, res, next) {
   try {
@@ -27,46 +22,45 @@ export async function authenticate(req, res, next) {
       });
     }
 
-    const decoded = await getAuth().verifyIdToken(token);
-
-    // Load the user profile from Firestore (contains role, name, etc.)
-    let profile = {};
+    const auth = getAuth();
+    const decoded = await auth.verifyIdToken(token);
+    let requestDb;
     try {
-      const snap = await getDb().collection('users').doc(decoded.uid).get();
-      if (snap.exists) profile = snap.data() || {};
-    } catch (_err) {
-      // Firestore lookup is best-effort; fall back to token claims only.
+      requestDb = auth.createRequestDatabase(token);
+    } catch {
+      return res.status(503).json({
+        success: false,
+        message: 'Authenticated Supabase data access is not configured.',
+      });
     }
 
-    // The token is the identity. A profile document may carry a `uid` (or an
-    // `email`) left over from a migration or a manual edit; spreading it last
-    // would let that value override the verified caller and silently act as
-    // somebody else. `role` and `name` are profile-owned, so they still come
-    // from the document when present.
+    req.supabaseDb = requestDb;
     req.user = {
-      ...profile,
       uid: decoded.uid,
-      email: decoded.email || profile.email || '',
-      name: profile.name || decoded.name || '',
-      role: profile.role || decoded.role || 'client',
+      authUserId: decoded.authUserId,
+      email: decoded.email || '',
+      name: decoded.name || '',
+      role: decoded.role,
+      email_verified: decoded.email_verified === true,
     };
-
-    next();
+    return next();
   } catch (error) {
-    // Why verification failed (bad signature, wrong project, expired key) is
-    // operational detail. Log it, do not hand it to the caller.
-    console.error('[auth] token verification failed:', error?.message);
+    // Do not return token/signature or provider internals to the client.
+    console.error('[auth] Supabase token verification failed:', error?.message);
     return res.status(401).json({
       success: false,
-      message: 'Invalid or expired token.',
+      message: 'Invalid or expired Supabase access token.',
     });
   }
 }
 
-/**
- * Middleware factory: restricts a route to specific roles.
- * Usage: router.get('/x', authenticate, requireRole('admin'))
- */
+/** Allows anonymous catalogue reads while authenticating any supplied bearer. */
+export function optionalAuthenticate(req, res, next) {
+  if (!extractToken(req)) return next();
+  return authenticate(req, res, next);
+}
+
+/** Restricts a route to specific server-verified application roles. */
 export function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user) {
@@ -74,78 +68,54 @@ export function requireRole(...roles) {
         .status(401)
         .json({ success: false, message: 'Authentication required.' });
     }
-    if (roles.length && !roles.includes(req.user.role)) {
+    // `owner` is a trusted, separately provisioned superset of `admin`.
+    // This alias never grants `owner` to a client-supplied role or payload.
+    const roleAllowed =
+      roles.includes(req.user.role) ||
+      (req.user.role === 'owner' && roles.includes('admin'));
+    if (roles.length && !roleAllowed) {
       return res.status(403).json({
         success: false,
         message: `Forbidden. Required role: ${roles.join(' or ')}.`,
       });
     }
-    next();
+    return next();
   };
 }
 
-/**
- * True when the caller holds the `admin` role.
- */
 export function isAdmin(req) {
-  return req.user?.role === 'admin';
+  return req.user?.role === 'admin' || req.user?.role === 'owner';
 }
 
-/**
- * Answers the standard 403 payload so every route reports denial identically.
- */
 export function forbidden(res, message = 'Forbidden') {
   return res.status(403).json({ success: false, message });
 }
 
-/**
- * Middleware factory for `/:userId` style routes: the caller may only read
- * their own records unless they are an administrator.
- *
- * Usage: router.get('/:userId', authenticate, requireSelfOrAdmin(), ...)
- */
+/** Caller may access their own `/:userId` records unless they are an admin. */
 export function requireSelfOrAdmin(paramName = 'userId') {
   return (req, res, next) => {
     if (isAdmin(req)) return next();
     if (req.params[paramName] !== req.user?.uid) {
       return forbidden(res, 'Forbidden. You can only access your own records.');
     }
-    next();
+    return next();
   };
 }
 
-/**
- * Resolves the owner id for a CREATE request.
- *
- * An administrator may create a record on behalf of another user (the admin
- * panel relies on this). Everybody else is always bound to `req.user.uid` —
- * a `userId` supplied in the request body is ignored, which is what stops a
- * client from attributing a record to somebody else.
- */
+/** Admins may choose an owner; other roles are always bound to their profile. */
 export function ownerIdFor(req) {
   const requested = req.body?.userId;
   return isAdmin(req) && requested ? requested : req.user.uid;
 }
 
-/**
- * Ownership test for an EXISTING record.
- *
- * A record without an owner id is treated as NOT owned: the previous
- * `record.userId && record.userId !== req.user.uid` test let any signed-in
- * user edit or delete ownerless documents.
- */
+/** Ownerless rows are never owned by a non-admin. */
 export function isOwner(record, req) {
   if (isAdmin(req)) return true;
-  return Boolean(record?.userId) && record.userId === req.user.uid;
+  return req.user?.role === 'client' &&
+    Boolean(record?.userId) && record.userId === req.user.uid;
 }
 
-/**
- * Keeps a record's owner fixed during an UPDATE.
- *
- * Passing `userId` in the body must not let a normal caller hand their record
- * (or the record they are editing) to another account — reassignment stays an
- * administrator-only operation. Mutates and returns `data` for convenience.
- */
+/** Keeps owner assignment fixed for non-admin updates. */
 export function lockOwnerOnUpdate(data, existing, req) {
   if (isAdmin(req)) return data;
   if (existing?.userId === undefined) delete data.userId;

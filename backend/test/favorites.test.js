@@ -30,6 +30,11 @@ after(stopApp);
 function seed() {
   return {
     users: users('client1', 'client2', 'admin1'),
+    lawyers: [
+      { id: 'lawyer-1', name: 'Lawyer One', priceValue: 100 },
+      { id: 'lawyer-2', name: 'Lawyer Two', priceValue: 120 },
+      { id: 'lawyer-9', name: 'Lawyer Nine', priceValue: 150 },
+    ],
     favorites: [
       { id: 'f-1', userId: 'client-1', lawyerId: 'lawyer-1' },
       { id: 'f-2', userId: 'client-2', lawyerId: 'lawyer-2' },

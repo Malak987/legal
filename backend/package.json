@@ -1,7 +1,7 @@
 {
   "name": "legal-services-backend",
   "version": "1.0.0",
-  "description": "REST API for the Legal Services App (Firebase Cloud Functions Gen 2 + Express + Cloud Firestore)",
+  "description": "Supabase-first REST API for the Legal Services platform",
   "type": "module",
   "main": "index.js",
   "engines": {
@@ -13,28 +13,33 @@
     "test": "node --test \"test/**/*.test.js\"",
     "test:emulator": "RUN_FIREBASE_EMULATOR_TESTS=1 node --test test/functions_emulator.test.js",
     "seed": "node src/seed.js",
-    "emulator": "firebase emulators:start --only auth,firestore,functions,hosting",
-    "deploy:functions": "firebase deploy --only functions --project legal-102026",
-    "deploy:hosting": "firebase deploy --only hosting --project legal-102026"
+    "seed:test": "node src/seed.js",
+    "emulator": "cd .. && firebase emulators:start --only auth,firestore,functions,hosting --project legal-102026",
+    "deploy:functions": "cd .. && firebase deploy --only functions --project legal-102026",
+    "deploy:hosting": "cd .. && firebase deploy --only hosting --project legal-102026",
+    "provision:admin": "node scripts/provision_admin.js"
   },
   "keywords": [
     "legal",
-    "firebase",
-    "cloud-functions",
+    "supabase",
     "express",
-    "api"
+    "postgresql"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
-    "firebase-admin": "^12.4.0",
+    "firebase-admin": "^12.7.0",
     "firebase-functions": "^7.4.0",
     "helmet": "^7.1.0",
     "joi": "^17.13.3",
     "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.11"
   }
 }

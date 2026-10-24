@@ -673,7 +673,8 @@ describe('wallet 1.2: repeated key with a different payload is a conflict', () =
     assert.equal(res.body.success, false);
     assert.equal(balanceOf('client-1'), 1100, 'no money moved');
     assert.equal(docs('wallet_transactions').length, 1, 'no second ledger row');
-    assert.equal(res.body.details.amount, 100);
+    assert.equal(res.body.message, 'idempotencyKey was already used for a different transaction.');
+    assert.equal(res.body.details, undefined, 'the API does not expose prior transaction details');
   });
 
   it('returns 409 when the same key is retried with a different type', async () => {

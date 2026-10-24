@@ -1,57 +1,97 @@
-import 'package:legalserviceapp/views/checkout/trackmyorder.dart';
 import 'package:flutter/material.dart';
 
-
-import '../../../commonwidgets/product_data.dart';
-import '../../../widgets/custom_outline_button.dart';
+import '../../../constants/colors.dart';
+import '../../../services/api_client.dart';
+import '../../../state/session_scope.dart';
 import '../../../widgets/customapp_bar.dart';
-import '../../../widgets/custombtn.dart';
-import '../../../widgets/detailstext1.dart';
-import '../../../widgets/detailstext2.dart';
-import '../../../models/product_model.dart';
 
-
-
-
-
-
+/// Current bookings loaded from the caller-scoped bookings API.
 class ActiveOrders extends StatefulWidget {
   const ActiveOrders({super.key});
 
   @override
-  ActiveOrdersState createState() => ActiveOrdersState();
+  State<ActiveOrders> createState() => _ActiveOrdersState();
 }
 
-class ActiveOrdersState extends State<ActiveOrders> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<Offset> _slideFromTopAnimation;
-
-  final List<Product> products = ProductData().products;
-
+class _ActiveOrdersState extends State<ActiveOrders> {
+  late Future<List<Map<String, dynamic>>> _bookings;
+  bool _loaded = false;
+  final Set<String> _cancelling = <String>{};
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 5000),
-    );
-
-    _slideFromTopAnimation = Tween<Offset>(
-      begin: const Offset(0.0, -1.0),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeInOut,
-    ));
-
-    _controller.forward();
+    _bookings = Future.value(const <Map<String, dynamic>>[]);
   }
 
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_loaded) return;
+    _loaded = true;
+    _reload();
+  }
+
+  Future<void> _reload() {
+    final future = SessionScope.read(context).repository.fetchBookings().then(
+          (rows) => rows.where(_isCurrent).toList(growable: false),
+        );
+    setState(() {
+      _bookings = future;
+    });
+    return future.then<void>((_) {}, onError: (_) {});
+  }
+
+  static bool _isCurrent(Map<String, dynamic> booking) {
+    final status = _text(booking['status']).toLowerCase();
+    return status != 'completed' && status != 'cancelled';
+  }
+
+  Future<void> _cancel(Map<String, dynamic> booking) async {
+    final id = _text(booking['id']);
+    if (id.isEmpty) {
+      _showMessage('This booking has no usable ID and cannot be cancelled.');
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancel booking?'),
+        content: const Text('This will cancel the selected appointment.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep booking'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Cancel booking'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _cancelling.add(id));
+    try {
+      await SessionScope.read(context)
+          .repository
+          .updateBookingStatus(id, 'Cancelled');
+      if (!mounted) return;
+      _showMessage('Booking cancelled.');
+      await _reload();
+    } catch (error) {
+      if (!mounted) return;
+      final message = error is ApiException ? error.message : 'Please try again.';
+      _showMessage('Could not cancel booking: $message');
+    } finally {
+      if (mounted) setState(() => _cancelling.remove(id));
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -64,100 +104,84 @@ class ActiveOrdersState extends State<ActiveOrders> with SingleTickerProviderSta
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const CustomAppBar(text: 'Active Bookings', text1: ''),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Expanded(
-                child: AnimatedBuilder(
-                  animation: _controller,
-                  builder: (context, child) {
-                    return ListView.builder(
-                      itemCount: products.length,
-                      itemBuilder: (context, index) {
-                        return SlideTransition(
-                          position: _slideFromTopAnimation,
-                          child: Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: Card(
-                              color: Colors.white,
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _bookings,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      final error = snapshot.error;
+                      final detail = error is ApiException
+                          ? error.message
+                          : 'Please try again.';
+                      return _BookingMessage(
+                        icon: Icons.error_outline,
+                        title: 'Could not load bookings',
+                        detail: detail,
+                        onRetry: _reload,
+                      );
+                    }
 
-                              child: Padding(
-                                padding: const EdgeInsets.all(8.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Padding(
-                                          padding: const EdgeInsets.only(top: 6),
-                                          child: SizedBox(
-                                            height: 80, // Adjusted height for visibility
-                                            width: 110, // Adjusted width for visibility
-                                            child: ClipRRect(
-                                              borderRadius: BorderRadius.circular(8),
-                                              child: Image.asset(
-                                                products[index].imagePath,
-                                                fit: BoxFit.cover,  // You can change to BoxFit.contain or BoxFit.fill if needed
-                                                errorBuilder: (context, error, stackTrace) {
-                                                  // Handle image loading errors gracefully
-                                                  return Center(child: Icon(Icons.error, color: Colors.red));
-                                                },
-                                              ),
-                                            ),
-                                          ),
-                                        ),
+                    final bookings =
+                        snapshot.data ?? const <Map<String, dynamic>>[];
+                    if (bookings.isEmpty) {
+                      return const _BookingMessage(
+                        icon: Icons.event_available_outlined,
+                        title: 'No active bookings',
+                        detail: 'New and upcoming appointments will appear here.',
+                      );
+                    }
 
-                                        const SizedBox(width: 14),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text1(
-                                                text1: products[index].name,
-                                              ),
-                                              const Text2(text2: 'May 23, 4.3PM'),
-                                              Text1(
-                                                text1: products[index].price,
-                                              ),
-
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Row(
-                                        children: [
-                                          Flexible(
-                                            child: CustomOutlinedButton(
-                                              text: 'Cancel Order',
-                                              onTap: () {},
-                                            ),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Flexible(
-                                            child: CustomButton(
-                                              text: 'Track Service',
-                                              onTap: () {
-                                                Navigator.push(
-                                                  context,
-                                                  MaterialPageRoute(
-                                                    builder: (context) => const TrackLegalServiceScreen(),
-                                                  ),
-                                                );
-                                              },
-                                            ),
-                                          ),
-                                        ],
+                    return RefreshIndicator(
+                      onRefresh: _reload,
+                      child: ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: bookings.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          final booking = bookings[index];
+                          final id = _text(booking['id']);
+                          final status = _text(booking['status']);
+                          final isCancelling = _cancelling.contains(id);
+                          return Card(
+                            color: Colors.white,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                children: [
+                                  _BookingSummary(booking: booking),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Chip(
+                                        label: Text(status.isEmpty ? 'Status unknown' : status),
+                                        visualDensity: VisualDensity.compact,
                                       ),
-                                    ),
-                                  ],
-                                ),
+                                      const Spacer(),
+                                      TextButton.icon(
+                                        onPressed: isCancelling
+                                            ? null
+                                            : () => _cancel(booking),
+                                        icon: isCancelling
+                                            ? const SizedBox(
+                                                height: 16,
+                                                width: 16,
+                                                child: CircularProgressIndicator(strokeWidth: 2),
+                                              )
+                                            : const Icon(Icons.event_busy_outlined),
+                                        label: const Text('Cancel'),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     );
                   },
                 ),
@@ -169,3 +193,89 @@ class ActiveOrdersState extends State<ActiveOrders> with SingleTickerProviderSta
     );
   }
 }
+
+class _BookingSummary extends StatelessWidget {
+  const _BookingSummary({required this.booking});
+
+  final Map<String, dynamic> booking;
+
+  @override
+  Widget build(BuildContext context) {
+    final lawyerName = _text(booking['lawyerName']);
+    final date = _text(booking['date']);
+    final time = _text(booking['time']);
+    final dateTime = [date, time].where((value) => value.isNotEmpty).join(' • ');
+    final hours = _text(booking['hours']);
+    final price = _text(booking['totalPrice']);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const CircleAvatar(
+          backgroundColor: AppColors.bgColor,
+          child: Icon(Icons.person_outline, color: AppColors.buttonColor),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                lawyerName.isEmpty ? 'Lawyer' : lawyerName,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              if (dateTime.isNotEmpty) Text(dateTime),
+              if (hours.isNotEmpty || price.isNotEmpty)
+                Text([
+                  if (hours.isNotEmpty) '${hours}h',
+                  if (price.isNotEmpty) '\$$price',
+                ].join(' • ')),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BookingMessage extends StatelessWidget {
+  const _BookingMessage({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.onRetry,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final Future<void> Function()? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 42, color: AppColors.text3Color),
+            const SizedBox(height: 12),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Text(detail, textAlign: TextAlign.center),
+            if (onRetry != null) ...[
+              const SizedBox(height: 14),
+              OutlinedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _text(dynamic value) => value?.toString().trim() ?? '';

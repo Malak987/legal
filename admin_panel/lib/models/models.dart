@@ -2,10 +2,26 @@
 /// All models can be created from the JSON returned by the backend API.
 library;
 
+class LegalCategory {
+  final String id;
+  final String name;
+  final String slug;
+
+  const LegalCategory({required this.id, required this.name, this.slug = ''});
+
+  factory LegalCategory.fromJson(Map<String, dynamic> json) => LegalCategory(
+        id: json['id']?.toString() ?? '',
+        name: json['name']?.toString() ?? '',
+        slug: json['slug']?.toString() ?? '',
+      );
+}
+
 class Lawyer {
   final String id;
   final String name;
   final String specialty;
+  final String experience;
+  final String categoryId;
   final String price;
 
   /// Numeric hourly rate, in the same currency as the wallet (USD).
@@ -25,6 +41,8 @@ class Lawyer {
     required this.id,
     required this.name,
     this.specialty = '',
+    this.experience = '',
+    this.categoryId = '',
     this.price = '',
     this.priceValue,
     this.image = '',
@@ -41,6 +59,8 @@ class Lawyer {
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
       specialty: json['specialty']?.toString() ?? '',
+      experience: json['experience']?.toString() ?? '',
+      categoryId: json['categoryId']?.toString() ?? json['category_id']?.toString() ?? '',
       price: json['price']?.toString() ?? '',
       priceValue: rawPrice is num ? rawPrice.toDouble() : null,
       image: json['image']?.toString() ?? '',
@@ -55,6 +75,8 @@ class Lawyer {
   Map<String, dynamic> toJson() => {
         'name': name,
         'specialty': specialty,
+        'experience': experience,
+        if (categoryId.isNotEmpty) 'categoryId': categoryId,
         'price': price,
         if (priceValue != null) 'priceValue': priceValue,
         'image': image,
@@ -134,6 +156,10 @@ class CaseItem {
   final String status;
   final String dueDate;
   final String userId;
+  final String lawyerId;
+  final String categoryId;
+  final String lawyerName;
+  final String categoryName;
 
   CaseItem({
     required this.id,
@@ -145,6 +171,10 @@ class CaseItem {
     this.status = 'Open',
     this.dueDate = '',
     this.userId = '',
+    this.lawyerId = '',
+    this.categoryId = '',
+    this.lawyerName = '',
+    this.categoryName = '',
   });
 
   factory CaseItem.fromJson(Map<String, dynamic> json) {
@@ -158,6 +188,10 @@ class CaseItem {
       status: json['status']?.toString() ?? 'Open',
       dueDate: json['dueDate']?.toString() ?? '',
       userId: json['userId']?.toString() ?? '',
+      lawyerId: json['lawyerId']?.toString() ?? '',
+      categoryId: json['categoryId']?.toString() ?? '',
+      lawyerName: json['lawyerName']?.toString() ?? '',
+      categoryName: json['categoryName']?.toString() ?? '',
     );
   }
 
@@ -170,6 +204,8 @@ class CaseItem {
         'status': status,
         'dueDate': dueDate,
         if (userId.isNotEmpty) 'userId': userId,
+        if (lawyerId.isNotEmpty) 'lawyerId': lawyerId,
+        if (categoryId.isNotEmpty) 'categoryId': categoryId,
       };
 }
 

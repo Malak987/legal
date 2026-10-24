@@ -1,8 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
+
 import '../../config/ai_config.dart';
+import '../../state/session_scope.dart';
 
 class LegalChatScreen extends StatefulWidget {
   const LegalChatScreen({super.key});
@@ -15,57 +15,91 @@ class LegalChatScreenState extends State<LegalChatScreen> {
   final TextEditingController _controller = TextEditingController();
   List<Map<String, String>> messages = [];
   bool isLoading = false;
+  bool _aiConsentGranted = false;
+
+  Future<bool> _requestAiConsent() async {
+    if (_aiConsentGranted) return true;
+    var consented = false;
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('External AI processing'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Your legal question will be sent to Google Gemini for an AI-generated response. Avoid including names, account numbers, or confidential details. The response is general information, not legal advice.',
+                ),
+                const SizedBox(height: 12),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: consented,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('I consent to external AI processing.'),
+                  onChanged: (value) =>
+                      setDialogState(() => consented = value ?? false),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: consented
+                  ? () => Navigator.of(dialogContext).pop(true)
+                  : null,
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+    _aiConsentGranted = result == true;
+    return _aiConsentGranted;
+  }
 
   Future<void> sendMessage() async {
-    String userMessage = _controller.text.trim();
-    if (userMessage.isEmpty) return;
+    final userMessage = _controller.text.trim();
+    if (userMessage.isEmpty || isLoading) return;
+    if (!await _requestAiConsent() || !mounted) return;
 
     setState(() {
-      messages.add({"role": "user", "text": userMessage});
+      messages.add({'role': 'user', 'text': userMessage});
       isLoading = true;
     });
-
     _controller.clear();
 
-    String? botResponse = await fetchLegalResponse(userMessage);
-
+    final botResponse = await fetchLegalResponse(userMessage);
+    if (!mounted) return;
     setState(() {
-      if (botResponse != null) {
-        messages.add({"role": "bot", "text": botResponse});
-      } else {
-        messages.add({"role": "bot", "text": "Sorry, I couldn't process that request."});
-      }
+      messages.add({
+        'role': 'bot',
+        'text': botResponse ?? AiConfig.unavailableMessage,
+      });
       isLoading = false;
     });
   }
 
   Future<String?> fetchLegalResponse(String prompt) async {
-    // The key comes from --dart-define (see lib/config/ai_config.dart);
-    // it is never committed. Without it the chat reports the feature as
-    // not configured rather than sending an empty key to Google.
-    if (!AiConfig.isConfigured) return AiConfig.notConfiguredMessage;
-    final Uri url = AiConfig.generateContentUri();
-
-    final response = await http.post(
-      url,
-      headers: AiConfig.headers,
-      body: jsonEncode({
-        "contents": [
-          {
-            "parts": [
-              {"text": prompt}
-            ]
-          }
-        ]
-      }),
-    );
-
-    if (response.statusCode == 200) {
-      final jsonResponse = jsonDecode(response.body);
-      return jsonResponse["candidates"]?[0]["content"]?["parts"]?[0]["text"];
-    } else {
+    try {
+      return await SessionScope.read(context)
+          .repository
+          .askLegalAssistant(prompt);
+    } catch (_) {
       return null;
     }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
@@ -79,6 +113,14 @@ class LegalChatScreenState extends State<LegalChatScreen> {
       ),
       body: Column(
         children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Text(
+              'AI responses are general information, not legal advice. Verify important decisions with a qualified lawyer.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ),
           Expanded(
             child: ListView.builder(
               padding: EdgeInsets.all(10),

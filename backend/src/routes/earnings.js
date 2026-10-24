@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import { getDb } from '../config/firebase.js';
+import { requestDatabase } from '../utils/supabase_rpc.js';
 import { authenticate, requireSelfOrAdmin } from '../middleware/auth.js';
 import { ok, notFound } from '../utils/response.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { getDocById } from '../utils/firestore.js';
+import { getDocById } from '../utils/supabase_database.js';
 
 const router = Router();
 const COLLECTION = 'earnings';
@@ -15,7 +15,7 @@ router.get(
   requireSelfOrAdmin('userId'),
   asyncHandler(async (req, res) => {
     const { userId } = req.params;
-    const earnings = await getDocById(getDb(), COLLECTION, userId);
+    const earnings = await getDocById(requestDatabase(req), COLLECTION, userId);
     if (!earnings) return notFound(res, 'No earnings record found');
     ok(res, earnings);
   }),

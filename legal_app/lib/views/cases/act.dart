@@ -1,298 +1,242 @@
 import 'package:flutter/material.dart';
- import 'package:percent_indicator/percent_indicator.dart';
 
-import '../../constants/colors.dart'; // Import the package
+import '../../constants/colors.dart';
+import '../../services/api_client.dart';
+import '../../state/session_scope.dart';
 
-// --- Constants --- (Adjust colors and padding as needed)
-const Color primaryRed = AppColors.buttonColor;
-const Color lightGreyBackground = Color(0xFFF0F0F0); // For expansion tiles
-const Color darkGreyText = Colors.grey; // For "Name" label
-const Color defaultTextColor = Colors.black87;
-const double hPadding = 16.0; // Horizontal padding for most elements
-const double vPadding = 3.0; // Vertical padding between sections
+/// Detail view for one caller-authorized case, loaded by its stable API ID.
+///
+/// Hearing dates, documents, and case-history rows are intentionally not
+/// shown: the current case model/API has no such data.
+class CaseDetailsScreen extends StatefulWidget {
+  const CaseDetailsScreen({super.key, required this.caseId});
 
-class CaseDetailsScreen extends StatelessWidget {
-  const CaseDetailsScreen({
-    super.key,
-    // --- Pass actual data here ---
-    this.caseName = "Case/Client Name Here", // Example data
-    this.lastHearingDate = "20 June",
-    this.nextHearingDate = "30 June",
-    this.caseDetailsText = "Lorem ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled.",
-    this.progressPercent = 0.65, // Example: 65%
-  });
+  final String caseId;
 
-  // --- Input Data Properties ---
-  final String caseName;
-  final String lastHearingDate;
-  final String nextHearingDate;
-  final String caseDetailsText;
-  final double progressPercent; // Value between 0.0 and 1.0
+  @override
+  State<CaseDetailsScreen> createState() => _CaseDetailsScreenState();
+}
+
+class _CaseDetailsScreenState extends State<CaseDetailsScreen> {
+  late Future<Map<String, dynamic>> _case;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _case = Future<Map<String, dynamic>>.value(const <String, dynamic>{});
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_loaded) return;
+    _loaded = true;
+    _reload();
+  }
+
+  Future<void> _reload() {
+    final future = SessionScope.read(context).repository.fetchCase(widget.caseId);
+    setState(() {
+      _case = future;
+    });
+    // FutureBuilder owns error presentation; do not rethrow through
+    // RefreshIndicator and surface the same failure twice.
+    return future.then<void>((_) {}, onError: (_) {});
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          'Case Details',
-          style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined, color: Colors.black),
-            onPressed: () {
-              // TODO: Implement edit functionality
-            },
-          ),
-        ],
-        backgroundColor: Colors.white,
-        elevation: 0, // No shadow
+        title: const Text('Case Details'),
         centerTitle: true,
+        backgroundColor: Colors.white,
+        foregroundColor: AppColors.text1Color,
+        elevation: 0,
       ),
-      body: SingleChildScrollView(
-        // REMOVED global padding from here
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // --- Name Label (WITH PADDING) ---
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: hPadding),
-              child: Text(
-                caseName,
-                style: const TextStyle(
-                  color: darkGreyText,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+      body: FutureBuilder<Map<String, dynamic>>(
+        future: _case,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            final error = snapshot.error;
+            final detail = error is ApiException ? error.message : 'Please try again.';
+            return _CaseDetailMessage(
+              icon: Icons.error_outline,
+              title: 'Could not load this case',
+              detail: detail,
+              onRetry: _reload,
+            );
+          }
+
+          final item = snapshot.data ?? const <String, dynamic>{};
+          if (item.isEmpty) {
+            return _CaseDetailMessage(
+              icon: Icons.folder_open,
+              title: 'Case not found',
+              detail: 'This case is no longer available to your account.',
+              onRetry: _reload,
+            );
+          }
+
+          final title = _text(item['title']);
+          final description = _text(item['description']);
+          final category = _firstText(item['categoryName'], item['caseType']);
+          final lawyer = _text(item['lawyerName']);
+          final dueDate = _text(item['dueDate']);
+          final createdAt = _text(item['createdAt']);
+
+          return RefreshIndicator(
+            onRefresh: _reload,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              children: [
+                Text(
+                  title.isEmpty ? 'Untitled case' : title,
+                  style: const TextStyle(
+                    color: AppColors.text1Color,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: vPadding * 1.5),
-
-            // --- Hearing Dates (WITH PADDING) ---
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: hPadding),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _buildHearingDateCard(
-                    icon: Icons.calendar_today_outlined,
-                    label: 'Last Hearing',
-                    date: lastHearingDate,
+                const SizedBox(height: 16),
+                Card(
+                  elevation: 1,
+                  color: AppColors.bgColor,
+                  child: Column(
+                    children: [
+                      _CaseField(label: 'Client', value: _text(item['clientName'])),
+                      _CaseField(label: 'Category / case type', value: category),
+                      _CaseField(
+                        label: 'Assigned lawyer',
+                        value: lawyer.isEmpty ? 'Not assigned' : lawyer,
+                      ),
+                      _CaseField(label: 'Status', value: _text(item['status'])),
+                      _CaseField(label: 'Priority', value: _text(item['priority'])),
+                      if (dueDate.isNotEmpty)
+                        _CaseField(label: 'Due date', value: dueDate),
+                      if (createdAt.isNotEmpty)
+                        _CaseField(label: 'Created', value: createdAt, last: true),
+                    ],
                   ),
-                  _buildHearingDateCard(
-                    icon: Icons.calendar_today, // Slightly different icon?
-                    label: 'Next Hearing',
-                    date: nextHearingDate,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: vPadding * 2),
-
-            // --- Case Details Section (WITH PADDING) ---
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: hPadding),
-              child: Column( // Wrap title and text in a Column for padding
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Case Details',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: defaultTextColor,
-                    ),
-                  ),
-                  const SizedBox(height: vPadding / 2),
-                  Text(
-                    caseDetailsText,
-                    style: const TextStyle(
-                      color: Colors.black54,
-                      fontSize: 14,
-                      height: 1.4, // Line spacing
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: vPadding * 2),
-
-            // --- Case Progress Section (WITH PADDING) ---
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: hPadding),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  const Text(
-                    'Case Progress',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: defaultTextColor,
-                    ),
-                  ),
-                  CircularPercentIndicator(
-                    radius: 30.0,
-                    lineWidth: 5.0,
-                    percent: progressPercent,
-                    center: Text(
-                      "${(progressPercent * 100).toStringAsFixed(0)}%",
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12.0,
-                          color: primaryRed),
-                    ),
-                    progressColor: primaryRed,
-                    backgroundColor: primaryRed.withAlpha((0.2 * 255).toInt()),
-                    circularStrokeCap: CircularStrokeCap.round,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: vPadding * 2),
-
-            // --- About Section Title (WITH PADDING) ---
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: hPadding),
-              child: Text(
-                'About',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: defaultTextColor,
                 ),
-              ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Description',
+                  style: TextStyle(
+                    color: AppColors.text1Color,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  description.isEmpty ? 'No description provided.' : description,
+                  style: const TextStyle(
+                    color: AppColors.text2Color,
+                    fontSize: 15,
+                    height: 1.45,
+                  ),
+                ),
+              ],
             ),
-            // NO general padding around the list items themselves
-            const SizedBox(height: vPadding),
-
-            // --- Expandable List Items (EDGE-TO-EDGE) ---
-            _buildExpansionItem(title: 'Evidences'),
-            const SizedBox(height: vPadding), // Vertical spacing between items
-            _buildExpansionItem(title: 'Time Line'),
-            const SizedBox(height: vPadding),
-            _buildExpansionItem(title: 'Police Statement'),
-            const SizedBox(height: vPadding),
-            _buildExpansionItem(title: 'History'),
-            const SizedBox(height: vPadding),
-            _buildExpansionItem(title: 'Charges'),
-
-            // Add some padding at the very bottom of the scroll view
-            const SizedBox(height: vPadding * 2),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 
-  // Helper widget for the hearing date cards (remains the same)
-  Widget _buildHearingDateCard({
-    required IconData icon,
-    required String label,
-    required String date,
-  }) {
-    return Row(
+  static String _text(dynamic value) => value?.toString().trim() ?? '';
+
+  static String _firstText(dynamic first, dynamic fallback) {
+    final value = _text(first);
+    return value.isNotEmpty ? value : _text(fallback);
+  }
+}
+
+class _CaseField extends StatelessWidget {
+  const _CaseField({required this.label, required this.value, this.last = false});
+
+  final String label;
+  final String value;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
       children: [
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: primaryRed,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.grey.withAlpha((0.2 * 255).toInt()),
-                blurRadius: 5.0,
-                offset: const Offset(0, 3), // Shadow position
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 132,
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppColors.text2Color,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  value.isEmpty ? '—' : value,
+                  style: const TextStyle(color: AppColors.text1Color),
+                ),
               ),
             ],
           ),
-          child: Icon(icon, color: Colors.white, size: 24),
         ),
-        const SizedBox(width: 10),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: const TextStyle(color: Colors.black54, fontSize: 13),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              date,
-              style: const TextStyle(
-                color: defaultTextColor,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
+        if (!last) const Divider(height: 1, indent: 14, endIndent: 14),
       ],
     );
   }
+}
 
-  // Helper widget for the edge-to-edge expandable list items
-  Widget _buildExpansionItem({required String title}) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 10),
-      child: ExpansionTile(
-        title: Container(
-          decoration: BoxDecoration(
-            color: lightGreyBackground,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: hPadding),
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      color: defaultTextColor,
-                      fontWeight: FontWeight.w500,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.all(8.0),
-                decoration: const BoxDecoration(
-                  color: primaryRed,
-                  borderRadius: BorderRadius.only(
-                    topRight: Radius.circular(12),
-                    bottomRight: Radius.circular(12),
-                  ),
-                ),
-                height: 50,
-                alignment: Alignment.center,
-                child: const Icon(
-                  Icons.keyboard_arrow_down,
-                  color: Colors.white,
-                  size: 28,
-                ),
+class _CaseDetailMessage extends StatelessWidget {
+  const _CaseDetailMessage({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.onRetry,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final Future<void> Function()? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 42, color: AppColors.text3Color),
+            const SizedBox(height: 12),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Text(detail, textAlign: TextAlign.center),
+            if (onRetry != null) ...[
+              const SizedBox(height: 14),
+              OutlinedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
               ),
             ],
-          ),
+          ],
         ),
-        tilePadding: EdgeInsets.zero,
-        trailing: const SizedBox.shrink(),
-        childrenPadding: const EdgeInsets.symmetric(horizontal: hPadding, vertical: 10),
-        backgroundColor: Colors.white,
-        collapsedBackgroundColor: Colors.transparent,
-        children: <Widget>[
-          Text(
-            'Details about $title will be shown here. Add relevant widgets or fetched data.',
-            style: const TextStyle(color: Colors.black54, fontSize: 14),
-          ),
-        ],
       ),
     );
   }

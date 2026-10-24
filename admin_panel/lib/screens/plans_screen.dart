@@ -30,7 +30,12 @@ class _PlansScreenState extends State<PlansScreen> {
     return itemsOf(res).map(Plan.fromJson).toList();
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   Future<void> _openForm({Plan? plan}) async {
     final saved = await showDialog<bool>(

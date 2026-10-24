@@ -82,6 +82,23 @@ Future<void> openDialog(
   FakeApiService api, {
   CaseItem? item,
 }) async {
+  api.setDefaultResult(
+    'categories',
+    listPayload([
+      {'id': 'family-category', 'name': 'Family Law', 'slug': 'family-law'},
+    ]),
+  );
+  api.setDefaultResult(
+    'lawyers',
+    listPayload([
+      {
+        'id': 'family-lawyer',
+        'name': 'Family Counsel',
+        'categoryId': 'family-category',
+        'specialty': 'Family Law',
+      },
+    ]),
+  );
   final provider = AuthProvider(FakeAuthService(api: api));
   await tester.pumpWidget(
     ChangeNotifierProvider<AuthProvider>.value(
@@ -94,6 +111,7 @@ Future<void> openDialog(
   await tester.pump(const Duration(milliseconds: 400)); // transition
   await tester.pump(); // initial users request
   await tester.pump(); // rebuild with results
+  await tester.pumpAndSettle(); // categories and lawyer lookup responses
 }
 
 /// Types into a labelled text field.
@@ -109,7 +127,63 @@ Future<void> tapSave(WidgetTester tester) async {
   await tester.pump();
 }
 
+Future<void> chooseFamilyAssignment(WidgetTester tester) async {
+  final categoryField = find.text('Select a legal category');
+  await tester.ensureVisible(categoryField);
+  await tester.pumpAndSettle();
+  await tester.tap(categoryField);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Family Law'));
+  await tester.pumpAndSettle();
+
+  final lawyerField = find.text('Select a lawyer');
+  await tester.ensureVisible(lawyerField);
+  await tester.tap(lawyerField);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Family Counsel'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
+  group('case list relations', () {
+    testWidgets('renders API-provided category and assigned lawyer names',
+        (tester) async {
+      final api = FakeApiService(resultsByPath: {
+        'cases': listPayload([
+          {
+            'id': 'case-1',
+            'title': 'Contract dispute',
+            'clientName': 'Nour Hassan',
+            'caseType': 'Commercial Law',
+            'categoryId': 'category-1',
+            'categoryName': 'Commercial Law',
+            'lawyerId': 'lawyer-1',
+            'lawyerName': 'Mona Fahmy',
+            'dueDate': '2026-12-02',
+            'priority': 'High',
+            'status': 'In Progress',
+          },
+        ]),
+      });
+      final provider = AuthProvider(FakeAuthService(api: api));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AuthProvider>.value(
+          value: provider,
+          child: const MaterialApp(
+            home: Scaffold(body: CasesScreen()),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Contract dispute'), findsOneWidget);
+      expect(find.textContaining('Commercial Law'), findsOneWidget);
+      expect(find.textContaining('Lawyer: Mona Fahmy'), findsOneWidget);
+    });
+  });
+
   group('client picker: loading and results', () {
     testWidgets('shows a spinner, then the client list', (tester) async {
       // Held open so the loading state is observable regardless of how many
@@ -260,11 +334,14 @@ void main() {
       await typeInto(tester, 'Title', 'Contract review');
       await tester.tap(find.text('Sara Ali'));
       await tester.pump();
+      await chooseFamilyAssignment(tester);
       await tapSave(tester);
 
       final body = api.lastBodyFor('POST', 'cases') as Map<String, dynamic>;
       expect(body['userId'], 'client-1');
       expect(body['clientName'], 'Sara Ali');
+      expect(body['categoryId'], 'family-category');
+      expect(body['lawyerId'], 'family-lawyer');
       expect(body['title'], 'Contract review');
       // Unrelated fields keep their defaults.
       expect(body['status'], 'Open');

@@ -48,6 +48,10 @@ function seed(overrides = {}) {
     // client1/client2 are eligible owners, admin1 is not, and `ghost-uid`
     // exists in no collection at all.
     users: users('client1', 'client2', 'lawyer1', 'admin1'),
+    lawyers: [
+      { id: 'lawyer-record-1', userId: 'lawyer-1', name: 'Lawyer One' },
+      { id: 'lawyer-record-2', userId: 'lawyer-2', name: 'Lawyer Two' },
+    ],
     cases: [],
     ...overrides,
   };
@@ -169,9 +173,45 @@ describe('tasks 1.1: the same defaults bug, fixed the same way', () => {
     });
 
     assert.equal(res.status, 201);
-    assert.equal(res.body.data.status, 'To Do');
+    assert.equal(res.body.data.status, 'Pending');
     assert.equal(res.body.data.priority, 'Medium');
   });
+});
+
+describe('tasks 1.2: status values match the migrated database/mobile contract', () => {
+  beforeEach(() =>
+    reset({
+      collections: seed({
+        tasks: [
+          { id: 'task-1', userId: 'client-1', title: 'File motion', status: 'Pending', priority: 'High' },
+        ],
+      }),
+    }),
+  );
+
+  for (const status of ['Pending', 'In Progress', 'Completed', 'Cancelled']) {
+    it(`accepts ${status}`, async () => {
+      signIn('client1');
+      const res = await put(`${TASKS}/task-1`, {
+        token: tokenFor('client1'),
+        body: { title: 'File motion', status },
+      });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.equal(res.body.data.status, status);
+    });
+  }
+
+  for (const status of ['To Do', 'Done']) {
+    it(`rejects legacy status ${status}`, async () => {
+      signIn('client1');
+      const res = await put(`${TASKS}/task-1`, {
+        token: tokenFor('client1'),
+        body: { title: 'File motion', status },
+      });
+      assert.equal(res.status, 400, JSON.stringify(res.body));
+      assert.equal(docs('tasks').find((task) => task.id === 'task-1').status, 'Pending');
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -391,21 +431,20 @@ describe('cases 1.3: the owner is validated when an administrator picks one', ()
     assert.equal(res.body.warnings, undefined, 'a real client needs no warning');
   });
 
-  it('accepts a lawyer as the owner of their own matter', async () => {
+  it('rejects a lawyer as the case owner because cases are client-owned', async () => {
     signIn('admin1');
 
     const res = await post(BASE, {
       token: tokenFor('admin1'),
-      body: { title: 'Lawyer own matter', userId: 'lawyer-1' },
+      body: { title: 'Lawyer-owned case', userId: 'lawyer-1' },
     });
 
-    assert.equal(res.status, 201);
-    assert.equal(res.body.data.userId, 'lawyer-1');
+    assert.equal(res.status, 400);
+    assert.match(res.body.message, /not an eligible case owner/);
+    assert.equal(docs('cases').length, 0);
   });
 
-  it('accepts an administrator create with no userId but reports it', async () => {
-    // Backward compatibility for the current admin panel, which has no client
-    // picker yet. The behaviour is preserved but never silent.
+  it('requires an administrator to choose a client instead of creating an ownerless case', async () => {
     signIn('admin1');
 
     const res = await post(BASE, {
@@ -413,10 +452,9 @@ describe('cases 1.3: the owner is validated when an administrator picks one', ()
       body: { title: 'Case without a client' },
     });
 
-    assert.equal(res.status, 201);
-    assert.deepEqual(res.body.warnings, ['CASE_WITHOUT_CLIENT']);
-    assert.equal(res.body.data.userId, 'admin-1');
-    assert.equal(caseOf(res.body.data.id).userId, 'admin-1');
+    assert.equal(res.status, 400);
+    assert.match(res.body.message, /userId is required/);
+    assert.equal(docs('cases').length, 0);
   });
 
   it('rejects an admin reassignment to an unknown user and changes nothing', async () => {

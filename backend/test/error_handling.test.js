@@ -99,7 +99,7 @@ describe('errors 1.3: auth failures do not explain themselves', () => {
     const res = await get('/api/wallet/client-1', { token: 'not-a-real-token' });
 
     assert.equal(res.status, 401);
-    assert.equal(res.body.message, 'Invalid or expired token.');
+    assert.equal(res.body.message, 'Invalid or expired Supabase access token.');
     assert.equal(res.body.error, undefined);
     assert.doesNotMatch(JSON.stringify(res.body), /Decoding Firebase ID token failed/);
   });

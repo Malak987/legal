@@ -30,7 +30,12 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
     return itemsOf(res).map(Review.fromJson).toList();
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   Future<void> _delete(Review r) async {
     final api = AuthProvider.of(context).api;

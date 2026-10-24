@@ -3,9 +3,9 @@ name: CI
 # Verifies all three parts of the platform on every push and PR:
 #
 #   backend/     1) Fast unit + Cloud Functions contract suite (`npm test`)
-#                2) Full end-to-end integration test against real Firebase
-#                   Auth + Cloud Firestore + Cloud Functions Gen 2 + Firebase
-#                   Hosting Emulators (`npm run test:emulator`)
+#                2) Emulator integration for Hosting + Cloud Functions Gen 2,
+#                   proving Firebase ID tokens cannot enter the Supabase-only
+#                   profile API or create legacy Firestore profiles.
 #   admin_panel/ Flutter Web admin (`flutter analyze`, `flutter test`, and
 #                production `flutter build web` targeting Firebase Hosting)
 #   legal_app/   Flutter mobile app (`flutter analyze` compile gate + `flutter test`)
@@ -47,7 +47,7 @@ jobs:
           set -o pipefail
           npm test 2>&1 | tee "$RUNNER_TEMP/backend-unit.log"
 
-      - name: Run full Firebase Hosting + Functions Gen 2 + Auth + Firestore Emulator E2E suite
+      - name: Verify Supabase-only auth boundary through Hosting + Functions emulators
         shell: bash
         run: |
           set -o pipefail
@@ -56,7 +56,7 @@ jobs:
           npx --yes firebase-tools@15.34.1 emulators:exec \
             --project legal-102026 \
             --only auth,firestore,functions,hosting \
-            "RUN_FIRESTORE_E2E=1 npm --prefix backend run test:emulator" \
+            "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 RUN_FIRESTORE_E2E=1 npm --prefix backend run test:emulator" \
             2>&1 | tee "$RUNNER_TEMP/backend-emulator.log"
 
       - name: Publish failure details as annotations
@@ -74,6 +74,21 @@ jobs:
           }
           publish "$RUNNER_TEMP/backend-unit.log" "backend npm test"
           publish "$RUNNER_TEMP/backend-emulator.log" "backend firebase emulators e2e"
+
+  supabase-edge:
+    name: Supabase Edge Function (Deno type check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check authenticated AI Edge Function
+        run: deno check supabase/functions/ai-assistant/index.ts
 
   admin-panel:
     name: Admin panel (analyze + test + web build)
@@ -108,9 +123,16 @@ jobs:
 
       - name: Build production web bundle (Firebase Hosting target)
         shell: bash
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          # The web build job compiles only; use a non-production public value when
+          # repository variables are absent, and never deploy this CI artifact.
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY || 'ci-public-anon-key-for-build-only' }}
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+          SUPABASE_AUTH_REDIRECT_URL: ${{ vars.SUPABASE_AUTH_REDIRECT_URL }}
         run: |
           set -o pipefail
-          flutter build web 2>&1 | tee "$RUNNER_TEMP/build-web.log"
+          node scripts/build_web.mjs 2>&1 | tee "$RUNNER_TEMP/build-web.log"
 
       - name: Publish failure details as annotations
         if: failure()
@@ -119,7 +141,7 @@ jobs:
           publish() {
             local log="$1" title="$2" pattern="$3" body encoded
             [ -f "$log" ] || return 0
-            body="$(grep -E "$pattern" "$log" | head -60 || true)"
+            body="$(grep -B 6 -A 18 -E "$pattern" "$log" | head -120 || true)"
             [ -n "$body" ] || body="$(tail -40 "$log")"
             encoded="$(printf '%s\n' "$body" | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'NF { printf "%s%%0A", $0 }')"
             echo "::error title=${title}::${encoded}"
@@ -146,11 +168,16 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          # legal_app/pubspec.lock requires Flutter >= 3.47.0.
+          flutter-version: '3.47.0'
           channel: stable
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee "$RUNNER_TEMP/pub-get.log"
 
       - name: Report formatting differences
         shell: bash
@@ -196,8 +223,10 @@ jobs:
             echo "----- ${title} -----"
             printf '%s\n' "$body"
           }
+          publish "$RUNNER_TEMP/pub-get.log" "flutter pub get (legal_app)" \
+            'Error:|Exception|Because|version solving|Failed|SocketException'
           publish "$RUNNER_TEMP/analyze.log" "flutter analyze (legal_app)" \
-            '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
+            '^[[:space:]]*(error|warning)[[:space:]]*[•-]'
           publish "$RUNNER_TEMP/test.log" "flutter test (legal_app)" \
             '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'
           publish_block "$RUNNER_TEMP/test.log" "flutter test (legal_app) detail"

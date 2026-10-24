@@ -36,7 +36,7 @@ class AppScaffold extends StatelessWidget {
       appBar: AppBar(
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
         actions: actions,
-        automaticallyImplyLeading: showBack,
+        automaticallyImplyLeading: showBack || !isWide,
       ),
       drawer: isWide ? null : const _AdminDrawer(),
       body: body,
@@ -73,8 +73,8 @@ class _Sidebar extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 24, 20, 16),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
                 child: Row(
                   children: [
                     CircleAvatar(
@@ -95,8 +95,8 @@ class _Sidebar extends StatelessWidget {
                             ),
                           ),
                           Text(
-                            'Admin Panel',
-                            style: TextStyle(color: Colors.white70, fontSize: 12),
+                            nav.subtitle,
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
                           ),
                         ],
                       ),
@@ -203,6 +203,7 @@ class AdminNav extends InheritedWidget {
     super.key,
     required this.items,
     required this.current,
+    this.subtitle = 'Admin Panel',
     required this.select,
     required this.logout,
     required super.child,
@@ -210,6 +211,7 @@ class AdminNav extends InheritedWidget {
 
   final List<NavItem> items;
   final NavItem current;
+  final String subtitle;
   final ValueChanged<NavItem> select;
   final VoidCallback logout;
 
@@ -221,5 +223,7 @@ class AdminNav extends InheritedWidget {
 
   @override
   bool updateShouldNotify(AdminNav oldWidget) =>
-      oldWidget.current != current || oldWidget.items != items;
+      oldWidget.current != current ||
+      oldWidget.items != items ||
+      oldWidget.subtitle != subtitle;
 }

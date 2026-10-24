@@ -12,14 +12,14 @@ enum SessionStatus {
   /// Auth state has not been determined yet. Screens must not assume anything.
   resolving,
 
-  /// No Firebase session.
+  /// No active Supabase Auth session.
   signedOut,
 
   /// Signed in **and** the application profile is loaded.
   signedIn,
 
-  /// A Firebase session exists but the profile could not be loaded. Treated as
-  /// "not usable yet" so protected screens stay closed.
+  /// A Supabase session exists but the profile could not be loaded. Protected
+  /// screens stay closed until the session/profile can be verified.
   profileUnavailable,
 }
 
@@ -47,8 +47,8 @@ class SessionController extends ChangeNotifier {
 
   /// True while [signIn], [register] or [refreshProfile] is running.
   ///
-  /// Those methods load the profile themselves, and Firebase also reports the
-  /// change on the stream. Without this guard both paths would fetch the
+  /// Those methods load the profile themselves, and Auth also reports explicit
+  /// changes on the stream. Without this guard both paths would fetch the
   /// profile — duplicate requests, and a visible flicker.
   bool _explicitOperation = false;
 
@@ -75,23 +75,55 @@ class SessionController extends ChangeNotifier {
   /// signed-in or the signed-out UI too early.
   bool get isResolving => _status == SessionStatus.resolving;
 
-  /// Starts listening for Firebase auth changes. Safe to call more than once.
+  /// Starts the auth-change listener and restores the encrypted refresh-token
+  /// session. Safe to call more than once.
   void start() {
     if (_subscription != null) return;
+    _restoring = true;
+    _status = SessionStatus.resolving;
     try {
       _subscription = _auth.authStateChanges.listen(
-        _onAuthStateChanged,
+        (user) {
+          // Callback links can emit while restoreSession is parsing the URL.
+          // The restore result is authoritative and handles that event once.
+          if (_restoring) return;
+          unawaited(_onAuthStateChanged(user));
+        },
         onError: (Object error) {
+          if (_restoring) return;
+          _auth.api.clearApplicationUid();
           _status = SessionStatus.signedOut;
-          _error = FirebaseAuthGateway.messageForSetupError(error);
+          _error = _describe(error);
           notifyListeners();
         },
       );
+      unawaited(_restoreSession());
     } catch (error) {
-      // Firebase is not configured for this build (placeholder options on web
-      // or iOS). The app still runs; it just cannot authenticate.
+      _restoring = false;
       _status = SessionStatus.signedOut;
-      _error = FirebaseAuthGateway.messageForSetupError(error);
+      _error = _describe(error);
+      notifyListeners();
+    }
+  }
+
+  bool _restoring = false;
+
+  Future<void> _restoreSession() async {
+    final generation = ++_generation;
+    try {
+      final user = await _auth.restoreSession();
+      if (generation != _generation) return;
+      _restoring = false;
+      await _onAuthStateChanged(user);
+    } catch (error) {
+      if (generation != _generation) return;
+      _restoring = false;
+      _user = _auth.currentUser;
+      _profile = null;
+      _status = _user == null
+          ? SessionStatus.signedOut
+          : SessionStatus.profileUnavailable;
+      _error = _describe(error);
       notifyListeners();
     }
   }
@@ -102,12 +134,14 @@ class SessionController extends ChangeNotifier {
     // another profile read.
     if (user != null &&
         _user?.uid == user.uid &&
-        _status == SessionStatus.signedIn) {
+        (_status == SessionStatus.signedIn ||
+            _status == SessionStatus.resolving)) {
       return;
     }
 
     if (user == null) {
       _generation++;
+      _auth.api.clearApplicationUid();
       _user = null;
       _profile = null;
       _error = null;
@@ -123,7 +157,7 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final profile = await _auth.loadOrProvisionProfile();
+      final profile = await _auth.loadProfile();
       if (generation != _generation) return;
       _profile = profile;
       _status = SessionStatus.signedIn;
@@ -138,6 +172,7 @@ class SessionController extends ChangeNotifier {
 
   /// Signs in and loads the profile. Returns true when the app is ready.
   Future<bool> signIn({required String email, required String password}) async {
+    _restoring = false;
     final generation = ++_generation;
     _explicitOperation = true;
     _busy = true;
@@ -163,8 +198,8 @@ class SessionController extends ChangeNotifier {
       if (generation != _generation) return false;
       _explicitOperation = false;
 
-      // A profile failure means Firebase did sign the user in, even though
-      // this call failed: keep the uid so a retry targets the right account.
+      // A profile failure means Supabase Auth accepted the credential, even
+      // though this call failed: keep the UUID so a retry targets that account.
       _user ??= _auth.currentUser;
       if (error is AuthException) {
         // The credential was rejected: there is no session to keep.
@@ -189,6 +224,7 @@ class SessionController extends ChangeNotifier {
     required String email,
     required String password,
   }) async {
+    _restoring = false;
     final generation = ++_generation;
     _explicitOperation = true;
     _busy = true;
@@ -216,11 +252,19 @@ class SessionController extends ChangeNotifier {
       if (generation != _generation) return false;
       _explicitOperation = false;
 
-      // A failed registration must not look like a session: the rollback
-      // either removed the account or reported that it could not.
-      _user = null;
-      _profile = null;
-      _status = SessionStatus.signedOut;
+      // A profile-incomplete account is preserved; keep its live Auth session
+      // available for a later profile retry. Confirmation-pending accounts have
+      // no session and remain signed out.
+      final currentUser = _auth.currentUser;
+      if (error is AuthException && error.accountCreated && currentUser != null) {
+        _user = currentUser;
+        _profile = null;
+        _status = SessionStatus.profileUnavailable;
+      } else {
+        _user = null;
+        _profile = null;
+        _status = SessionStatus.signedOut;
+      }
       _error = _describe(error);
       _busy = false;
       notifyListeners();
@@ -235,7 +279,7 @@ class SessionController extends ChangeNotifier {
     _busy = true;
     notifyListeners();
     try {
-      final profile = await _auth.loadOrProvisionProfile();
+      final profile = await _auth.loadProfile();
       if (generation != _generation) return;
       _profile = profile;
       _status = SessionStatus.signedIn;
@@ -273,11 +317,15 @@ class SessionController extends ChangeNotifier {
       phone: phone,
       address: address,
     );
-    // `PUT /api/users/:id` answers with the full stored document, so the
-    // response is authoritative for `role` as well. The role is never taken
-    // from anything the UI holds — neither promoted nor preserved from a stale
-    // cached value. A demotion by an administrator therefore shows up
-    // immediately instead of lingering in the UI.
+    // The profile row is authoritative. If the role changed away from client,
+    // close the session immediately rather than leaving the client UI signed in.
+    if (!updated.hasValidRole || !updated.isClient || updated.uid.trim().isEmpty) {
+      await signOut();
+      throw AuthException(
+        'This app is available to client accounts only.',
+        code: 'role-not-authorized',
+      );
+    }
     _profile = AppProfile(
       uid: updated.uid,
       name: updated.name,
@@ -290,11 +338,23 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Requests a recovery email. The UI uses a generic success message so this
+  /// endpoint does not reveal whether an email is registered.
+  Future<void> requestPasswordReset(String email) =>
+      _auth.requestPasswordReset(email.trim());
+
+  /// Completes a reset-email callback session with a new password.
+  Future<void> setPasswordFromRecovery(String newPassword) async {
+    await _auth.setPasswordFromRecovery(newPassword);
+    await signOut();
+  }
+
+  bool get isPasswordRecovery => _auth.isPasswordRecovery;
+
   /// Changes the signed-in account's password.
   ///
   /// Throws [AuthException] with a message that can be shown as-is. The session
-  /// itself is untouched on success — Firebase re-authenticates the same user,
-  /// so the account stays signed in.
+  /// remains active after successful Supabase reauthentication and update.
   Future<void> changePassword({
     required String currentPassword,
     required String newPassword,
@@ -308,8 +368,9 @@ class SessionController extends ChangeNotifier {
     );
   }
 
-  /// Signs out of Firebase and clears every cached value.
+  /// Signs out of Supabase Auth and clears every cached value.
   Future<void> signOut() async {
+    _restoring = false;
     _generation++; // discard any in-flight profile read
     _explicitOperation = false;
     try {

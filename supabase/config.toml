@@ -1,0 +1,7 @@
+# Local CLI configuration only. Link/deploy commands still require an explicitly
+# verified non-production target; never infer the target from a project name.
+[functions.ai-assistant]
+verify_jwt = true
+
+[functions.document-upload]
+verify_jwt = true

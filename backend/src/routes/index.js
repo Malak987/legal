@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import lawyers from './lawyers.js';
+import categories from './categories.js';
 import users from './users.js';
 import cases from './cases.js';
 import bookings from './bookings.js';
@@ -14,10 +15,13 @@ import earnings from './earnings.js';
 import availability from './availability.js';
 import favorites from './favorites.js';
 import dashboard from './dashboard.js';
+import auth from './auth.js';
 
 const router = Router();
 
+router.use('/auth', auth);
 router.use('/lawyers', lawyers);
+router.use('/categories', categories);
 router.use('/users', users);
 router.use('/cases', cases);
 router.use('/bookings', bookings);

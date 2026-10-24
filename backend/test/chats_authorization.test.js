@@ -33,7 +33,7 @@ const at = (iso) => ({ toMillis: () => Date.parse(iso) });
 
 function seed() {
   return {
-    users: users('client1', 'client2', 'lawyer1', 'admin1'),
+    users: users('client1', 'client2', 'lawyer1', 'lawyer2', 'admin1'),
     chats: [
       {
         id: 'chat-1',

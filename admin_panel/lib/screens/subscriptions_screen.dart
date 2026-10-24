@@ -41,7 +41,12 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen> {
     return itemsOf(res).map(Subscription.fromJson).toList();
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   /// Which transitions this panel offers, per current status.
   ///

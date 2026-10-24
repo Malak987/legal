@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/api_client.dart';
 import '../../state/session_scope.dart';
 import '../../widgets/customapp_bar.dart';
-import 'casedashboard.dart';
+import 'act.dart';
 
 // Define consistent colors based on the screenshot
 const Color primaryRed = Color(0xFFB71C1C); // Dark red for AppBar
@@ -15,8 +15,8 @@ const Color cardTextWhite = Colors.white;
 /// The signed-in user's cases, read from `GET /api/cases`.
 ///
 /// The backend scopes the query to the caller's uid for non-admins, so the
-/// app never sends an owner id. Only listing is wired up: the case status
-/// workflow screen is still a static mock and is reached unchanged.
+/// app never sends an owner id. Tapping a row opens the case detail endpoint
+/// by its stable ID; unbacked hearing/document/history content is not shown.
 class MyCasesScreen extends StatefulWidget {
   const MyCasesScreen({super.key});
 
@@ -108,12 +108,22 @@ class _MyCasesScreenState extends State<MyCasesScreen> {
                         final description = _text(item['description']);
                         final type = _text(item['caseType']);
                         final status = _text(item['status']);
+                        final caseId = _text(item['id']);
                         return GestureDetector(
                           onTap: () {
+                            if (caseId.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('This case has no usable ID.'),
+                                ),
+                              );
+                              return;
+                            }
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => const CaseStatusScreen()),
+                                builder: (_) => CaseDetailsScreen(caseId: caseId),
+                              ),
                             );
                           },
                           child: _buildCaseCard(

@@ -124,8 +124,10 @@ describe('chats 1.1: the sender comes from the token', () => {
   it('falls back to a neutral label when the profile has no name', async () => {
     reset({
       collections: {
-        // No profile document at all: `authenticate` ends up with an empty name.
-        users: [],
+        // A verified application profile may have a blank display name.
+        users: [
+          { id: 'ghost-1', uid: 'ghost-1', name: '', email: 'ghost@example.com', role: 'client' },
+        ],
         chats: [
           { id: 'chat-1', participants: ['ghost-1', 'lawyer-1'], participantNames: {}, lastMessage: '' },
         ],
@@ -272,7 +274,7 @@ describe('chats 1.2: participant names come from the profiles', () => {
     assert.notEqual(stored.participantNames['client-1'], 'App Administrator');
   });
 
-  it('omits participants that have no profile document', async () => {
+  it('rejects a participant with no application profile and writes nothing', async () => {
     signIn('client1');
 
     const res = await post(BASE, {
@@ -280,9 +282,9 @@ describe('chats 1.2: participant names come from the profiles', () => {
       body: { participants: ['client-1', 'ghost-9'] },
     });
 
-    assert.equal(res.status, 201);
-    assert.deepEqual(res.body.data.participantNames, { 'client-1': 'Client One' });
-    assert.equal(res.body.data.participantNames['ghost-9'], undefined);
+    assert.equal(res.status, 400);
+    assert.match(res.body.message, /CHAT_PARTICIPANT_NOT_FOUND/);
+    assert.equal(docs('chats').length, 2);
   });
 
   it('rejects duplicate participants instead of treating them as two people', async () => {

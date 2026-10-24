@@ -7,10 +7,9 @@ import '../../state/session_scope.dart';
 import '../../widgets/customapp_bar.dart';
 import '../../widgets/detailstext1.dart';
 
-/// The signed-in user's favorite lawyers, from `GET /api/favorites/:userId`.
-///
-/// The list is real: favorites store only a `lawyerId`, so each lawyer
-/// document is fetched and a favorite whose lawyer was deleted is skipped.
+/// The signed-in user's favorite lawyers, from the legacy API or (when
+/// explicitly enabled) owner-scoped Supabase favorites joined to public lawyer
+/// records. A favorite whose lawyer was deleted is skipped.
 class FavoriteScreen extends StatefulWidget {
   const FavoriteScreen({super.key});
 

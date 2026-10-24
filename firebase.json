@@ -27,7 +27,7 @@
   "hosting": {
     "public": "admin_panel/build/web",
     "predeploy": [
-      "cd admin_panel && flutter build web"
+      "cd admin_panel && node scripts/build_web.mjs"
     ],
     "ignore": [
       "firebase.json",

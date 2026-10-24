@@ -34,7 +34,12 @@ class _BookingsScreenState extends State<BookingsScreen> {
     return itemsOf(res).map(Booking.fromJson).toList();
   }
 
-  void _reload() => setState(() => _future = _fetch());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = _fetch();
+    });
+  }
 
   Future<void> _setStatus(Booking b, String status) async {
     try {

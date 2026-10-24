@@ -1,10 +1,8 @@
 import 'dart:async';
 
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'config/firebase_options.dart';
 import 'config/theme.dart';
 import 'providers/auth_provider.dart';
 import 'screens/home_shell.dart';
@@ -14,34 +12,23 @@ import 'services/auth_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Firebase is initialized exactly once, before any service touches it.
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
-  // One AuthProvider for the whole app, with a single auth-state listener.
-  // Building it outside the widget tree guarantees `create:` below is not the
-  // thing that starts session restoration, so it cannot happen twice.
+  // One Supabase-backed provider owns refresh-token restoration for the panel.
   final authProvider = AuthProvider(AuthService())..bindAuthState();
   unawaited(authProvider.restore());
-
   runApp(AdminApp(authProvider: authProvider));
 }
 
 class AdminApp extends StatelessWidget {
   const AdminApp({super.key, this.authProvider});
 
-  /// Optional pre-built [AuthProvider], used by tests to run the app without
-  /// a live Firebase project. When omitted, the real [AuthService] is used and
-  /// the persisted session is restored on start.
+  /// Optional pre-built [AuthProvider], used by tests without a live project.
   @visibleForTesting
   final AuthProvider? authProvider;
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) =>
-          authProvider ?? (AuthProvider(AuthService())..bindAuthState()),
+      create: (_) => authProvider ?? (AuthProvider(AuthService())..bindAuthState()),
       child: MaterialApp(
         title: 'Legal Services Admin',
         debugShowCheckedModeBanner: false,
@@ -58,14 +45,10 @@ class AuthGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Listening on purpose: AuthGate must rebuild when the auth status
-    // changes so it can swap between splash / login / admin shell.
     final auth = AuthProvider.watchOf(context);
 
     switch (auth.status) {
       case AuthStatus.unknown:
-        // `unknown` + an error means a transient failure that must NOT bounce
-        // the user to the login screen: show the reason and offer a retry.
         return _SplashGate(
           message: auth.error,
           onRetry: auth.error == null ? null : auth.retry,
@@ -90,7 +73,6 @@ class _SplashGate extends StatelessWidget {
   Widget build(BuildContext context) {
     final error = message;
     final retry = onRetry;
-
     return Scaffold(
       backgroundColor: AppTheme.primary,
       body: Center(

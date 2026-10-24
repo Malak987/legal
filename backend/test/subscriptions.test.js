@@ -1,12 +1,11 @@
 /**
  * Business-logic regression tests for subscriptions (Wave 1.2, F-01 / F-09).
  *
- * The review proved two things:
- *   1. `POST /subscriptions {planId, planTitle}` created an **Active** paid
- *      plan — `status` defaulted to `'Active'`, so "free premium" took one
- *      request.
- *   2. A partial `PUT` re-applied the schema default, so renaming the plan of
- *      an **Expired** subscription silently reactivated it.
+ * These tests enforce the current safe contract:
+ *   1. New subscriptions start Pending, and no client/admin request may mark
+ *      one Active without a verified payment-provider workflow.
+ *   2. Plan identity/title are catalog-derived and not writable through the
+ *      current route; partial/empty updates cannot reset stored status.
  */
 
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -61,7 +60,7 @@ describe('subscriptions 1.2: self-activation is impossible', () => {
     assert.equal(subOf(res.body.data.id).status, 'Pending');
   });
 
-  it('ignores a client asking for Active at creation', async () => {
+  it('rejects a client asking for paid activation without verified payment', async () => {
     signIn('client1');
 
     const res = await post(BASE, {
@@ -69,8 +68,9 @@ describe('subscriptions 1.2: self-activation is impossible', () => {
       body: { planId: 'plan-pro', status: 'Active' },
     });
 
-    assert.equal(res.status, 201);
-    assert.equal(subOf(res.body.data.id).status, 'Pending');
+    assert.equal(res.status, 403);
+    assert.match(res.body.message, /verified payment-provider workflow/);
+    assert.equal(docs('subscriptions').length, 0);
   });
 
   it('takes the plan title from the catalogue, not the request', async () => {
@@ -97,7 +97,7 @@ describe('subscriptions 1.2: self-activation is impossible', () => {
     assert.equal(docs('subscriptions').length, 0);
   });
 
-  it('still lets an administrator grant an active subscription', async () => {
+  it('does not let an administrator activate a paid plan without verified payment', async () => {
     signIn('admin1');
 
     const res = await post(BASE, {
@@ -105,8 +105,9 @@ describe('subscriptions 1.2: self-activation is impossible', () => {
       body: { userId: 'client-2', planId: 'plan-pro', status: 'Active' },
     });
 
-    assert.equal(res.status, 201);
-    assert.equal(subOf(res.body.data.id).status, 'Active');
+    assert.equal(res.status, 403);
+    assert.match(res.body.message, /verified payment-provider workflow/);
+    assert.equal(docs('subscriptions').length, 0);
   });
 });
 
@@ -199,22 +200,22 @@ describe('subscriptions 1.2: status is not client-writable', () => {
     assert.equal(subOf('sub-active').planId, 'plan-pro');
   });
 
-  it('lets an administrator activate or expire any subscription', async () => {
+  it('denies unverified admin status changes and preserves the existing states', async () => {
     signIn('admin1');
 
     const activated = await put(`${BASE}/sub-expired`, {
       token: tokenFor('admin1'),
       body: { status: 'Active' },
     });
-    assert.equal(activated.status, 200);
-    assert.equal(subOf('sub-expired').status, 'Active');
+    assert.equal(activated.status, 403);
+    assert.equal(subOf('sub-expired').status, 'Expired');
 
     const expired = await put(`${BASE}/sub-active`, {
       token: tokenFor('admin1'),
       body: { status: 'Expired' },
     });
-    assert.equal(expired.status, 200);
-    assert.equal(subOf('sub-active').status, 'Expired');
+    assert.equal(expired.status, 403);
+    assert.equal(subOf('sub-active').status, 'Active');
   });
 });
 
@@ -223,13 +224,13 @@ describe('subscriptions 1.2: partial updates keep untouched fields', () => {
     reset({
       collections: seed({
         subscriptions: [
-          { id: 'sub-expired', userId: 'client-1', planId: 'plan-basic', status: 'Expired' },
+          { id: 'sub-expired', userId: 'client-1', planId: 'plan-basic', planTitle: 'Basic', status: 'Expired' },
         ],
       }),
     }),
   );
 
-  it('does not reset an Expired subscription to Active on a rename (admin)', async () => {
+  it('rejects an admin plan-title edit and keeps the Expired state and derived title', async () => {
     signIn('admin1');
 
     const res = await put(`${BASE}/sub-expired`, {
@@ -237,9 +238,9 @@ describe('subscriptions 1.2: partial updates keep untouched fields', () => {
       body: { planTitle: 'Basic (renamed)' },
     });
 
-    assert.equal(res.status, 200);
-    assert.equal(res.body.data.planTitle, 'Basic (renamed)');
-    assert.equal(subOf('sub-expired').status, 'Expired', 'status must be untouched');
+    assert.equal(res.status, 403);
+    assert.equal(subOf('sub-expired').planTitle, 'Basic');
+    assert.equal(subOf('sub-expired').status, 'Expired');
   });
 
   it('does not write a default status when the body is empty (admin)', async () => {
@@ -297,7 +298,7 @@ describe('subscriptions 1.2: ownership and deletion', () => {
     assert.equal(res.status, 403);
   });
 
-  it('does not let the owner transfer a subscription to another account', async () => {
+  it('rejects transferring a subscription to another account', async () => {
     signIn('client1');
 
     const res = await put(`${BASE}/sub-a`, {
@@ -305,7 +306,7 @@ describe('subscriptions 1.2: ownership and deletion', () => {
       body: { userId: 'client-2' },
     });
 
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 403);
     assert.equal(subOf('sub-a').userId, 'client-1');
   });
 });
@@ -317,7 +318,7 @@ describe('subscriptions 1.2: ownership and deletion', () => {
 describe('subscriptions 1.3: the plan reference is the only source of a title', () => {
   beforeEach(() => reset({ collections: seed() }));
 
-  it('ignores a client-supplied plan title when no planId is sent', async () => {
+  it('requires a catalog plan instead of creating from a client-supplied title', async () => {
     signIn('client1');
 
     const res = await post(BASE, {
@@ -325,12 +326,12 @@ describe('subscriptions 1.3: the plan reference is the only source of a title', 
       body: { planTitle: 'Premium Plan (free)' },
     });
 
-    assert.equal(res.status, 201);
-    assert.equal(subOf(res.body.data.id).planTitle, undefined);
-    assert.equal(subOf(res.body.data.id).status, 'Pending');
+    assert.equal(res.status, 400);
+    assert.match(res.body.message, /planId is required/);
+    assert.equal(docs('subscriptions').length, 0);
   });
 
-  it('rejects an unknown planId on an update without changing anything', async () => {
+  it('rejects any client plan change without changing the stored plan', async () => {
     reset({
       collections: seed({
         subscriptions: [
@@ -345,14 +346,14 @@ describe('subscriptions 1.3: the plan reference is the only source of a title', 
       body: { planId: 'plan-does-not-exist' },
     });
 
-    assert.equal(res.status, 400);
+    assert.equal(res.status, 403);
     const stored = subOf('sub-1');
     assert.equal(stored.planId, 'plan-basic');
     assert.equal(stored.planTitle, 'Basic');
     assert.equal(stored.status, 'Pending');
   });
 
-  it('derives the title from the plan on an admin plan change', async () => {
+  it('rejects an admin plan change until an approved billing workflow exists', async () => {
     reset({
       collections: seed({
         subscriptions: [
@@ -367,9 +368,9 @@ describe('subscriptions 1.3: the plan reference is the only source of a title', 
       body: { planId: 'plan-pro', planTitle: 'Basic (lying)' },
     });
 
-    assert.equal(res.status, 200);
-    assert.equal(subOf('sub-1').planId, 'plan-pro');
-    assert.equal(subOf('sub-1').planTitle, 'Pro', 'title comes from the catalogue');
+    assert.equal(res.status, 403);
+    assert.equal(subOf('sub-1').planId, 'plan-basic');
+    assert.equal(subOf('sub-1').planTitle, 'Basic');
     assert.equal(subOf('sub-1').status, 'Pending', 'status is untouched');
   });
 
@@ -388,7 +389,7 @@ describe('subscriptions 1.3: the plan reference is the only source of a title', 
       body: { planId: '' },
     });
 
-    assert.equal(res.status, 400);
+    assert.equal(res.status, 403);
     assert.equal(subOf('sub-1').planId, 'plan-basic');
   });
 });
@@ -435,12 +436,12 @@ describe('subscriptions 1.3: an active subscription is financial history', () =>
     assert.equal(subOf('sub-active').status, 'Cancelled');
   });
 
-  it('lets an administrator delete an active subscription', async () => {
+  it('retains an active subscription even when an administrator requests deletion', async () => {
     signIn('admin1');
 
     const res = await del(`${BASE}/sub-active`, { token: tokenFor('admin1') });
 
-    assert.equal(res.status, 200);
-    assert.equal(subOf('sub-active'), undefined);
+    assert.equal(res.status, 403);
+    assert.equal(subOf('sub-active').status, 'Active');
   });
 });

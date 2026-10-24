@@ -178,7 +178,11 @@ describe('reviews 1.3: one review per author and lawyer', () => {
     });
 
     assert.equal(res.status, 201, "client2's own review is a separate record");
-    assert.equal(res.body.data.userId, 'client-2');
+    assert.equal(res.body.data.userId, undefined, 'public response omits author IDs');
+    assert.equal(res.body.data.userName, 'Client Two');
+    const storedForClient2 = docs('reviews').find((review) => review.userId === 'client-2');
+    assert.ok(storedForClient2, 'the trusted caller is the stored author');
+    assert.equal(storedForClient2.userName, 'Client Two');
     assert.equal(docs('reviews').filter((r) => r.userId === 'client-2').length, 1);
     const mine = docs('reviews').find((r) => r.userId === 'client-1');
     assert.equal(mine.comment, 'Mine', 'the first review was not overwritten');

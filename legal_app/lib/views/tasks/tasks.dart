@@ -1,239 +1,469 @@
 import 'package:flutter/material.dart';
-// Assuming you will rename/refactor TaskDetailsScreen to CaseDetailsScreen
-import '../../widgets/customapp_bar.dart';
-import '../../constants/colors.dart'; // Assuming colors are defined here
+import 'package:intl/intl.dart';
 
-// Renamed screen class
+import '../../constants/colors.dart';
+import '../../services/api_client.dart';
+import '../../state/session_scope.dart';
+import '../../widgets/customapp_bar.dart';
+import '../../widgets/detailstext1.dart';
+
+/// User tasks backed by `GET / POST / PUT / DELETE /api/tasks`.
 class TasksScreen extends StatefulWidget {
   const TasksScreen({super.key});
 
   @override
-  // Renamed state class
-  TasksScreenState createState() => TasksScreenState();
+  State<TasksScreen> createState() => _TasksScreenState();
 }
 
-// Renamed state class
-class TasksScreenState extends State<TasksScreen> {
-  // Renamed list and updated data for legal context
-  final List<Map<String, dynamic>> cases = [
-    {
-      "title": "Case #CL-2024-001: Smith v. Corp",
-      "description": "Draft motion for summary judgment.",
-      "dueDate": "2024-08-15",
-      "priority": "High",
-      "clientName": "John Smith",
-      "caseType": "Civil Litigation",
-    },
-    {
-      "title": "Matter #RE-2024-015: Property Purchase",
-      "description": "Review title report and prepare closing documents.",
-      "dueDate": "2024-07-30",
-      "priority": "Medium",
-      "clientName": "Jane Doe",
-      "caseType": "Real Estate",
-    },
-    {
-      "title": "Case #IP-2024-003: Patent Application",
-      "description": "Respond to USPTO office action.",
-      "dueDate": "2024-09-01",
-      "priority": "High",
-      "clientName": "Innovate Inc.",
-      "caseType": "Intellectual Property",
-    },
-    {
-      "title": "Matter #FL-2024-020: Davis Divorce",
-      "description": "Client consultation regarding asset division.",
-      "dueDate": "2024-07-25",
-      "priority": "Low",
-      "clientName": "Sarah Davis",
-      "caseType": "Family Law",
-    },
-  ];
+class _TasksScreenState extends State<TasksScreen> {
+  late Future<List<Map<String, dynamic>>> _tasks;
+  bool _loaded = false;
+  String? _busyTaskId;
 
-  // Renamed method and added parameters for new fields
-  void _addCase(
-      String title,
-      String description,
-      String dueDate,
-      String priority,
-      String clientName,
-      String caseType,
-      ) {
-    setState(() {
-      // Add new case with all fields to the 'cases' list
-      cases.add({
-        "title": title,
-        "description": description,
-        "dueDate": dueDate,
-        "priority": priority,
-        "clientName": clientName, // Added field
-        "caseType": caseType,     // Added field
-      });
-    });
+  final List<String> _priorities = const ['High', 'Medium', 'Low'];
+
+  static const Map<String, List<String>> _statusTransitions = {
+    'Pending': ['In Progress', 'Completed', 'Cancelled'],
+    'In Progress': ['Completed', 'Cancelled'],
+    'Completed': [],
+    'Cancelled': [],
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _tasks = Future.value(const <Map<String, dynamic>>[]);
   }
 
-  // Renamed method
-  void _showAddCaseDialog() {
-    final TextEditingController titleController = TextEditingController();
-    final TextEditingController descriptionController = TextEditingController();
-    final TextEditingController dueDateController = TextEditingController();
-    final TextEditingController clientNameController = TextEditingController(); // New controller
-    final TextEditingController caseTypeController = TextEditingController();   // New controller
-    final List<String> priorities = ['High', 'Medium', 'Low'];
-    String selectedPriority = priorities[0]; // Default to High
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_loaded) return;
+    _loaded = true;
+    _reload();
+  }
 
-    // Use a StatefulWidget inside the dialog to handle Dropdown state update
-    showDialog(
+  Future<void> _reload() {
+    final future = SessionScope.read(context).repository.fetchTasks();
+    setState(() {
+      _tasks = future;
+    });
+    return future.then((_) {}, onError: (_) {});
+  }
+
+  Color _priorityColor(String priority) {
+    switch (priority) {
+      case 'High':
+        return Colors.redAccent;
+      case 'Medium':
+        return Colors.orangeAccent;
+      case 'Low':
+        return Colors.green;
+      default:
+        return Colors.blueGrey;
+    }
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'Completed':
+        return Colors.green;
+      case 'In Progress':
+        return Colors.blue;
+      case 'Cancelled':
+        return Colors.red;
+      case 'Pending':
+      default:
+        return Colors.orange;
+    }
+  }
+
+  Future<void> _updateStatus(String taskId, String nextStatus) async {
+    setState(() => _busyTaskId = taskId);
+    try {
+      await SessionScope.read(context)
+          .repository
+          .updateTask(taskId, {'status': nextStatus});
+      if (!mounted) return;
+      await _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Task marked as $nextStatus.')),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } finally {
+      if (mounted) setState(() => _busyTaskId = null);
+    }
+  }
+
+  Future<void> _deleteTask(String taskId) async {
+    setState(() => _busyTaskId = taskId);
+    try {
+      await SessionScope.read(context).repository.deleteTask(taskId);
+      if (!mounted) return;
+      await _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Task deleted.')),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } finally {
+      if (mounted) setState(() => _busyTaskId = null);
+    }
+  }
+
+  void _showAddTaskDialog() {
+    final titleCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    var selectedPriority = 'Medium';
+    DateTime? selectedDueDate;
+    var submitting = false;
+
+    showModalBottomSheet(
       context: context,
-      builder: (context) {
-        // Use StatefulBuilder to manage the dropdown state within the dialog
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25.0)),
+      ),
+      backgroundColor: Colors.white,
+      builder: (sheetCtx) {
         return StatefulBuilder(
-            builder: (context, setDialogState) {
-              return AlertDialog(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+          builder: (ctx, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(ctx).viewInsets.bottom,
+                top: 20,
+                left: 20,
+                right: 20,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Add New Task',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.buttonColor,
+                      ),
+                    ),
+                    const SizedBox(height: 15),
+                    TextField(
+                      controller: titleCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'Task Title',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12.0),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 15),
+                    TextField(
+                      controller: descCtrl,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        labelText: 'Description',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12.0),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 15),
+                    Row(
+                      children: [
+                        const Text(
+                          'Due Date:',
+                          style: TextStyle(fontSize: 16),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: InkWell(
+                            onTap: () async {
+                              final picked = await showDatePicker(
+                                context: ctx,
+                                initialDate: DateTime.now(),
+                                firstDate: DateTime.now(),
+                                lastDate: DateTime(2100),
+                              );
+                              if (picked != null) {
+                                setModalState(() {
+                                  selectedDueDate = picked;
+                                });
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                                horizontal: 15,
+                              ),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey.shade400),
+                                borderRadius: BorderRadius.circular(12.0),
+                              ),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    selectedDueDate != null
+                                        ? DateFormat('yyyy-MM-dd')
+                                            .format(selectedDueDate!)
+                                        : 'Select Date',
+                                    style: TextStyle(
+                                      color: selectedDueDate != null
+                                          ? Colors.black
+                                          : Colors.grey.shade600,
+                                    ),
+                                  ),
+                                  const Icon(
+                                    Icons.calendar_today,
+                                    size: 18,
+                                    color: Colors.grey,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 15),
+                    Row(
+                      children: [
+                        const Text(
+                          'Priority:',
+                          style: TextStyle(fontSize: 16),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: selectedPriority,
+                            items: _priorities
+                                .map(
+                                  (priority) => DropdownMenuItem(
+                                    value: priority,
+                                    child: Text(priority),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                setModalState(() => selectedPriority = value);
+                              }
+                            },
+                            decoration: InputDecoration(
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12.0),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 15,
+                                vertical: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 25),
+                    ElevatedButton(
+                      onPressed: submitting
+                          ? null
+                          : () async {
+                              final title = titleCtrl.text.trim();
+                              if (title.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Task title is required.'),
+                                  ),
+                                );
+                                return;
+                              }
+                              setModalState(() => submitting = true);
+                              final repo = SessionScope.read(context).repository;
+                              final navigator = Navigator.of(ctx);
+                              final messenger = ScaffoldMessenger.of(context);
+                              try {
+                                await repo.createTask(
+                                  title: title,
+                                  description: descCtrl.text.trim(),
+                                  dueDate: selectedDueDate != null
+                                      ? DateFormat('yyyy-MM-dd')
+                                          .format(selectedDueDate!)
+                                      : '',
+                                  priority: selectedPriority,
+                                );
+                                if (!mounted) return;
+                                navigator.pop();
+                                await _reload();
+                                messenger.showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Task created.'),
+                                  ),
+                                );
+                              } on ApiException catch (e) {
+                                setModalState(() => submitting = false);
+                                messenger.showSnackBar(
+                                  SnackBar(content: Text(e.message)),
+                                );
+                              } catch (_) {
+                                setModalState(() => submitting = false);
+                                messenger.showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Failed to create task.'),
+                                  ),
+                                );
+                              }
+                            },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.buttonColor,
+                        minimumSize: const Size(double.infinity, 50),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12.0),
+                        ),
+                      ),
+                      child: submitting
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text(
+                              'Add Task',
+                              style:
+                                  TextStyle(fontSize: 18, color: Colors.white),
+                            ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
                 ),
-                // Updated dialog title
-                title: const Text(
-                  "Add New Case / Matter",
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                content: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TextField(
-                        controller: titleController,
-                        decoration: const InputDecoration(
-                          // Updated label
-                          labelText: "Case Name / Number",
-                          border: OutlineInputBorder(),
-                        ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showTaskDetails(Map<String, dynamic> task) {
+    final id = task['id']?.toString() ?? '';
+    final title = task['title']?.toString() ?? 'Untitled Task';
+    final description = task['description']?.toString() ?? '';
+    final dueDate = task['dueDate']?.toString() ?? '';
+    final priority = task['priority']?.toString() ?? 'Medium';
+    final status = task['status']?.toString() ?? 'Pending';
+    final transitions = _statusTransitions[status] ?? const <String>[];
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(height: 10),
-                      TextField( // New field
-                        controller: clientNameController,
-                        decoration: const InputDecoration(
-                          labelText: "Client Name",
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField( // New field
-                        controller: caseTypeController,
-                        decoration: const InputDecoration(
-                          labelText: "Case Type (e.g., Litigation, Real Estate)",
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: descriptionController,
-                        maxLines: 3, // Allow more space for description
-                        decoration: const InputDecoration(
-                          // Updated label
-                          labelText: "Case Summary / Description",
-                          border: OutlineInputBorder(),
-                          alignLabelWithHint: true,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: dueDateController,
-                        decoration: const InputDecoration(
-                          // Updated label
-                          labelText: "Deadline / Due Date (YYYY-MM-DD)",
-                          border: OutlineInputBorder(),
-                          suffixIcon: Icon(Icons.calendar_today), // Added icon hint
-                        ),
-                        keyboardType: TextInputType.datetime,
-                        onTap: () async {
-                          // Optional: Show date picker
-                          FocusScope.of(context).requestFocus(FocusNode()); // Hide keyboard
-                          DateTime? picked = await showDatePicker(
-                            context: context,
-                            initialDate: DateTime.now(),
-                            firstDate: DateTime(2000),
-                            lastDate: DateTime(2101),
-                          );
-                          if (picked != null) {
-                            dueDateController.text = "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
-                          }
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      DropdownButtonFormField<String>(
-                        decoration: const InputDecoration(
-                          labelText: "Priority",
-                          border: OutlineInputBorder(),
-                        ),
-                        value: selectedPriority,
-                        items: priorities.map((String priority) {
-                          return DropdownMenuItem<String>(
-                            value: priority,
-                            child: Text(priority),
-                          );
-                        }).toList(),
-                        onChanged: (String? newValue) {
-                          if (newValue != null) {
-                            // Use setDialogState to update the dropdown value
-                            setDialogState(() {
-                              selectedPriority = newValue;
-                            });
-                          }
-                        },
-                      ),
-                    ],
+                    ),
+                  ),
+                  Chip(
+                    label: Text(
+                      status,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                    backgroundColor: _statusColor(status),
+                  ),
+                ],
+              ),
+              if (description.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  description,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: AppColors.text2Color,
                   ),
                 ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text(
-                      "Cancel",
+              ],
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.flag_outlined, size: 16, color: Colors.grey),
+                  const SizedBox(width: 6),
+                  Text('Priority: $priority'),
+                  const SizedBox(width: 16),
+                  if (dueDate.isNotEmpty) ...[
+                    const Icon(
+                      Icons.calendar_today,
+                      size: 16,
+                      color: Colors.grey,
+                    ),
+                    const SizedBox(width: 6),
+                    Text('Due: $dueDate'),
+                  ],
+                ],
+              ),
+              if (transitions.isNotEmpty && id.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text(
+                  'Update Status',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: transitions.map((next) {
+                    return ActionChip(
+                      label: Text(next),
+                      onPressed: () {
+                        Navigator.of(sheetCtx).pop();
+                        _updateStatus(id, next);
+                      },
+                    );
+                  }).toList(),
+                ),
+              ],
+              if (id.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () {
+                      Navigator.of(sheetCtx).pop();
+                      _deleteTask(id);
+                    },
+                    icon: const Icon(Icons.delete_outline, color: Colors.red),
+                    label: const Text(
+                      'Delete Task',
                       style: TextStyle(color: Colors.red),
                     ),
                   ),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.buttonColor, // Use theme color
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    onPressed: () {
-                      // Validate all fields including new ones
-                      if (titleController.text.isNotEmpty &&
-                          descriptionController.text.isNotEmpty &&
-                          dueDateController.text.isNotEmpty &&
-                          clientNameController.text.isNotEmpty && // Validate new field
-                          caseTypeController.text.isNotEmpty) { // Validate new field
-                        // Call _addCase with all arguments
-                        _addCase(
-                          titleController.text,
-                          descriptionController.text,
-                          dueDateController.text,
-                          selectedPriority,
-                          clientNameController.text, // Pass new field value
-                          caseTypeController.text,   // Pass new field value
-                        );
-                        Navigator.pop(context);
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Please fill in all fields'),
-                            backgroundColor: Colors.orangeAccent,
-                          ),
-                        );
-                      }
-                    },
-                    // Updated button text
-                    child: const Text("Add Case"),
-                  ),
-                ],
-              );
-            }
+                ),
+              ],
+            ],
+          ),
         );
       },
     );
@@ -242,231 +472,166 @@ class TasksScreenState extends State<TasksScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 19),
-        child: FloatingActionButton(
-          // Call the renamed dialog method
-          onPressed: _showAddCaseDialog,
-          backgroundColor: AppColors.buttonColor,
-          shape: const CircleBorder(),
-          child: const Icon(Icons.add, size: 30, color: Colors.white),
-        ),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 16),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Updated AppBar title
-              const CustomAppBar(text: 'Tasks', text1: ''), // Or 'My Matters', etc.
-              const SizedBox(height: 20), // Increased spacing
+              const CustomAppBar(text: 'Tasks', text1: ''),
+              const SizedBox(height: 12),
               Expanded(
-                child: ListView.builder(
-                  // Use the 'cases' list
-                  itemCount: cases.length,
-                  itemBuilder: (context, index) {
-                    // Use 'caseData' variable
-                    final caseData = cases[index];
-                    IconData priorityIcon;
-                    Color priorityColor;
-
-                    switch (caseData['priority']) {
-                      case 'High':
-                        priorityIcon = Icons.warning_amber_rounded; // More distinct icon
-                        priorityColor = Colors.redAccent;
-                        break;
-                      case 'Medium':
-                        priorityIcon = Icons.bolt; // Keep bolt or use flag
-                        priorityColor = Colors.orangeAccent;
-                        break;
-                      case 'Low':
-                        priorityIcon = Icons.low_priority; // Specific low priority icon
-                        priorityColor = Colors.green;
-                        break;
-                      default:
-                        priorityIcon = Icons.help_outline; // Different default
-                        priorityColor = Colors.grey;
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _tasks,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return _TasksPlaceholder(
+                        icon: Icons.error_outline,
+                        title: 'Could not load tasks',
+                        detail: snapshot.error is ApiException
+                            ? (snapshot.error as ApiException).message
+                            : 'Please try again.',
+                        onRetry: _reload,
+                      );
+                    }
+                    final tasks =
+                        snapshot.data ?? const <Map<String, dynamic>>[];
+                    if (tasks.isEmpty) {
+                      return const _TasksPlaceholder(
+                        icon: Icons.checklist_rtl,
+                        title: 'No tasks yet',
+                        detail: 'Tap + to add your first legal task.',
+                      );
                     }
 
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.grey.withAlpha((0.15 * 255).toInt()), // Softer shadow
-                            spreadRadius: 1,
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      margin: const EdgeInsets.only(bottom: 16), // Increased margin
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                // Changed icon to gavel
-                                Icon(
-                                  Icons.gavel, // Legal-themed icon
-                                  size: 22,
-                                  color: Colors.deepPurple.shade700,
+                    return RefreshIndicator(
+                      onRefresh: _reload,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        itemCount: tasks.length,
+                        itemBuilder: (context, index) {
+                          final task = tasks[index];
+                          final id = task['id']?.toString() ?? '';
+                          final title =
+                              task['title']?.toString() ?? 'Untitled Task';
+                          final description =
+                              task['description']?.toString() ?? '';
+                          final dueDate = task['dueDate']?.toString() ?? '';
+                          final priority =
+                              task['priority']?.toString() ?? 'Medium';
+                          final status =
+                              task['status']?.toString() ?? 'Pending';
+                          final isBusy = _busyTaskId == id && id.isNotEmpty;
+
+                          return GestureDetector(
+                            onTap: () => _showTaskDetails(task),
+                            child: Card(
+                              color: Colors.white,
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 2,
+                                vertical: 6,
+                              ),
+                              elevation: 3,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14.0),
+                              ),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 10,
                                 ),
-                                const SizedBox(width: 10),
-                                Expanded( // Ensure title doesn't overflow
-                                  child: Text(
-                                    // Use caseData
-                                    caseData['title'],
-                                    style: TextStyle(
-                                      fontSize: 17, // Slightly smaller font
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.deepPurple.shade900,
-                                    ),
-                                    overflow: TextOverflow.ellipsis, // Handle long titles
-                                    maxLines: 1,
+                                leading: CircleAvatar(
+                                  radius: 22,
+                                  backgroundColor: _priorityColor(priority),
+                                  child: const Icon(
+                                    Icons.task_alt,
+                                    color: Colors.white,
                                   ),
                                 ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            // Display Client Name
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.person_outline, // Client icon
-                                  size: 16,
-                                  color: Colors.blueGrey,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    "Client: ${caseData['clientName']}",
-                                    style: const TextStyle(fontSize: 14, color: Colors.blueGrey),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            // Display Case Type
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.folder_special_outlined, // Case type icon
-                                  size: 16,
-                                  color: Colors.blueGrey,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    "Type: ${caseData['caseType']}",
-                                    style: const TextStyle(fontSize: 14, color: Colors.blueGrey),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            // Updated Description/Summary label
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start, // Align top
-                              children: [
-                                Icon(
-                                  Icons.description_outlined, // Use outlined icon
-                                  size: 16,
-                                  color: Colors.black54,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    // Updated label and use caseData
-                                    "Summary: ${caseData['description']}",
-                                    style: const TextStyle(fontSize: 14, color: Colors.black87),
-                                    maxLines: 2, // Limit lines shown initially
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            // Updated Due Date/Deadline label
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.calendar_today_outlined, // Use outlined icon
-                                  size: 16,
-                                  color: Colors.black54,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  // Updated label and use caseData
-                                  "Deadline: ${caseData['dueDate']}",
-                                  style: const TextStyle(fontSize: 14, color: Colors.black87),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12), // More spacing before actions
-                            Divider(color: Colors.grey.shade200), // Visual separator
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                // Priority Display
-                                Row(
+                                title: Text1(text1: title, size: 16),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Icon(
-                                      priorityIcon,
-                                      size: 18, // Slightly larger icon
-                                      color: priorityColor,
-                                    ),
-                                    const SizedBox(width: 5),
-                                    Text(
-                                      // Use caseData
-                                      "Priority: ${caseData['priority']}",
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600, // Slightly bolder
-                                        color: priorityColor,
+                                    if (description.isNotEmpty) ...[
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        description,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: Colors.grey.shade700,
+                                        ),
                                       ),
+                                    ],
+                                    const SizedBox(height: 6),
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: _statusColor(status)
+                                                .withAlpha(35),
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            status,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                              color: _statusColor(status),
+                                            ),
+                                          ),
+                                        ),
+                                        if (dueDate.isNotEmpty) ...[
+                                          const SizedBox(width: 10),
+                                          const Icon(
+                                            Icons.calendar_today,
+                                            size: 13,
+                                            color: Colors.grey,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            dueDate,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey.shade600,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
                                     ),
                                   ],
                                 ),
-                                // View Details Button
-                                ElevatedButton.icon(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppColors.buttonColor.withAlpha((0.1 * 255).toInt()), // Subtle background
-                                    foregroundColor: AppColors.buttonColor, // Theme color text
-                                    elevation: 0, // No shadow for subtle button
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                    textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(20), // Pill shape
-                                      side: BorderSide(color: AppColors.buttonColor.withAlpha((0.2 * 255).toInt())), // Optional border
-                                    ),
-                                  ),
-                                  onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        // Navigate to CaseDetailsScreen (needs to be created/refactored)
-                                        // Pass the specific case data
-                                        builder: (_) => TasksDetailsScreen(caseData: caseData),
+                                trailing: isBusy
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : Chip(
+                                        label: Text(
+                                          priority,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        backgroundColor:
+                                            _priorityColor(priority),
                                       ),
-                                    );
-                                  },
-                                  icon: const Icon(Icons.arrow_forward_ios, size: 12), // Different icon
-                                  label: const Text("View Details"),
-                                ),
-                              ],
+                              ),
                             ),
-                          ],
-                        ),
+                          );
+                        },
                       ),
                     );
                   },
@@ -476,85 +641,60 @@ class TasksScreenState extends State<TasksScreen> {
           ),
         ),
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showAddTaskDialog,
+        backgroundColor: AppColors.buttonColor,
+        tooltip: 'Add New Task',
+        child: const Icon(Icons.add, color: Colors.white),
+      ),
     );
   }
 }
 
-// Placeholder for the details screen - you need to create/refactor this file
-// (e.g., timesheetapp/views/cases/casedetails.dart)
-class TasksDetailsScreen extends StatelessWidget {
-  final Map<String, dynamic> caseData;
+class _TasksPlaceholder extends StatelessWidget {
+  const _TasksPlaceholder({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.onRetry,
+  });
 
-  const TasksDetailsScreen({super.key, required this.caseData});
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(caseData['title'] ?? 'Case Details'),
-        backgroundColor: AppColors.buttonColor, // Example color
-        foregroundColor: Colors.white,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: ListView( // Use ListView for potentially long content
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Case Details', style: Theme.of(context).textTheme.headlineSmall),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.gavel),
-              title: const Text('Case/Matter Name'),
-              subtitle: Text(caseData['title'] ?? 'N/A'),
+            Icon(icon, size: 48, color: AppColors.text3Color),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
-            ListTile(
-              leading: const Icon(Icons.person),
-              title: const Text('Client'),
-              subtitle: Text(caseData['clientName'] ?? 'N/A'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.folder_special),
-              title: const Text('Case Type'),
-              subtitle: Text(caseData['caseType'] ?? 'N/A'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.description),
-              title: const Text('Summary/Description'),
-              subtitle: Text(caseData['description'] ?? 'N/A'),
-              isThreeLine: true, // Allow more space if needed
-            ),
-            ListTile(
-              leading: const Icon(Icons.calendar_today),
-              title: const Text('Deadline'),
-              subtitle: Text(caseData['dueDate'] ?? 'N/A'),
-            ),
-            ListTile(
-              leading: Icon(Icons.warning, color: _getPriorityColor(caseData['priority'])),
-              title: const Text('Priority'),
-              subtitle: Text(caseData['priority'] ?? 'N/A', style: TextStyle(color: _getPriorityColor(caseData['priority']), fontWeight: FontWeight.bold)),
-            ),
-            // Add more details or actions (e.g., Edit, Add Note, Upload Document) here
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: () { /* TODO: Implement Edit functionality */ },
-              icon: const Icon(Icons.edit),
-              label: const Text('Edit Case Details'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.buttonColor,
-                foregroundColor: Colors.white,
+            const SizedBox(height: 6),
+            Text(
+              detail,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppColors.text2Color,
               ),
             ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 12),
+              TextButton(onPressed: onRetry, child: const Text('Retry')),
+            ],
           ],
         ),
       ),
     );
-  }
-
-  Color _getPriorityColor(String? priority) {
-    switch (priority) {
-      case 'High': return Colors.redAccent;
-      case 'Medium': return Colors.orangeAccent;
-      case 'Low': return Colors.green;
-      default: return Colors.grey;
-    }
   }
 }
