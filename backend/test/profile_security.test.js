@@ -142,12 +142,8 @@ describe('profiles: malformed or legacy documents never grant admin', () => {
   });
 });
 
-describe('profiles: provisioning trusts the token, not the body', () => {
-  it('accepts an unverified email token and stores the token address', async () => {
-    // A brand-new email/password account has `email_verified: false` until the
-    // user clicks a link, and this app sends no verification email. Rejecting
-    // it would lock every new client out of the app, so the route accepts it —
-    // deliberately, and pinned here so the decision is visible.
+describe('profiles: provisioning is delegated to the confirmed Supabase Auth lifecycle', () => {
+  it('does not create a profile for an unconfirmed Auth caller', async () => {
     const uid = 'new-client';
     setUser({
       uid,
@@ -161,18 +157,14 @@ describe('profiles: provisioning trusts the token, not the body', () => {
       body: { name: 'New Client' },
     });
 
-    assert.equal(res.status, 201, JSON.stringify(res.body));
-    assert.equal(profileOf(uid).email, 'new-client@example.com');
-    assert.equal(profileOf(uid).role, 'client');
+    assert.equal(res.status, 409, JSON.stringify(res.body));
+    assert.equal(profileOf(uid), undefined);
+    assert.equal(docs('users').length, 0);
   });
 
-  it('ignores a body that claims another email, uid or role', async () => {
+  it('does not let body identity or role claims provision any account', async () => {
     const uid = 'spoof-client';
-    setUser({
-      uid,
-      email: 'real@example.com',
-      token: `token-${uid}`,
-    });
+    setUser({ uid, email: 'real@example.com', token: `token-${uid}` });
 
     const res = await post(ME, {
       token: `token-${uid}`,
@@ -185,16 +177,10 @@ describe('profiles: provisioning trusts the token, not the body', () => {
       },
     });
 
-    assert.equal(res.status, 201, JSON.stringify(res.body));
-    const stored = profileOf(uid);
-    assert.equal(stored.email, 'real@example.com', 'the token address wins');
-    assert.equal(stored.role, 'client');
-    // The document id is the verified uid: no second document was created.
-    assert.equal(
-      docs('users').filter((u) => u.id === 'client-1').length,
-      0,
-      'nothing was written under the uid from the body',
-    );
+    assert.equal(res.status, 409, JSON.stringify(res.body));
+    assert.equal(profileOf(uid), undefined);
+    assert.equal(profileOf('client-1'), undefined);
+    assert.equal(docs('users').length, 0);
   });
 });
 

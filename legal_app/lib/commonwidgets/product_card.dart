@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
-import '../constants/colors.dart';
-import '../views/home/details.dart';
 
+import '../constants/colors.dart';
+import '../models/product_model.dart';
+import '../views/home/details.dart';
 
 class ProductCard extends StatefulWidget {
   final String imagePath;
   final String name;
   final String price;
+  final Product? lawyer;
+  final double? rating;
   final VoidCallback? onTap;
   final bool isFavorited;
   final VoidCallback? onFavoriteTap;
@@ -16,6 +19,8 @@ class ProductCard extends StatefulWidget {
     required this.imagePath,
     required this.name,
     required this.price,
+    this.lawyer,
+    this.rating,
     this.onTap,
     this.isFavorited = false,
     this.onFavoriteTap,
@@ -36,13 +41,21 @@ class _ProductCardState extends State<ProductCard> {
 
   @override
   Widget build(BuildContext context) {
+    final displayRating = widget.rating ?? widget.lawyer?.rating ?? 4.0;
+
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => LegalServiceDetailsScreen()),
-        );
-      },
+      onTap: widget.onTap ??
+          () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => LegalServiceDetailsScreen(
+                  lawyer: widget.lawyer,
+                  lawyerId: widget.lawyer?.id,
+                ),
+              ),
+            );
+          },
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -82,14 +95,17 @@ class _ProductCardState extends State<ProductCard> {
                     children: [
                       const Icon(Icons.star, color: Colors.amber, size: 16),
                       const SizedBox(width: 4),
-                      const Text(
-                        '4.0',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      Text(
+                        displayRating.toStringAsFixed(1),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       const Spacer(),
                       Text(
                         widget.price,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.bold,
                           color: AppColors.buttonColor,
@@ -107,17 +123,43 @@ class _ProductCardState extends State<ProductCard> {
   }
 
   Widget _buildImageSection() {
+    final fallback = Image.asset(
+      'images/lawyer2.png',
+      fit: BoxFit.cover,
+      width: double.infinity,
+      height: double.infinity,
+      errorBuilder: (_, __, ___) => Container(
+        color: AppColors.bgColor,
+        child: const Icon(Icons.person, color: AppColors.text3Color),
+      ),
+    );
+
+    Widget imageWidget;
+    if (widget.imagePath.isEmpty) {
+      imageWidget = fallback;
+    } else if (widget.imagePath.startsWith('http')) {
+      imageWidget = Image.network(
+        widget.imagePath,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        errorBuilder: (_, __, ___) => fallback,
+      );
+    } else {
+      imageWidget = Image.asset(
+        widget.imagePath,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        errorBuilder: (_, __, ___) => fallback,
+      );
+    }
+
     return Stack(
       children: [
-        Container(
-          decoration: BoxDecoration(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-            image: DecorationImage(
-              image: AssetImage(widget.imagePath),
-              fit: BoxFit.cover,
-              scale: 3
-            ),
-          ),
+        ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          child: imageWidget,
         ),
         Positioned(
           top: 10,

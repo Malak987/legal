@@ -1,0 +1,69 @@
+/// Compile-time Supabase configuration for the Legal Services mobile app.
+///
+/// Pass values via `--dart-define` at build or run time:
+/// ```bash
+/// flutter run \
+///   --dart-define=SUPABASE_URL=https://qqfzbecwhewswkyxgebu.supabase.co \
+///   --dart-define=SUPABASE_ANON_KEY=<your-anon-or-publishable-key> \
+///   --dart-define=API_BASE_URL=http://localhost:5000/api
+/// ```
+///
+/// Security invariant: NEVER pass or embed a Supabase `service_role` or
+/// `secret` key in Flutter client code. Only the public `anon` / `publishable`
+/// key belongs on the client.
+class SupabaseConfig {
+  const SupabaseConfig._();
+
+  /// Connected Supabase project reference ID.
+  static const String projectRef = String.fromEnvironment(
+    'SUPABASE_PROJECT_REF',
+    defaultValue: 'qqfzbecwhewswkyxgebu',
+  );
+
+  /// Connected Supabase project URL.
+  static const String supabaseUrl = String.fromEnvironment(
+    'SUPABASE_URL',
+    defaultValue: 'https://qqfzbecwhewswkyxgebu.supabase.co',
+  );
+
+  /// Public Supabase anon/publishable key.
+  static const String supabaseAnonKey = String.fromEnvironment(
+    'SUPABASE_ANON_KEY',
+    defaultValue: '',
+  );
+
+  /// Redirect URI used by Supabase confirmation and recovery emails. It must
+  /// be added to the project's Auth redirect allow-list before those links can
+  /// return to the app. No redirect is guessed or hard-coded here.
+  static const String authRedirectUrl = String.fromEnvironment(
+    'SUPABASE_AUTH_REDIRECT_URL',
+    defaultValue: '',
+  );
+
+  /// Public registration stays disabled until the live Auth identity-linking
+  /// trigger has been hardened and the post-confirmation profile flow has been
+  /// verified. Login remains available when Supabase is configured.
+  static const bool enableClientSignup = bool.fromEnvironment(
+    'ENABLE_CLIENT_SIGNUP',
+    defaultValue: false,
+  );
+
+  /// Explicit opt-in for the public lawyer catalogue read path. Keep disabled
+  /// until the target database's security migration and hosted checks have been
+  /// approved; configuring Supabase Auth alone must not change data routing.
+  static const bool useSupabaseLawyerCatalog = bool.fromEnvironment(
+    'USE_SUPABASE_LAWYER_CATALOG',
+    defaultValue: false,
+  );
+
+  /// Explicit opt-in for owner-scoped favorite reads and writes. Keep disabled
+  /// until the reviewed favorites RLS/RPC contract is approved on the target.
+  static const bool useSupabaseFavorites = bool.fromEnvironment(
+    'USE_SUPABASE_FAVORITES',
+    defaultValue: false,
+  );
+
+  /// True when a public Supabase anon key has been supplied for this build.
+  static bool get isConfigured =>
+      supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
+}

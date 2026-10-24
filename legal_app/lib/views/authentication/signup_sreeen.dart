@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../config/supabase_config.dart';
 import '../../constants/colors.dart';
 import '../../widgets/custombtn.dart';
 import '../../widgets/customtextfield.dart';
@@ -24,9 +25,8 @@ class _SignUpScreenState extends State<SignUpScreen>
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
 
-  /// Registration goes through Firebase Authentication (the account) and then
-  /// the backend (`users/{uid}`), both orchestrated by the session controller
-  /// so the rest of the app sees the new account immediately.
+  /// This public application creates client accounts only. Lawyer onboarding
+  /// belongs to the lawyer dashboard; owner provisioning is never public.
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
@@ -67,10 +67,8 @@ class _SignUpScreenState extends State<SignUpScreen>
     super.dispose();
   }
 
-  /// Creates the Authentication account and its Firestore profile.
-  ///
-  /// Navigates to the home screen **only** when both succeeded: a half-finished
-  /// sign-up must never look like a successful one.
+  /// Creates the Auth account and waits for its server-provisioned profile.
+  /// An unconfirmed account stays on this screen with a confirmation message.
   Future<void> _handleSignup() async {
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
@@ -181,6 +179,23 @@ class _SignUpScreenState extends State<SignUpScreen>
                             color: AppColors.buttonColor,
                           ),
                           const SizedBox(height: 20),
+                          if (!SupabaseConfig.enableClientSignup)
+                            const Padding(
+                              padding: EdgeInsets.only(bottom: 16),
+                              child: Text(
+                                'Client registration is temporarily unavailable until secure Supabase profile provisioning is deployed.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.deepOrange),
+                              ),
+                            ),
+                          const Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Create a client account',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
                           CustomTextField(
                             controller: _nameController,
                             label: 'Full name',
@@ -241,8 +256,14 @@ class _SignUpScreenState extends State<SignUpScreen>
                               ),
                             ),
                           CustomButton(
-                            text: _isLoading ? 'Creating account...' : 'Signup',
-                            onTap: _isLoading ? null : _handleSignup,
+                            text: _isLoading
+                                ? 'Creating account...'
+                                : SupabaseConfig.enableClientSignup
+                                    ? 'Signup'
+                                    : 'Registration unavailable',
+                            onTap: _isLoading || !SupabaseConfig.enableClientSignup
+                                ? null
+                                : _handleSignup,
                           ),
                           const SizedBox(height: 20),
                           const Text('or continue with'),

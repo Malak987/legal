@@ -163,8 +163,9 @@ describe('booking availability: coverage', () => {
 
     assert.equal(res.status, 400);
     assert.match(res.body.message, /not offered/i);
-    // The offered slots are named so the client can retry sensibly.
-    assert.match(res.body.message, /09:00/);
+    // The caller receives a stable, non-provider-specific retry message; the
+    // authenticated RPC does not disclose the full availability projection.
+    assert.equal(res.body.message, 'That time is not offered by this lawyer. Choose an available slot.');
     assert.equal(docs('bookings').length, 0);
   });
 
@@ -229,7 +230,7 @@ describe('booking availability: conflicts', () => {
     const second = await bookSlot({ as: 'client2', token: tokenFor('client2') });
 
     assert.equal(second.status, 409);
-    assert.match(second.body.message, /just been booked/i);
+    assert.equal(second.body.message, 'The requested time slot is no longer available. Choose another time.');
     assert.equal(docs('bookings').length, 1);
     assert.equal(lockFor('10:00').length, 1);
   });
@@ -282,7 +283,7 @@ describe('booking availability: conflicts', () => {
 
     const res = await bookSlot();
     assert.equal(res.status, 409);
-    assert.match(res.body.message, /overlaps an existing booking/i);
+    assert.equal(res.body.message, 'The requested time slot is no longer available. Choose another time.');
   });
 });
 

@@ -1,13 +1,16 @@
 /**
  * Shared test harness for the backend authorization tests.
  *
- * It copies `src/` into a temporary directory and replaces
- * `config/firebase.js` with an in-memory Firestore test double, then mounts
- * the REAL routes, the REAL auth middleware and the REAL error handler.
+ * It copies `src/` into a temporary directory, installs in-memory test
+ * boundaries for the legacy Firebase fixture store and the Supabase Auth,
+ * public-read, and RPC edges, then mounts the REAL routes, the REAL auth
+ * middleware and the REAL error handler. A route receives a marked
+ * caller-scoped test database only after the fixture verifier accepts the
+ * bearer token; role, ownership and input checks remain in the real route code.
  *
- * Nothing touches a live Firebase project, no credentials are needed, and no
- * network access is required. Every query the routes issue is recorded so the
- * tests can assert that no composite index is required.
+ * Nothing touches a live Firebase or Supabase project, no credentials are
+ * needed, and no network access is required. Every query the routes issue is
+ * recorded so the tests can assert their query shapes.
  *
  * Used by: users.test.js, wallet.test.js, notifications.test.js,
  * favorites.test.js, chats_authorization.test.js, availability.test.js,
@@ -43,6 +46,8 @@ const fx = () => (globalThis.__fx ??= {
   txAttempts: 0,     // transactions attempted, including retries
   authUpdates: [],   // calls to auth.updateUser (email synchronisation)
   failAuthUpdates: null, // message thrown by auth.updateUser, when set
+  rpcCalls: [],      // caller-scoped RPCs requested by the Supabase test seam
+  rpcHandlers: {},   // per-test RPC handlers (never backed by a live client)
 });
 
 let sequence = 0;
@@ -107,6 +112,7 @@ function snapshotCollections() {
 function matches(doc, constraints) {
   return constraints.every((c) => {
     if (c.op === '==') return doc[c.field] === c.value;
+    if (c.op === 'in') return Array.isArray(c.value) && c.value.includes(doc[c.field]);
     if (c.op === 'array-contains') {
       return Array.isArray(doc[c.field]) && doc[c.field].includes(c.value);
     }
@@ -126,7 +132,24 @@ const db = {
       startAfter() { return chain; },
       async get() {
         if (fx().error) throw fx().error;
-        const docs = clone(store(name)).filter((d) => matches(d, entry.where));
+        let docs = clone(store(name)).filter((d) => matches(d, entry.where));
+        const comparable = (value) => {
+          if (value && typeof value.toMillis === 'function') return value.toMillis();
+          if (value instanceof Date) return value.getTime();
+          return value;
+        };
+        for (const order of [...entry.orderBy].reverse()) {
+          docs.sort((left, right) => {
+            const a = comparable(left[order.field]);
+            const b = comparable(right[order.field]);
+            if (a === b) return 0;
+            if (a === undefined || a === null) return 1;
+            if (b === undefined || b === null) return -1;
+            const result = a < b ? -1 : 1;
+            return order.dir === 'desc' ? -result : result;
+          });
+        }
+        if (entry.limit !== null) docs = docs.slice(0, entry.limit);
         entry.op = 'get';
         return snapshot(docs);
       },
@@ -344,6 +367,32 @@ export async function startApp() {
       path.join(tmpDir, 'src', 'config', 'firebase.js'),
       FIREBASE_STUB,
     );
+    fs.copyFileSync(
+      path.join(HERE, 'supabase_test_adapter.js'),
+      path.join(tmpDir, 'src', 'config', 'supabase_test_adapter.js'),
+    );
+
+    // Routes and middleware keep importing the same API surface, but the
+    // temporary copy routes those imports through the test-only boundary. The
+    // real supabase.js module remains underneath so its serializers, mapping
+    // tables and document API are still exercised; only its Auth/public/RPC
+    // external I/O is substituted.
+    const rewriteAdapterImports = (directory) => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const entryPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          rewriteAdapterImports(entryPath);
+        } else if (entry.isFile() && entry.name.endsWith('.js')) {
+          const source = fs.readFileSync(entryPath, 'utf8');
+          const rewritten = source.replace(
+            /(['"])\.\.\/config\/supabase\.js\1/g,
+            '$1../config/supabase_test_adapter.js$1',
+          );
+          if (rewritten !== source) fs.writeFileSync(entryPath, rewritten);
+        }
+      }
+    };
+    rewriteAdapterImports(path.join(tmpDir, 'src'));
 
     const apiRoutes = (
       await import(pathToFileURL(path.join(tmpDir, 'src', 'routes', 'index.js')).href)
@@ -413,6 +462,10 @@ export function reset({ collections = {}, user = null } = {}) {
     txAttempts: 0,
     authUpdates: [],
     failAuthUpdates: null,
+    rpcCalls: [],
+    rpcHandlers: {},
+    lawyerSignupCalls: [],
+    lawyerSignupHandler: null,
   };
 }
 
@@ -433,6 +486,7 @@ export const PEOPLE = {
   lawyer1: { uid: 'lawyer-1', name: 'Lawyer One', role: 'lawyer' },
   lawyer2: { uid: 'lawyer-2', name: 'Lawyer Two', role: 'lawyer' },
   admin1: { uid: 'admin-1', name: 'Admin One', role: 'admin' },
+  owner1: { uid: 'owner-1', name: 'Owner One', role: 'owner' },
 };
 
 /** Profile documents for the `users` collection, in the shape routes read. */
@@ -479,6 +533,32 @@ export function failAuthUpdates(message = 'auth update failed') {
 /** Firebase Auth mutations requested since the last reset (email sync). */
 export function authUpdates() {
   return globalThis.__fx.authUpdates.map((u) => ({ ...u }));
+}
+
+/** Registers an isolated handler for one request-scoped RPC in a route test. */
+export function setRpcHandler(functionName, handler) {
+  if (typeof handler !== 'function') {
+    throw new TypeError('An RPC test handler must be a function.');
+  }
+  globalThis.__fx.rpcHandlers[functionName] = handler;
+}
+
+/** Caller-scoped RPC invocations made since the last reset. */
+export function rpcCalls() {
+  return globalThis.__fx.rpcCalls.map((call) => structuredClone(call));
+}
+
+/** Registers an isolated trusted lawyer-signup boundary for route tests. */
+export function setLawyerSignupHandler(handler) {
+  if (typeof handler !== 'function') {
+    throw new TypeError('A lawyer signup test handler must be a function.');
+  }
+  globalThis.__fx.lawyerSignupHandler = handler;
+}
+
+/** Public lawyer-signup payloads observed by the isolated Auth fixture. */
+export function lawyerSignupCalls() {
+  return (globalThis.__fx.lawyerSignupCalls ?? []).map((call) => structuredClone(call));
 }
 
 /** Every query the routes issued since the last reset. */

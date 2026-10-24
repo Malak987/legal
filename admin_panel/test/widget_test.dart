@@ -41,6 +41,18 @@ Future<void> enterPassword(
 
 /// Canned `/api/dashboard/stats` payload, in the backend's real envelope
 /// `{ success, message, data }` (see `ok()` in backend/src/utils/response.js).
+Map<String, dynamic> emptyPage() => <String, dynamic>{
+      'success': true,
+      'message': 'OK',
+      'data': <String, dynamic>{
+        'items': <Map<String, dynamic>>[],
+        'total': 0,
+        'page': 1,
+        'limit': 100,
+        'totalPages': 0,
+      },
+    };
+
 Map<String, dynamic> dashboardPayload() => <String, dynamic>{
       'success': true,
       'message': 'OK',
@@ -84,7 +96,7 @@ void main() {
 
     expect(provider.status, AuthStatus.unauthenticated);
     expect(find.text('Sign In'), findsOneWidget);
-    expect(find.text('Admin Panel'), findsOneWidget);
+    expect(find.text('Admin & Lawyer Workspace'), findsOneWidget);
   });
 
   testWidgets('shows the admin shell when an admin session is restored',
@@ -104,6 +116,65 @@ void main() {
     expect(provider.status, AuthStatus.authenticated);
     expect(find.text('Dashboard'), findsWidgets);
     expect(find.text('Sign In'), findsNothing);
+  });
+
+  testWidgets('lawyers get only the scoped read-only workspace',
+      (WidgetTester tester) async {
+    final api = FakeApiService(resultsByPath: <String, Object?>{
+      'cases': emptyPage(),
+      'bookings': emptyPage(),
+      'availability/mine': emptyPage(),
+    });
+    final provider = AuthProvider(
+      FakeAuthService(api: api, restoredSession: lawyerSession()),
+    );
+
+    await pumpApp(tester, provider);
+    await provider.restore();
+    await tester.pumpAndSettle();
+
+    expect(provider.session?.role, 'lawyer');
+    expect(find.text('Overview'), findsWidgets);
+    expect(find.textContaining('does not provide client or case editing'), findsOneWidget);
+    expect(api.calls, containsAll(<String>[
+      'GET cases',
+      'GET bookings',
+      'GET availability/mine',
+    ]));
+
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.pumpAndSettle();
+    expect(find.text('My Cases'), findsWidgets);
+    expect(find.text('My Bookings'), findsWidgets);
+    expect(find.text('My Availability'), findsOneWidget);
+    expect(find.text('Users'), findsNothing);
+    expect(find.text('Lawyers'), findsNothing);
+    expect(find.text('Categories'), findsNothing);
+
+    await tester.tap(find.descendant(
+      of: find.byType(Drawer),
+      matching: find.text('My Cases'),
+    ).first);
+    await tester.pumpAndSettle();
+    final drawerContext = tester.element(find.byType(Drawer));
+    Navigator.of(drawerContext).pop();
+    await tester.pumpAndSettle();
+    expect(find.text('No cases are assigned to your profile'), findsOneWidget);
+    expect(find.text('Add Case'), findsNothing);
+    expect(find.byIcon(Icons.edit), findsNothing);
+    expect(find.byIcon(Icons.delete), findsNothing);
+
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(
+      of: find.byType(Drawer),
+      matching: find.text('My Bookings'),
+    ).first);
+    await tester.pumpAndSettle();
+    Navigator.of(tester.element(find.byType(Drawer))).pop();
+    await tester.pumpAndSettle();
+    expect(find.text('No appointments are assigned to your profile'), findsOneWidget);
+    expect(find.byType(PopupMenuButton<String>), findsNothing);
   });
 
   testWidgets('an unauthenticated user never sees the admin shell',
@@ -183,7 +254,7 @@ void main() {
     final service = FakeAuthService(
       api: FakeApiService(),
       signInError: Exception(
-        'This account is not an administrator (role: client).',
+        'This account is not authorized for the internal panel (role: client).',
       ),
     );
     final provider = AuthProvider(service);
@@ -201,6 +272,6 @@ void main() {
     expect(provider.isAuthenticated, isFalse);
     expect(provider.session, isNull);
     expect(find.text('Dashboard'), findsNothing);
-    expect(find.textContaining('not an administrator'), findsOneWidget);
+    expect(find.textContaining('not authorized for the internal panel'), findsOneWidget);
   });
 }

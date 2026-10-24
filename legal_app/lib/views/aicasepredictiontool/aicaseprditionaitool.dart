@@ -1,14 +1,12 @@
-import 'dart:convert';
-import 'dart:async'; // Import for TimeoutException
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
 import 'package:syncfusion_flutter_sliders/sliders.dart';
 import 'package:flutter_vector_icons/flutter_vector_icons.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
-import '../../constants/colors.dart'; // Import flutter_markdown
+import '../../constants/colors.dart';
 import '../../config/ai_config.dart';
+import '../../state/session_scope.dart';
 
 // --- UI Constants --- (Optional, but good practice)
  Color primaryTextColor = AppColors.buttonColor; // blueGrey[800]
@@ -87,6 +85,9 @@ class CasePredictionToolState extends State<CasePredictionTool>
         curve: Curves.easeOutQuart,
       ),
     );
+    _animationController.addListener(() {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -96,206 +97,73 @@ class CasePredictionToolState extends State<CasePredictionTool>
   }
 
   Future<void> _predictCaseOutcome() async {
-    // Save the form fields before validation
     _formKey.currentState?.save();
-
     if (!_formKey.currentState!.validate()) {
       _showErrorSnackbar('Please fill in all required fields.');
       return;
     }
 
-
     setState(() {
       _isLoading = true;
-      _hasResult = false; // Reset previous results
-      _predictionAnalysis = ""; // Clear analysis
-      _predictionScore = 0; // Reset score
+      _hasResult = false;
+      _predictionAnalysis = '';
+      _predictionScore = 0;
     });
 
     try {
-      final response = await _fetchPrediction();
-
-      if (response.statusCode == 200) {
-        final jsonResponse = jsonDecode(response.body);
-
-        // --- CORRECTED RESPONSE PARSING ---
-        // Safely extract the generated text from the Gemini response structure
-        final generatedText = jsonResponse?["candidates"]?[0]?["content"]?["parts"]?[0]?["text"] as String?;
-
-        if (generatedText != null && generatedText.isNotEmpty) {
-          // Parse the score and analysis from the generated text
-          final parsedResult = _parseGeneratedText(generatedText);
-
-          setState(() {
-            _predictionScore = parsedResult['score'];
-            _predictionAnalysis = parsedResult['analysis'];
-            _hasResult = true; // We have a result to show
-          });
-
-          // Update and run the animation
-          _scoreAnimation = Tween<double>(begin: 0, end: _predictionScore).animate(
-            CurvedAnimation(
-              parent: _animationController,
-              curve: Curves.easeOutQuart,
-            ),
-          )..addListener(() {
-            // Add listener to update UI during animation
-            setState(() {});
-          });
-          _animationController.reset();
-          _animationController.forward();
-
-        } else {
-          // Handle cases where the API returns success but no text or blocked content
-          final blockReason = jsonResponse?["promptFeedback"]?["blockReason"];
-          if (blockReason != null) {
-            throw Exception("Content blocked by API safety settings: $blockReason");
-          } else {
-            throw Exception("API returned an empty response.");
-          }
-        }
-        // --- END OF CORRECTION ---
-
-      } else {
-        // Handle API errors more gracefully
-        String errorBody = response.body;
-        try {
-          final errorJson = jsonDecode(errorBody);
-          errorBody = errorJson['error']?['message'] ?? errorBody;
-        } catch (_) { /* Ignore if body is not JSON */ }
-        throw Exception("API Error (${response.statusCode}): $errorBody");
-      }
-
-    } catch (e) {
-      _showErrorSnackbar('Prediction failed: ${e.toString()}');
+      final generatedText = await _fetchPrediction();
+      final parsedResult = _parseGeneratedText(generatedText);
+      if (!mounted) return;
       setState(() {
-        _hasResult = false; // Ensure no results are shown on error
+        _predictionScore = parsedResult['score'] as double;
+        _predictionAnalysis = parsedResult['analysis'] as String;
+        _hasResult = true;
       });
+      _scoreAnimation = Tween<double>(begin: 0, end: _predictionScore).animate(
+        CurvedAnimation(
+          parent: _animationController,
+          curve: Curves.easeOutQuart,
+        ),
+      );
+      _animationController
+        ..reset()
+        ..forward();
+    } catch (error) {
+      _showErrorSnackbar('Prediction failed: $error');
+      if (mounted) setState(() => _hasResult = false);
     } finally {
-      // Ensure loading indicator stops even if there's an error during parsing/setState
-      if (mounted) { // Check if widget is still mounted
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // --- NEW HELPER FUNCTION ---
-  /// Parses the raw text output from the AI.
-  /// Expects the score on the first line, analysis following.
+  /// Parses the response's illustrative score and its supporting analysis.
+  /// Invalid model output is an error, never a fabricated zero-score result.
   Map<String, dynamic> _parseGeneratedText(String text) {
-    try {
-      final lines = text.trim().split('\n');
-      if (lines.isEmpty) {
-        throw const FormatException("Empty response received.");
-      }
-
-      // Attempt to parse the first line as the score
-      final double score = double.parse(lines.first.trim());
-      if (score < 0 || score > 100) {
-        throw FormatException("Score ($score) out of range (0-100).");
-      }
-
-      // The rest is analysis
-      final String analysis = lines.skip(1).join('\n').trim();
-      if (analysis.isEmpty) {
-        return {
-          'score': score,
-          'analysis': "Analysis section not provided by AI. Score is based on input factors."
-        };
-      }
-
-      return {'score': score, 'analysis': analysis};
-
-    } on FormatException catch (e) {
-      // Handle cases where the first line is not a valid number
-      return {
-        'score': 0.0,
-        'analysis': "Error: Could not parse prediction score from AI response (${e.message}).\n\nRaw Response:\n$text"
-      };
-    } catch (_) {  // Using underscore to indicate unused exception variable
-      return {
-        'score': 0.0,
-        'analysis': "Error: An unexpected error occurred while parsing the AI response.\n\nRaw Response:\n$text"
-      };
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      throw const FormatException('The AI returned an empty response.');
     }
-  }  // --- END OF HELPER ---
-
-  Future<http.Response> _fetchPrediction() async {
-    // The key comes from --dart-define (see lib/config/ai_config.dart). It is
-    // never committed, and an unconfigured build fails with a clear message
-    // instead of calling Google with an empty key.
-    if (!AiConfig.isConfigured) {
-      throw Exception(AiConfig.notConfiguredMessage);
+    final lines = trimmed.split('\n');
+    final score = double.tryParse(lines.first.trim());
+    if (score == null || !score.isFinite || score < 0 || score > 100) {
+      throw const FormatException('The AI response did not contain a valid 0-100 illustrative score.');
     }
-
-    final Uri url = AiConfig.generateContentUri();
-
-    final prompt = """
-    Analyze the following court case details and predict the likelihood of success.
-
-    **Case Information:**
-    - Jurisdiction: $_jurisdiction
-    - Case Type: $_caseType
-    - Case Description: $_caseDescription
-    - Similar Precedent Weight (Importance): ${_similarPrecedentWeight.round()}/100
-    - Legal Argument Strength (Quality): ${_legalArgumentStrength.round()}/100
-    - Evidence Quality (Support): ${_evidenceQuality.round()}/100
-
-    **Instructions:**
-    1.  **First line ONLY:** Provide the predicted success score as a single number between 0 and 100.
-    2.  **Following lines:** Provide a detailed analysis in Markdown format, including these sections exactly:
-        ## Prediction Summary
-        [Brief summary of the prediction.]
-        ## Key Factors Influencing Score
-        [Discuss how jurisdiction, case type, precedent, arguments, and evidence impact the score.]
-        ## Strengths
-        [Bullet points of the case's strong points.]
-        ## Weaknesses
-        [Bullet points of the case's weak points.]
-        ## Recommended Strategy / Next Steps
-        [Suggest potential strategies or actions based on the analysis.]
-
-    **Output Format Example:**
-    75
-    ## Prediction Summary
-    The case has a favorable outlook...
-    ## Key Factors Influencing Score
-    The strong evidence quality significantly boosts the score...
-    ## Strengths
-    - Strong eyewitness testimony...
-    ## Weaknesses
-    - Lack of direct precedent in this specific jurisdiction...
-    ## Recommended Strategy / Next Steps
-    Focus on distinguishing unfavorable precedents...
-    """;
-
-    final body = jsonEncode({
-      "contents": [{
-        "parts": [{"text": prompt}]
-      }],
-      "safetySettings": [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
-      ],
-      "generationConfig": {
-        "temperature": 0.6,
-        "topK": 1,
-        "topP": 1,
-        "maxOutputTokens": 2048,
-        "responseMimeType": "text/plain",
-      }
-    });
-
-    return await http.post(
-      url,
-      headers: AiConfig.headers,
-      body: body,
-    ).timeout(const Duration(seconds: 90), onTimeout: () {
-      throw TimeoutException('The request to the AI service timed out.');
-    });
+    final analysis = lines.skip(1).join('\n').trim();
+    if (analysis.isEmpty) {
+      throw const FormatException('The AI response did not contain an analysis.');
+    }
+    return <String, dynamic>{'score': score, 'analysis': analysis};
   }
+
+  Future<String> _fetchPrediction() =>
+      SessionScope.read(context).repository.predictCaseOutcome(
+        jurisdiction: _jurisdiction,
+        caseType: _caseType,
+        description: _caseDescription,
+        precedentWeight: _similarPrecedentWeight.round(),
+        argumentStrength: _legalArgumentStrength.round(),
+        evidenceQuality: _evidenceQuality.round(),
+      );
   void _showErrorSnackbar(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -316,11 +184,11 @@ class CasePredictionToolState extends State<CasePredictionTool>
   }
 
   String _getScoreInterpretation(double score) {
-    if (score >= 80) return 'Highly Favorable';
-    if (score >= 60) return 'Favorable';
-    if (score >= 40) return 'Neutral';
-    if (score >= 20) return 'Unfavorable';
-    return 'Highly Unfavorable';
+    if (score >= 80) return 'AI assessment · very favorable';
+    if (score >= 60) return 'AI assessment · favorable';
+    if (score >= 40) return 'AI assessment · mixed';
+    if (score >= 20) return 'AI assessment · unfavorable';
+    return 'AI assessment · very unfavorable';
   }
 
   @override
@@ -766,7 +634,7 @@ class CasePredictionToolState extends State<CasePredictionTool>
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            "${_scoreAnimation.value.round()}%", // Animated text
+                            "AI score ${_scoreAnimation.value.round()}/100",
                             style: GoogleFonts.poppins(
                               fontSize: 38, // Larger score text
                               fontWeight: FontWeight.w700,
@@ -786,6 +654,16 @@ class CasePredictionToolState extends State<CasePredictionTool>
                     ],
                   ),
                   const SizedBox(height: defaultPadding * 1.2),
+                  Text(
+                    AiConfig.advisoryNotice,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.poppins(
+                      color: Colors.orange[800],
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                  const SizedBox(height: defaultPadding),
                   Divider(color: Colors.blueGrey[100], thickness: 1), // Separator
                   const SizedBox(height: defaultPadding * 0.8),
 
@@ -850,22 +728,22 @@ class CasePredictionToolState extends State<CasePredictionTool>
               const SizedBox(height: defaultPadding),
               _buildAlgorithmStep(
                 icon: Feather.database,
-                title: "Precedent Analysis",
-                description: "Compares case facts & factors against a vast database of historical case data.",
+                title: "User-Provided Case Summary",
+                description: "Does not query a verified case-law database. It summarizes only the facts and inputs you provide and may miss or invent legal authorities.",
                 iconColor: Colors.blue[600]!,
               ),
               const SizedBox(height: defaultPadding * 0.8),
               _buildAlgorithmStep(
                 icon: Feather.sliders, // Different icon
-                title: "Factor Weighting",
-                description: "Applies AI models to weigh the significance of jurisdiction, case type, evidence, arguments, etc.",
+                title: "User-Provided Rating Inputs",
+                description: "Your subjective factor ratings are supplied as context to the AI; they are not statistically validated weights.",
                 iconColor: Colors.purple[600]!,
               ),
               const SizedBox(height: defaultPadding * 0.8),
               _buildAlgorithmStep(
                 icon: Feather.trending_up,
-                title: "Probability Modeling",
-                description: "Calculates a success probability score based on patterns learned from outcomes of similar past cases.",
+                title: "Illustrative AI Rating",
+                description: "The displayed score is a model-generated illustration, not an empirical success probability or a guarantee.",
                 iconColor: Colors.green[600]!,
               ),
               const SizedBox(height: defaultPadding * 1.2),

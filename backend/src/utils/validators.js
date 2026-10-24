@@ -45,9 +45,27 @@ export const isoCalendarDate = Joi.string()
       '{{#label}} must be a real calendar date in YYYY-MM-DD format (for example 2026-11-30)',
   });
 
+export const lawyerSignupSchema = Joi.object({
+  name: Joi.string().trim().min(2).max(120).required(),
+  email: Joi.string().trim().lowercase().email().max(254).required(),
+  password: Joi.string().min(8).max(128).required(),
+});
+
+export const legalCategorySchema = Joi.object({
+  name: Joi.string().trim().min(2).max(120).required(),
+  slug: Joi.string().trim().max(160).allow('', null),
+});
+
+export const legalCategoryUpdateSchema = legalCategorySchema
+  .fork(['name'], (schema) => schema.optional())
+  .min(1);
+
 export const lawyerSchema = Joi.object({
+  userId: Joi.string().trim().allow('', null),
+  categoryId: Joi.string().trim().allow('', null),
   name: Joi.string().trim().min(2).max(120).required(),
   specialty: Joi.string().trim().max(120).allow('', null),
+  experience: Joi.string().trim().max(80).allow('', null),
   price: Joi.string().trim().max(40).allow('', null),
   priceValue: Joi.number().min(0).optional(),
   image: Joi.string().trim().allow('', null),
@@ -76,6 +94,10 @@ export const userSchema = Joi.object({
   avatar: Joi.string().trim().allow('', null),
   address: Joi.string().trim().max(300).allow('', null),
 });
+
+export const userUpdateSchema = userSchema.fork(['name', 'email'], (schema) =>
+  schema.optional(),
+);
 
 /**
  * Payload for provisioning the CALLER'S OWN profile (`POST /api/users/me`).
@@ -112,6 +134,8 @@ export const userRoleSchema = Joi.object({
  */
 export const caseSchema = Joi.object({
   userId: Joi.string().trim().allow('', null),
+  lawyerId: Joi.string().trim().allow('', null),
+  categoryId: Joi.string().trim().allow('', null),
   title: Joi.string().trim().min(2).max(200).required(),
   description: Joi.string().trim().max(4000).allow('', null),
   clientName: Joi.string().trim().max(160).allow('', null),
@@ -140,17 +164,18 @@ export const caseUpdateSchema = caseSchema.fork(['title'], (schema) =>
 
 export const taskSchema = Joi.object({
   userId: Joi.string().trim().allow('', null),
-  caseId: Joi.string().trim().allow('', null),
   title: Joi.string().trim().min(2).max(200).required(),
   description: Joi.string().trim().max(4000).allow('', null),
-  dueDate: Joi.string().trim().allow('', null),
+  dueDate: isoCalendarDate,
   priority: Joi.string().valid('High', 'Medium', 'Low').default('Medium'),
   status: Joi.string()
-    .valid('To Do', 'In Progress', 'Done')
-    .default('To Do'),
+    .valid('Pending', 'In Progress', 'Completed', 'Cancelled')
+    .default('Pending'),
 });
 
-export const BOOKING_STATUSES = ['Pending', 'Active', 'Completed', 'Cancelled'];
+export const taskUpdateSchema = taskSchema.fork(['title'], (schema) => schema.optional());
+
+export const BOOKING_STATUSES = ['Pending', 'Confirmed', 'Active', 'Completed', 'Cancelled'];
 
 /**
  * A time of day, normalised to 24-hour `HH:MM`.
@@ -278,7 +303,7 @@ export const messageSchema = Joi.object({
 export const availabilitySchema = Joi.object({
   lawyerId: Joi.string().trim().allow('', null),
   lawyerName: Joi.string().trim().max(120).allow('', null),
-  date: Joi.string().trim().allow('', null),
+  date: isoCalendarDate,
   slots: Joi.array().items(Joi.string()).optional(),
 });
 

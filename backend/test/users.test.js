@@ -24,8 +24,6 @@ import {
   stopApp,
   tokenFor,
   users,
-  authUpdates,
-  failAuthUpdates,
 } from './helpers/harness.js';
 
 const BASE = '/api/users';
@@ -63,6 +61,7 @@ describe('users: the profile schema cannot carry a role', () => {
 
   it('keeps role changes restricted to real roles', () => {
     assert.equal(validate(userRoleSchema, { role: 'lawyer' }).role, 'lawyer');
+    assert.throws(() => validate(userRoleSchema, { role: 'owner' }));
     assert.throws(() => validate(userRoleSchema, { role: 'root' }));
   });
 });
@@ -86,7 +85,7 @@ describe('users: role escalation', () => {
     assert.equal(res.body.data.role, 'client');
   });
 
-  it('ignores a body containing only `role` and writes nothing', async () => {
+  it('returns a conflict when no editable profile fields remain after stripping role', async () => {
     signIn('client1');
 
     const res = await put(`${BASE}/client-1`, {
@@ -94,11 +93,9 @@ describe('users: role escalation', () => {
       body: { role: 'lawyer' },
     });
 
-    // `name` and `email` are required on this route (pre-existing contract),
-    // so the request is rejected before it can reach Firestore. The privilege
-    // change must not happen either way.
-    assert.equal(res.status, 400);
-    assert.equal(res.body.success, false);
+    // The `role` field is removed, leaving no editable profile fields.
+    assert.equal(res.status, 409);
+    assert.match(res.body.message, /No editable profile fields/);
     assert.equal(roleOf('client-1'), 'client');
   });
 
@@ -199,6 +196,20 @@ describe('users: role administration', () => {
     assert.equal(roleOf('client-2'), 'lawyer');
   });
 
+  it('does not let an administrator change a privately provisioned owner role', async () => {
+    reset({ collections: { users: [...seed(), ...users('owner1')] } });
+    signIn('admin1');
+
+    const response = await patch(`${BASE}/owner-1/role`, {
+      token: tokenFor('admin1'),
+      body: { role: 'admin' },
+    });
+
+    assert.equal(response.status, 403);
+    assert.match(response.body.message, /trusted provisioning/);
+    assert.equal(roleOf('owner-1'), 'owner');
+  });
+
   it('rejects an unknown role value', async () => {
     signIn('admin1');
 
@@ -245,14 +256,14 @@ describe('users: deletion', () => {
     assert.ok(docs('users').some((u) => u.id === 'admin-1'));
   });
 
-  it('keeps the legitimate admin delete working', async () => {
+  it('keeps account deletion disabled for admins until a retention workflow exists', async () => {
     signIn('admin1');
 
     const res = await del(`${BASE}/client-2`, { token: tokenFor('admin1') });
 
-    assert.equal(res.status, 200);
-    assert.equal(res.body.data.id, 'client-2');
-    assert.equal(docs('users').some((u) => u.id === 'client-2'), false);
+    assert.equal(res.status, 403);
+    assert.match(res.body.message, /data-retention workflow/);
+    assert.ok(docs('users').some((u) => u.id === 'client-2'));
   });
 });
 
@@ -294,28 +305,27 @@ describe('users: the fixture admin is really an admin', () => {
 });
 
 /* =====================================================================
- * WAVE 1.3 — Firebase Auth and the profile must not drift
+ * WAVE 1.3 — Supabase Auth owns sign-in email changes
  * ===================================================================*/
 
-describe('users 1.3: email synchronisation', () => {
+describe('users 1.3: verified Supabase Auth email-change boundary', () => {
   beforeEach(() => reset({ collections: { users: seed() } }));
 
-  it('updates the sign-in email in Firebase Auth when an admin changes it', async () => {
+  it('rejects an administrator changing profile email through the users API', async () => {
     signIn('admin1');
 
     const res = await put(`${BASE}/client-1`, {
       token: tokenFor('admin1'),
-      body: { name: 'Client One', email: 'new-address@example.com' },
+      body: { name: 'Changed Name', email: 'new-address@example.com' },
     });
 
-    assert.equal(res.status, 200);
-    assert.equal(docs('users').find((u) => u.id === 'client-1').email, 'new-address@example.com');
-    assert.deepEqual(authUpdates(), [
-      { uid: 'client-1', email: 'new-address@example.com' },
-    ]);
+    assert.equal(res.status, 400);
+    assert.match(res.body.message, /Supabase Auth.*verified email-change flow/);
+    assert.equal(docs('users').find((user) => user.id === 'client-1').email, 'client1@example.com');
+    assert.equal(docs('users').find((user) => user.id === 'client-1').name, 'Client One');
   });
 
-  it('does not touch Firebase Auth when the email is unchanged', async () => {
+  it('allows an administrator to edit other profile fields when email is unchanged', async () => {
     signIn('admin1');
 
     const res = await put(`${BASE}/client-1`, {
@@ -324,49 +334,34 @@ describe('users 1.3: email synchronisation', () => {
     });
 
     assert.equal(res.status, 200);
-    assert.equal(authUpdates().length, 0);
+    assert.equal(docs('users').find((user) => user.id === 'client-1').name, 'Renamed');
+    assert.equal(docs('users').find((user) => user.id === 'client-1').email, 'client1@example.com');
   });
 
-  it('denies an ordinary user changing their own sign-in email', async () => {
+  it('rejects an ordinary user changing their own sign-in email', async () => {
     signIn('client1');
 
     const res = await put(`${BASE}/client-1`, {
       token: tokenFor('client1'),
-      body: { name: 'Client One', email: 'attacker@example.com' },
-    });
-
-    assert.equal(res.status, 403);
-    assert.equal(docs('users').find((u) => u.id === 'client-1').email, 'client1@example.com');
-    assert.equal(authUpdates().length, 0);
-  });
-
-  it('allows an ordinary user to re-send their current email', async () => {
-    signIn('client1');
-
-    const res = await put(`${BASE}/client-1`, {
-      token: tokenFor('client1'),
-      body: { name: 'Client One', email: 'client1@example.com' },
-    });
-
-    assert.equal(res.status, 200);
-    assert.equal(authUpdates().length, 0);
-  });
-
-  it('reports a client error and writes nothing when Auth rejects the address', async () => {
-    signIn('admin1');
-    failAuthUpdates('auth/email-already-exists');
-
-    const res = await put(`${BASE}/client-1`, {
-      token: tokenFor('admin1'),
-      body: { name: 'Client One', email: 'taken@example.com' },
+      body: { name: 'Changed Name', email: 'attacker@example.com' },
     });
 
     assert.equal(res.status, 400);
-    assert.equal(
-      docs('users').find((u) => u.id === 'client-1').email,
-      'client1@example.com',
-      'the profile must not drift from the sign-in address',
-    );
-    assert.equal(authUpdates().length, 0);
+    assert.match(res.body.message, /Supabase Auth.*verified email-change flow/);
+    assert.equal(docs('users').find((user) => user.id === 'client-1').email, 'client1@example.com');
+    assert.equal(docs('users').find((user) => user.id === 'client-1').name, 'Client One');
+  });
+
+  it('accepts the caller\'s current email while updating an editable name', async () => {
+    signIn('client1');
+
+    const res = await put(`${BASE}/client-1`, {
+      token: tokenFor('client1'),
+      body: { name: 'Client Renamed', email: 'client1@example.com' },
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(docs('users').find((user) => user.id === 'client-1').email, 'client1@example.com');
+    assert.equal(docs('users').find((user) => user.id === 'client-1').name, 'Client Renamed');
   });
 });

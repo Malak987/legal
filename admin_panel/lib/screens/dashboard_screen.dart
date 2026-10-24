@@ -60,14 +60,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (e is ApiException) {
       switch (e.statusCode) {
         case 0:
-          return 'Cannot reach the API at ${AppConfig.apiBaseUrl}. '
-              'Start the backend and make sure that address is correct, then retry.';
+          return AppConfig.apiBaseUrl.isEmpty
+              ? 'This dashboard data route is not configured. Its migration to Supabase-backed access is pending.'
+              : 'Cannot reach the API at ${AppConfig.apiBaseUrl}. '
+                  'Check the Supabase-backed server address, then retry.';
         case 401:
           return 'The server rejected the request (401 Unauthorized). Your '
               'session may have expired — sign out and sign in again.';
         case 403:
           return 'This account is not an administrator (403 Forbidden). The '
-              'Firestore document users/<your-uid> must have role: "admin".';
+              'server-owned public.users profile must have role: "admin".';
         default:
           return 'Request failed (${e.statusCode}): ${e.message}';
       }

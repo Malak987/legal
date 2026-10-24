@@ -2,15 +2,15 @@
  * Status-transition rules for records that carry money or service state.
  *
  * A record's status is a business fact, not a form field: a client must not be
- * able to mark their own booking "Completed" (which would release a payment or
- * inflate a lawyer's earnings) or flip a cancelled subscription back to
- * "Active". Administrators bypass every rule here — the admin panel manages
- * these state machines directly.
+ * able to mark their own booking "Completed" (which could affect payments or
+ * lawyer earnings) or flip a cancelled subscription back to "Active". These
+ * maps describe only the transitions each route has explicitly chosen to
+ * support; an administrator is not an automatic bypass. In particular, paid
+ * subscription activation/expiry remains unavailable until a verified billing
+ * workflow and matching database contract exist.
  *
- * Usage:
- *   if (!isAdmin(req) && !canTransition(BOOKING_TRANSITIONS, existing.status, next)) {
- *     return forbidden(res, '...');
- *   }
+ * Route handlers must apply role-specific rules explicitly; do not use these
+ * maps as a blanket admin bypass.
  */
 
 /**
@@ -32,6 +32,7 @@ export function canTransition(map, from, to) {
  */
 export const BOOKING_TRANSITIONS = {
   Pending: ['Cancelled'],
+  Confirmed: ['Cancelled'],
   Active: ['Cancelled'],
   Completed: [],
   Cancelled: [],
@@ -42,7 +43,8 @@ export const BOOKING_TRANSITIONS = {
  * admins are not restricted, this map only describes the intended flow).
  */
 export const BOOKING_ADMIN_TRANSITIONS = {
-  Pending: ['Active', 'Completed', 'Cancelled'],
+  Pending: ['Confirmed', 'Active', 'Completed', 'Cancelled'],
+  Confirmed: ['Active', 'Completed', 'Cancelled'],
   Active: ['Completed', 'Cancelled'],
   Completed: [],
   Cancelled: [],

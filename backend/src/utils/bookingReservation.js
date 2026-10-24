@@ -22,7 +22,7 @@
  * for rows that predate these reservation documents.
  */
 
-import { serverTimestamp } from './firestore.js';
+import { serverTimestamp } from './supabase_database.js';
 import {
   SLOT_LOCK_COLLECTION,
   bookingInterval,

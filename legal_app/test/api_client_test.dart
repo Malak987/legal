@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -12,37 +11,36 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('base URL', () {
-    tearDown(() => debugDefaultTargetPlatformOverride = null);
-
-    test('defaults to deployed Firebase HTTPS API across Android and iOS', () {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      expect(ApiClient.defaultBaseUrl, 'https://legal-102026.web.app/api');
-
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      expect(ApiClient.defaultBaseUrl, 'https://legal-102026.web.app/api');
+    test('does not fall back to a Firebase-hosted API', () {
+      expect(ApiClient.defaultBaseUrl, isEmpty);
+      expect(ApiClient.resolveBaseUrl(configured: 'https://api.example.test/api'),
+          'https://api.example.test/api');
+      expect(ApiClient.resolveBaseUrl(configured: '  '), isEmpty);
     });
 
-    test('local emulator mode resolves Android 10.0.2.2 vs localhost cleanly', () {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      expect(
-        ApiClient.resolveBaseUrl(localEmulator: true),
-        'http://10.0.2.2:5000/api',
-      );
-
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      expect(
-        ApiClient.resolveBaseUrl(localEmulator: true),
-        'http://localhost:5000/api',
-      );
-    });
-
-    test('an explicit base URL always wins', () {
+    test('an explicit Supabase-backed API URL is used as configured', () {
       final client = ApiClient(
         baseUrl: 'https://staging.example.com/api',
         client: MockClient((_) async => jsonOk(const {})),
         currentUidProvider: () => null,
       );
       expect(client.baseUrl, 'https://staging.example.com/api');
+    });
+
+    test('unmigrated API calls fail clearly when API_BASE_URL is absent', () async {
+      final client = ApiClient(
+        baseUrl: '',
+        client: MockClient((_) async => jsonOk(const {})),
+        currentUidProvider: () => null,
+      );
+      await expectLater(
+        client.get('cases'),
+        throwsA(isA<ApiException>().having(
+          (error) => error.statusCode,
+          'statusCode',
+          503,
+        )),
+      );
     });
   });
 
@@ -85,6 +83,20 @@ void main() {
 
       expect(seen!.queryParameters['search'], 'family law');
       expect(seen!.queryParameters['limit'], '5');
+    });
+
+    test('normalizes HTTP transport failures into typed network errors', () async {
+      final api = testApiClient(handler: (_, __) async {
+        throw http.ClientException('socket is unavailable');
+      });
+
+      await expectLater(
+        api.get('cases'),
+        throwsA(isA<ApiException>()
+            .having((error) => error.kind, 'kind', ApiErrorKind.network)
+            .having((error) => error.statusCode, 'statusCode', 0)
+            .having((error) => error.isTransient, 'isTransient', isTrue)),
+      );
     });
 
     test('POST bodies are JSON and the envelope is unwrapped', () async {
@@ -188,6 +200,7 @@ void main() {
         api.get('cases'),
         throwsA(isA<ApiException>()
             .having((e) => e.statusCode, 'status', 502)
+            .having((e) => e.kind, 'kind', ApiErrorKind.invalidResponse)
             .having((e) => e.isTransient, 'isTransient', true)),
       );
     });

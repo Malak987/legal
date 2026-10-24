@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { getDb } from '../config/firebase.js';
+import { toDbRow } from '../config/supabase.js';
+import { requestDatabase, callUserRpc, rpcErrorToken, rpcRow } from '../utils/supabase_rpc.js';
 import {
   authenticate,
   requireRole,
@@ -8,10 +9,10 @@ import {
   forbidden,
   lockOwnerOnUpdate,
 } from '../middleware/auth.js';
-import { ok, created, notFound, parseListQuery } from '../utils/response.js';
+import { ok, created, notFound, badRequest, parseListQuery } from '../utils/response.js';
 import { validate, notificationSchema } from '../utils/validators.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { listDocs, getDocById, createDoc, updateDoc, deleteDoc, serverTimestamp } from '../utils/firestore.js';
+import { listDocs, getDocById, createDoc, deleteDoc } from '../utils/supabase_database.js';
 
 const router = Router();
 const COLLECTION = 'notifications';
@@ -19,7 +20,7 @@ const COLLECTION = 'notifications';
 /// Loads a notification and answers 404/403 consistently.
 /// Returns `null` when the request has already been answered.
 async function loadOwnedNotification(req, res) {
-  const existing = await getDocById(getDb(), COLLECTION, req.params.id);
+  const existing = await getDocById(requestDatabase(req), COLLECTION, req.params.id);
   if (!existing) {
     notFound(res, 'Notification not found');
     return null;
@@ -39,7 +40,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { userId } = req.params;
     const q = parseListQuery(req);
-    const result = await listDocs(getDb(), COLLECTION, {
+    const result = await listDocs(requestDatabase(req), COLLECTION, {
       search: q.search,
       searchFields: ['title', 'content'],
       filters: { userId },
@@ -60,7 +61,7 @@ router.get(
   requireRole('admin'),
   asyncHandler(async (req, res) => {
     const q = parseListQuery(req);
-    const result = await listDocs(getDb(), COLLECTION, {
+    const result = await listDocs(requestDatabase(req), COLLECTION, {
       search: q.search,
       searchFields: ['title', 'content'],
       filters: req.query.userId ? { userId: req.query.userId } : {},
@@ -82,7 +83,7 @@ router.post(
   requireRole('admin'),
   asyncHandler(async (req, res) => {
     const data = validate(notificationSchema, req.body);
-    const createdDoc = await createDoc(getDb(), COLLECTION, data);
+    const createdDoc = await createDoc(requestDatabase(req), COLLECTION, data);
     created(res, createdDoc, 'Notification created');
   }),
 );
@@ -96,9 +97,21 @@ router.put(
     if (!existing) return;
 
     const read = req.body?.read !== false;
-    const updated = await updateDoc(getDb(), COLLECTION, req.params.id, { read });
-    if (!updated) return notFound(res, 'Notification not found');
-    ok(res, updated, 'Notification updated');
+    try {
+      const outcome = await callUserRpc(req, 'rpc_notification_update', {
+        p_notification_id: req.params.id,
+        p_changes: { read },
+      });
+      const updated = rpcRow(COLLECTION, outcome);
+      if (!updated) throw new Error('Supabase notification RPC returned an unexpected result.');
+      return ok(res, updated, 'Notification updated');
+    } catch (error) {
+      const token = rpcErrorToken(error);
+      if (error.code === 'P0002' || token === 'NOTIFICATION_NOT_FOUND') return notFound(res, 'Notification not found');
+      if (error.code === '42501') return forbidden(res, 'Forbidden. You can only modify your own notifications.');
+      if (error.code === '22023') return badRequest(res, `Invalid notification update (${token || 'validation failed'}).`);
+      throw error;
+    }
   }),
 );
 
@@ -115,9 +128,25 @@ router.put(
     // notification to another account.
     lockOwnerOnUpdate(data, existing, req);
 
-    const updated = await updateDoc(getDb(), COLLECTION, req.params.id, data);
-    if (!updated) return notFound(res, 'Notification not found');
-    ok(res, updated, 'Notification updated');
+    const changes = toDbRow(COLLECTION, data);
+    delete changes.id;
+    if (changes.user_id === existing.userId) delete changes.user_id;
+    if (Object.keys(changes).length === 0) return ok(res, existing, 'Notification unchanged');
+    try {
+      const outcome = await callUserRpc(req, 'rpc_notification_update', {
+        p_notification_id: req.params.id,
+        p_changes: changes,
+      });
+      const updated = rpcRow(COLLECTION, outcome);
+      if (!updated) throw new Error('Supabase notification RPC returned an unexpected result.');
+      return ok(res, updated, 'Notification updated');
+    } catch (error) {
+      const token = rpcErrorToken(error);
+      if (error.code === 'P0002' || token === 'NOTIFICATION_NOT_FOUND') return notFound(res, 'Notification not found');
+      if (error.code === '42501') return forbidden(res, 'Forbidden. This notification change is not authorized.');
+      if (error.code === '22023') return badRequest(res, `Invalid notification update (${token || 'validation failed'}).`);
+      throw error;
+    }
   }),
 );
 
@@ -129,7 +158,7 @@ router.delete(
     const existing = await loadOwnedNotification(req, res);
     if (!existing) return;
 
-    const deleted = await deleteDoc(getDb(), COLLECTION, req.params.id);
+    const deleted = await deleteDoc(requestDatabase(req), COLLECTION, req.params.id);
     if (!deleted) return notFound(res, 'Notification not found');
     ok(res, { id: req.params.id }, 'Notification deleted');
   }),

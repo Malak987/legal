@@ -1,10 +1,8 @@
- import 'package:flutter/material.dart';
-import 'package:legalserviceapp/views/authentication/reset_password.dart';
+import 'package:flutter/material.dart';
 
-
- import '../../constants/colors.dart';
+import '../../constants/colors.dart';
+import '../../state/session_scope.dart';
 import '../../widgets/custombtn.dart';
-import '../../widgets/customtextfield.dart';
 import '../../widgets/detailstext1.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
@@ -14,40 +12,41 @@ class ForgotPasswordScreen extends StatefulWidget {
   State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
 }
 
-class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _fadeAnimation;
-  late Animation<Offset> _slideAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 800),
-      vsync: this,
-    );
-
-    _fadeAnimation = CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeInOut,
-    );
-
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, 0.2),
-      end: Offset.zero,
-    ).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
-
-    _controller.forward();
-  }
+class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+  final _emailController = TextEditingController();
+  bool _busy = false;
+  bool _sent = false;
+  String? _error;
 
   @override
   void dispose() {
-    _controller.dispose();
+    _emailController.dispose();
     super.dispose();
+  }
+
+  Future<void> _sendResetEmail() async {
+    final email = _emailController.text.trim();
+    if (!email.contains('@') || !email.contains('.')) {
+      setState(() => _error = 'Enter a valid email address.');
+      return;
+    }
+
+    final session = SessionScope.read(context);
+    setState(() {
+      _busy = true;
+      _error = null;
+      _sent = false;
+    });
+    try {
+      await session.requestPasswordReset(email);
+      if (!mounted) return;
+      setState(() => _sent = true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -55,103 +54,78 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
     return Scaffold(
       body: Stack(
         children: [
-          // Background color with app name
           Container(
             width: double.infinity,
             color: AppColors.buttonColor,
-            child: FadeTransition(
-              opacity: _fadeAnimation,
-              child: const Column(
-                mainAxisAlignment: MainAxisAlignment.start,
-                children: [
-                  SizedBox(height: 100),
-                  Text1(
-                    text1: 'Legal Services App',
-                    color: Colors.white,
-                    size: 32,
-                  ),
-                ],
-              ),
+            child: const Column(
+              children: [
+                SizedBox(height: 100),
+                Text1(
+                  text1: 'Legal Services App',
+                  color: Colors.white,
+                  size: 32,
+                ),
+              ],
             ),
           ),
-          // Main content
           Positioned.fill(
             child: Align(
               alignment: Alignment.bottomCenter,
-              child: SlideTransition(
-                position: _slideAnimation,
-                child: Container(
-                  height: MediaQuery.of(context).size.height * 0.7,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(30),
-                      topRight: Radius.circular(30),
-                    ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        children: [
-                          const SizedBox(height: 20),
-                          FadeTransition(
-                            opacity: _fadeAnimation,
-                            child:  Text1(
-                              text1: 'Forgot Password',
-                              size: 24,
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          SlideTransition(
-                            position: _slideAnimation,
-                            child:   CustomTextField(
-                              label: 'Email',
-                              icon: Icons.email,
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          FadeTransition(
-                            opacity: _fadeAnimation,
-                            child: CustomButton(
-                              text: 'Reset Password',
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) =>
-                                    const ResetPasswordScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          FadeTransition(
-                            opacity: _fadeAnimation,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Text('Remembered your password? '),
-                                GestureDetector(
-                                  onTap: () {
-                                    Navigator.pop(context); // Go back to login
-                                  },
-                                  child: const Text(
-                                    'Login',
-                                    style: TextStyle(
-                                      color: AppColors.buttonColor,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                        ],
+              child: Container(
+                height: MediaQuery.of(context).size.height * 0.7,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text1(text1: 'Forgot Password', size: 24),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Enter your account email and we will send a secure reset link.',
+                        textAlign: TextAlign.center,
                       ),
-                    ),
+                      const SizedBox(height: 24),
+                      TextField(
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        autofillHints: const [AutofillHints.email],
+                        decoration: const InputDecoration(
+                          labelText: 'Email',
+                          prefixIcon: Icon(Icons.email_outlined),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      if (_error != null) ...[
+                        const SizedBox(height: 14),
+                        Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ],
+                      if (_sent) ...[
+                        const SizedBox(height: 14),
+                        const Text(
+                          'If an account exists for this email, a reset link has been sent. Check your inbox and spam folder.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.green),
+                        ),
+                      ],
+                      const SizedBox(height: 22),
+                      CustomButton(
+                        text: _busy ? 'Sending…' : 'Send reset link',
+                        onTap: _busy ? null : _sendResetEmail,
+                      ),
+                      const SizedBox(height: 18),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Back to sign in'),
+                      ),
+                    ],
                   ),
                 ),
               ),

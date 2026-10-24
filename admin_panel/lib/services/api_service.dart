@@ -5,7 +5,7 @@ import '../config/app_config.dart';
 /// HTTP client for the backend REST API.
 ///
 /// Responsibilities:
-///  - attach the Firebase ID token (Authorization: Bearer ...)
+///  - attach the current Supabase access token (Authorization: Bearer ...)
 ///  - send/receive JSON
 ///  - normalize errors into [ApiException]
 class ApiService {
@@ -14,12 +14,12 @@ class ApiService {
 
   final http.Client _client;
 
-  /// The Firebase ID token, set after a successful sign-in.
+  /// The current Supabase access token, set after a successful sign-in.
   String? token;
 
-  /// Optional async source for a fresh Firebase ID token.
+  /// Optional async source for a fresh Supabase access token.
   ///
-  /// Firebase ID tokens expire after one hour. Supplying a provider lets the
+  /// Supabase access tokens expire. Supplying a provider lets the
   /// client refresh the token before every request instead of sending a stale
   /// one and getting 401 forever.
   ///
@@ -86,6 +86,12 @@ class ApiService {
   }
 
   Uri _uri(String path, [Map<String, String>? query]) {
+    if (_base.trim().isEmpty) {
+      throw ApiException(
+        'This admin operation is not migrated to direct Supabase access. Configure API_BASE_URL for the Supabase-backed server.',
+        503,
+      );
+    }
     final cleanPath = path.startsWith('/') ? path.substring(1) : path;
     return Uri.parse('$_base/$cleanPath').replace(
       queryParameters: query == null || query.isEmpty ? null : query,

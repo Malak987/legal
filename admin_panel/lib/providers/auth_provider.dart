@@ -21,7 +21,7 @@ class AuthProvider extends ChangeNotifier {
 
   /// Monotonic counter guarding every async state write.
   ///
-  /// `restore()` performs a Firestore read that can take seconds on a cold
+  /// `restore()` can make a network request that takes seconds on a cold
   /// start. Without this guard, a slow `restore()` finishing *after* a
   /// successful `signIn()` would overwrite `authenticated` with
   /// `unauthenticated` and bounce the user back to the login screen — the
@@ -29,8 +29,8 @@ class AuthProvider extends ChangeNotifier {
   /// operation checks it before writing.
   int _generation = 0;
 
-  /// The single Firebase auth-state subscription (null until bound).
-  StreamSubscription? _authSub;
+  /// The single Supabase auth-state subscription (null until bound).
+  StreamSubscription<AdminAuthUser?>? _authSub;
 
   AuthStatus get status => _status;
   AdminSession? get session => _session;
@@ -57,7 +57,7 @@ class AuthProvider extends ChangeNotifier {
   static AuthProvider watchOf(BuildContext context) =>
       context.watch<AuthProvider>();
 
-  /// Subscribes to Firebase auth state.
+  /// Subscribes to explicit Supabase Auth sign-out/session invalidation.
   ///
   /// Idempotent: calling it more than once never creates a second
   /// subscription, so session restoration cannot be triggered repeatedly.
@@ -66,14 +66,9 @@ class AuthProvider extends ChangeNotifier {
 
     _authSub = _authService.authStateChanges.listen((user) {
       if (user == null) {
-        // Genuine end of session: explicit sign-out, revoked refresh token,
-        // disabled account, or a rejected non-admin profile.
+        // Explicit sign-out or a revoked/invalid refresh token. Successful
+        // sign-in is finalized by signIn() after its profile role is checked.
         _applySignedOut('Your session has ended. Please sign in again.');
-      } else if (_status != AuthStatus.authenticated) {
-        // Firebase restored a user we have not verified a profile for yet.
-        // restore() is a no-op when an admin session is already held, so this
-        // cannot loop.
-        unawaited(restore());
       }
     });
   }
@@ -114,7 +109,7 @@ class AuthProvider extends ChangeNotifier {
     } on ProfileReadException catch (e) {
       if (!_isCurrent(generation)) return;
 
-      // Transient: the Firebase session is still valid, so do NOT sign out
+      // Transient: the Supabase refresh-token session is still valid; do NOT sign out
       // and do NOT fall back to the login screen. Stay put and let the user
       // retry with an actionable message.
       _session = null;
@@ -123,8 +118,8 @@ class AuthProvider extends ChangeNotifier {
     } catch (e) {
       if (!_isCurrent(generation)) return;
 
-      // Confirmed rejection (missing profile / not an admin) or a real
-      // Firebase error. The session has already been ended by AuthService.
+      // Confirmed rejection (missing profile / not an admin). AuthService
+      // has already cleared the persisted Supabase session.
       _session = null;
       _status = AuthStatus.unauthenticated;
       _error = _humanize(e);
@@ -156,11 +151,10 @@ class AuthProvider extends ChangeNotifier {
     } on ProfileReadException catch (e) {
       if (!_isCurrent(generation)) return false;
 
-      // Credentials were accepted but the role could not be verified.
-      // Keep the Firebase session so the user can retry without re-typing
-      // their password, and show a clear message.
+      // Credentials were accepted but the profile could not be verified.
+      // Preserve the encrypted Supabase session and let the user retry.
       _session = null;
-      _status = AuthStatus.unauthenticated;
+      _status = AuthStatus.unknown;
       _error = e.message;
     } catch (e) {
       if (!_isCurrent(generation)) return false;
@@ -174,6 +168,9 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
     return _status == AuthStatus.authenticated;
   }
+
+  Future<void> requestPasswordReset(String email) =>
+      _authService.requestPasswordReset(email);
 
   Future<void> signOut() async {
     _generation++; // discard any in-flight restore/signIn
@@ -213,6 +210,7 @@ class AuthProvider extends ChangeNotifier {
   void dispose() {
     _authSub?.cancel();
     _authSub = null;
+    _authService.dispose();
     super.dispose();
   }
 }

@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
 
-
 import '../../constants/colors.dart';
-import '../../widgets/custombtn.dart';
-import '../../widgets/customtextfield.dart';
-import '../../widgets/detailstext1.dart';
+import '../../state/session_scope.dart';
+import 'forgot_password.dart';
 import 'login_screen.dart';
-
 
 class ResetPasswordScreen extends StatefulWidget {
   const ResetPasswordScreen({super.key});
@@ -16,103 +13,127 @@ class ResetPasswordScreen extends StatefulWidget {
 }
 
 class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
+  final _passwordController = TextEditingController();
+  final _confirmController = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _passwordController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _savePassword() async {
+    final password = _passwordController.text;
+    if (password.length < 8) {
+      setState(() => _error = 'Use at least 8 characters for the new password.');
+      return;
+    }
+    if (password != _confirmController.text) {
+      setState(() => _error = 'The passwords do not match.');
+      return;
+    }
+
+    final session = SessionScope.read(context);
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await session.setPasswordFromRecovery(password);
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute<void>(builder: (_) => const LoginScreen()),
+        (_) => false,
+      );
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final session = SessionScope.read(context);
+    final recoveryReady = session.isPasswordRecovery;
     return Scaffold(
-      body: Stack(
-        children: [
-          // Background color with News Wave text
-          Container(
-            width: double.infinity,
-            color: AppColors.buttonColor, // Replace with your specific color
-            child: const Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                SizedBox(height: 100), // Add some spacing from the top
-                Text1(
-                  text1: 'Legal Services App',
-                  color: Colors.white,
-                  size: 32,
-                ),
-              ],
-            ),
-          ),
-          // Main content
-          Positioned.fill(
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: Container(
-                height: MediaQuery.of(context).size.height * 0.7,
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(30),
-                    topRight: Radius.circular(30),
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                  child: SingleChildScrollView(
-                    child: Column(
+      backgroundColor: AppColors.bgColor,
+      appBar: AppBar(title: const Text('Reset password')),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Card(
+            margin: const EdgeInsets.all(20),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: recoveryReady
+                  ? Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        const SizedBox(height: 20),
-                        const Text1(
-                          text1: 'Reset Password',
-                          size: 24,
+                        const Text(
+                          'Choose a new password',
+                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                         ),
-                        const SizedBox(height: 20),
-                        const CustomTextField(
-                          label: 'New Password',
-                          icon: Icons.lock,
-                          icon2: Icons.visibility,
+                        const SizedBox(height: 18),
+                        TextField(
+                          controller: _passwordController,
+                          obscureText: true,
+                          autofillHints: const [AutofillHints.newPassword],
+                          decoration: const InputDecoration(
+                            labelText: 'New password',
+                            border: OutlineInputBorder(),
+                          ),
                         ),
-                        const CustomTextField(
-                          label: 'Confirm Password',
-                          icon: Icons.lock,
-                          icon2: Icons.visibility,
+                        const SizedBox(height: 14),
+                        TextField(
+                          controller: _confirmController,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Confirm new password',
+                            border: OutlineInputBorder(),
+                          ),
                         ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                        ],
                         const SizedBox(height: 20),
-                        CustomButton(
-                          text: 'Reset Password',
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (context) =>  const LoginScreen()),
-                            );
-                            // Handle password reset functionality
-                          },
+                        FilledButton(
+                          onPressed: _busy ? null : _savePassword,
+                          child: Text(_busy ? 'Updating…' : 'Update password'),
                         ),
-                        const SizedBox(height: 20),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Text('Remembered your password? '),
-                            GestureDetector(
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(builder: (context) =>  const LoginScreen()),
-                                );
-                              },
-                              child: const Text(
-                                'Login',
-                                style: TextStyle(
-                                  color: AppColors.buttonColor, // Replace with your specific color
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
+                      ],
+                    )
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.lock_outline, size: 44),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Open the password-reset link from your email on this device or browser. If the link has expired, request a new one.',
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 16),
+                        TextButton(
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const ForgotPasswordScreen(),
                             ),
-                          ],
+                          ),
+                          child: const Text('Request a new link'),
                         ),
-                        const SizedBox(height: 20),
                       ],
                     ),
-                  ),
-                ),
-              ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }

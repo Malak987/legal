@@ -7,7 +7,7 @@ import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../widgets/common.dart';
 
-/// Manage users with a sortable data table.
+/// Manage users with a sortable data table (list, filter, edit, delete).
 class UsersScreen extends StatefulWidget {
   const UsersScreen({super.key});
 
@@ -46,6 +46,18 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   void _reload() => setState(() => _future = _fetch());
+
+  Future<void> _openEdit(AppUser user) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => UserEditDialog(user: user),
+    );
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('User updated')));
+      _reload();
+    }
+  }
 
   Future<void> _delete(AppUser user) async {
     final api = AuthProvider.of(context).api;
@@ -154,9 +166,26 @@ class _UsersScreenState extends State<UsersScreen> {
                           DataCell(Text(u.phone)),
                           DataCell(_roleChip(u.role)),
                           DataCell(
-                            IconButton(
-                              icon: const Icon(Icons.delete, color: AppTheme.danger),
-                              onPressed: () => _delete(u),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.edit,
+                                    color: AppTheme.secondary,
+                                  ),
+                                  tooltip: 'Edit user',
+                                  onPressed: () => _openEdit(u),
+                                ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.delete,
+                                    color: AppTheme.danger,
+                                  ),
+                                  tooltip: 'Delete user',
+                                  onPressed: () => _delete(u),
+                                ),
+                              ],
                             ),
                           ),
                         ]),
@@ -187,6 +216,124 @@ class _UsersScreenState extends State<UsersScreen> {
         role,
         style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
       ),
+    );
+  }
+}
+
+/// Dialog for editing a user's profile (`PUT /api/users/:id`).
+class UserEditDialog extends StatefulWidget {
+  const UserEditDialog({super.key, required this.user});
+  final AppUser user;
+
+  @override
+  State<UserEditDialog> createState() => _UserEditDialogState();
+}
+
+class _UserEditDialogState extends State<UserEditDialog> {
+  late final TextEditingController _name;
+  late final TextEditingController _email;
+  late final TextEditingController _phone;
+  late final TextEditingController _address;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.user.name);
+    _email = TextEditingController(text: widget.user.email);
+    _phone = TextEditingController(text: widget.user.phone);
+    _address = TextEditingController(text: widget.user.address);
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _email.dispose();
+    _phone.dispose();
+    _address.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _name.text.trim();
+    final email = _email.text.trim();
+    if (name.length < 2 || email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Name and email are required')),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      await AuthProvider.of(context).api.put('users/${widget.user.id}', body: {
+        'name': name,
+        'email': email,
+        'phone': _phone.text.trim(),
+        'address': _address.text.trim(),
+      });
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit User'),
+      content: SizedBox(
+        width: 440,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _name,
+                decoration: const InputDecoration(labelText: 'Name'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _email,
+                decoration: const InputDecoration(labelText: 'Email'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _phone,
+                decoration: const InputDecoration(labelText: 'Phone'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _address,
+                decoration: const InputDecoration(labelText: 'Address'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text('Save'),
+        ),
+      ],
     );
   }
 }

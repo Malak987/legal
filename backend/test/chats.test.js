@@ -1,365 +1,177 @@
 /**
- * Regression tests for `GET /api/chats`.
+ * Regression tests for the current Supabase-backed GET /api/chats contract.
  *
- * They cover the two failures that made the admin panel's Chats screen break:
- *
- *  1. `where('participants','array-contains',x).orderBy('updatedAt','desc')`
- *     needs a Firestore COMPOSITE index. It is not deployed, so Firestore
- *     answered `9 FAILED_PRECONDITION` and the panel rendered a 500.
- *  2. The list was filtered by the caller's own uid, and an administrator is a
- *     participant in nobody's conversation, so the screen was always empty.
- *
- * No Firebase project, credentials or network access are required: the tests
- * copy `src/` into a temporary directory and replace `config/firebase.js` with
- * a test double, then mount the REAL routes and the REAL auth/error middleware.
- *
- * Run with:  node --test test/
+ * The shared harness installs fixture-backed Auth, public-read, and RPC seams
+ * while leaving the real routes, authorization middleware, and error handler in
+ * place. No hosted Firebase or Supabase project is contacted.
  */
 
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { after, before, describe, it } from 'node:test';
+import { after, before, beforeEach, describe, it } from 'node:test';
 
-import express from 'express';
+import {
+  get,
+  queries,
+  reset,
+  setFailure,
+  signIn,
+  startApp,
+  stopApp,
+  tokenFor,
+  users,
+} from './helpers/harness.js';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const BACKEND_ROOT = path.resolve(HERE, '..');
-const SRC_DIR = path.join(BACKEND_ROOT, 'src');
+const BASE = '/api/chats';
 
-/**
- * Test double for `src/config/firebase.js`.
- *
- * It is written into the temporary copy of `src/`, so every module under test
- * (`routes/chats.js`, `middleware/auth.js`, …) picks it up through the normal
- * ESM resolution walk-up to `<tmp>/node_modules`.
- */
-const FIREBASE_STUB = `
-const fx = () => (globalThis.__chatsFixture ??= {
-  mode: 'ok', chats: [], calls: [], user: null, error: null,
-});
+before(startApp);
+after(stopApp);
 
-function snap(docs) {
-  return Promise.resolve({ empty: docs.length === 0, docs });
-}
+const at = (millis) => ({ toMillis: () => millis });
 
-const db = {
-  collection(name) {
-    const entry = { collection: name, where: [], orderBy: [], limit: null };
-    fx().calls.push(entry);
-
-    const chain = {
-      where(field, op, value) { entry.where.push({ field, op, value }); return chain; },
-      orderBy(field, dir) { entry.orderBy.push({ field, dir }); return chain; },
-      limit(n) { entry.limit = n; return chain; },
-      get() {
-        if (fx().mode === 'fail') return Promise.reject(fx().error);
-        let docs = fx().chats.map((c) => ({ ...c }));
-        for (const w of entry.where) {
-          if (w.op === 'array-contains') {
-            docs = docs.filter(
-              (d) => Array.isArray(d[w.field]) && d[w.field].includes(w.value),
-            );
-          }
-        }
-        return snap(docs.map((d) => ({ id: d.id, data: () => d })));
-      },
-      doc(id) {
-        return {
-          get: () => snap([]),
-          collection: (sub) => db.collection(name + '/' + id + '/' + sub),
-          update: () => Promise.resolve(),
-          delete: () => Promise.resolve(),
-        };
-      },
-      add: () => Promise.resolve({ get: () => snap([]) }),
-    };
-    return chain;
-  },
-  batch() {
-    return { set() {}, delete() {}, commit: () => Promise.resolve() };
-  },
-};
-
-export function initializeFirebase() { return { app: {}, firestore: db, auth: {} }; }
-export function getDb() { return db; }
-export function getAuth() {
+function seed() {
   return {
-    verifyIdToken: async (token) => {
-      const user = fx().user;
-      if (!user || token !== user.token) {
-        throw new Error('Decoding Firebase ID token failed.');
-      }
-      return { uid: user.uid, email: user.email, role: user.role };
-    },
-  };
-}
-export const admin = {
-  firestore: { FieldValue: { serverTimestamp: () => 'SERVER_TS' } },
-};
-`;
-
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
-/** Stand-in for a Firestore `Timestamp`. */
-const ts = (millis) => ({ toMillis: () => millis });
-
-const ADMIN = {
-  uid: 'admin-uid',
-  email: 'admin@legalapp.com',
-  role: 'admin',
-  token: 'ADMIN_TOKEN',
-};
-
-const CLIENT_001 = {
-  uid: 'client-001',
-  email: 'client001@example.com',
-  role: 'client',
-  token: 'CLIENT_001_TOKEN',
-};
-
-const CHATS = [
-  {
-    id: 'chat-1',
-    participants: ['client-001', 'lawyer-001'],
-    participantNames: { 'client-001': 'James Powell', 'lawyer-001': 'Maddy Lin' },
-    lastMessage: 'oldest',
-    updatedAt: ts(1000),
-  },
-  {
-    id: 'chat-2',
-    participants: ['client-002', 'lawyer-002'],
-    participantNames: { 'client-002': 'Sara Ali', 'lawyer-002': 'Omar Adel' },
-    lastMessage: 'newest',
-    updatedAt: ts(3000),
-  },
-  {
-    id: 'chat-3',
-    participants: ['client-003', 'lawyer-001'],
-    participantNames: { 'client-003': 'Nour Hassan', 'lawyer-001': 'Maddy Lin' },
-    lastMessage: 'middle',
-    updatedAt: ts(2000),
-  },
-  {
-    // No `updatedAt`: must survive the in-memory sort instead of being dropped.
-    id: 'chat-4',
-    participants: ['client-004', 'lawyer-003'],
-    participantNames: { 'client-004': 'Kareem Fouad', 'lawyer-003': 'Lina Samir' },
-    lastMessage: 'no timestamp',
-  },
-];
-
-const FAILED_PRECONDITION = Object.assign(
-  new Error(
-    '9 FAILED_PRECONDITION: The query requires an index. You can create it here: ' +
-      'https://console.firebase.google.com/v1/r/project/legal-102026/firestore/indexes',
-  ),
-  { code: 9 },
-);
-
-let tmpDir;
-let server;
-let baseUrl;
-
-before(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'legal-chats-test-'));
-  fs.cpSync(SRC_DIR, path.join(tmpDir, 'src'), { recursive: true });
-  fs.symlinkSync(
-    path.join(BACKEND_ROOT, 'node_modules'),
-    path.join(tmpDir, 'node_modules'),
-    'dir',
-  );
-  fs.writeFileSync(
-    path.join(tmpDir, 'src', 'config', 'firebase.js'),
-    FIREBASE_STUB,
-  );
-
-  const apiRoutes = (
-    await import(pathToFileURL(path.join(tmpDir, 'src', 'routes', 'index.js')).href)
-  ).default;
-  const { notFoundHandler, errorHandler } = await import(
-    pathToFileURL(path.join(tmpDir, 'src', 'middleware', 'errorHandler.js')).href
-  );
-
-  const app = express();
-  app.use(express.json());
-  app.use('/api', apiRoutes);
-  app.use(notFoundHandler);
-  app.use(errorHandler);
-
-  server = app.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  baseUrl = `http://127.0.0.1:${server.address().port}`;
-});
-
-after(() => {
-  server?.close();
-  if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-function setFixture(overrides = {}) {
-  globalThis.__chatsFixture = {
-    mode: 'ok',
-    chats: CHATS.map((c) => ({ ...c })),
-    calls: [],
-    user: null,
-    error: null,
-    ...overrides,
+    users: users('admin1', 'client1', 'client2'),
+    chats: [
+      {
+        id: 'chat-1',
+        participants: ['client-1', 'lawyer-1'],
+        participantNames: { 'client-1': 'Client One', 'lawyer-1': 'Lawyer One' },
+        lastMessage: 'oldest',
+        updatedAt: at(1_000),
+      },
+      {
+        id: 'chat-2',
+        participants: ['client-2', 'lawyer-2'],
+        participantNames: { 'client-2': 'Client Two', 'lawyer-2': 'Lawyer Two' },
+        lastMessage: 'newest',
+        updatedAt: at(3_000),
+      },
+      {
+        id: 'chat-3',
+        participants: ['client-2', 'lawyer-1'],
+        participantNames: { 'client-2': 'Client Two', 'lawyer-1': 'Lawyer One' },
+        lastMessage: 'middle',
+        updatedAt: at(2_000),
+      },
+      {
+        // No updatedAt: the item must remain present and sort last.
+        id: 'chat-4',
+        participants: ['client-2', 'lawyer-3'],
+        participantNames: {},
+        lastMessage: 'no timestamp',
+      },
+    ],
   };
 }
 
-/** Every query the route issued against the `chats` collection. */
-function chatQueries() {
-  return (globalThis.__chatsFixture?.calls ?? []).filter(
-    (c) => c.collection === 'chats',
-  );
-}
+const chatQueries = () => queries().filter((query) => query.collection === 'chats');
 
-async function getChats({ token, query = '' } = {}) {
-  const headers = token ? { Authorization: `Bearer ${token}` } : {};
-  const res = await fetch(`${baseUrl}/api/chats${query}`, { headers });
-  return { status: res.status, body: await res.json() };
-}
+describe('GET /api/chats: authentication is preserved', () => {
+  beforeEach(() => reset({ collections: seed() }));
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+  it('rejects a request without a bearer token before reading chats', async () => {
+    const response = await get(BASE);
 
-describe('GET /api/chats — authorization is preserved', () => {
-  it('rejects a request without an Authorization header with 401', async () => {
-    setFixture();
-    const { status, body } = await getChats();
-
-    assert.equal(status, 401);
-    assert.equal(body.success, false);
-    assert.match(body.message, /Missing Authorization header/);
-    assert.equal(chatQueries().length, 0, 'must not touch Firestore');
+    assert.equal(response.status, 401);
+    assert.equal(response.body.success, false);
+    assert.match(response.body.message, /Missing Authorization header/);
+    assert.equal(chatQueries().length, 0);
   });
 
-  it('rejects an invalid/expired token with 401', async () => {
-    setFixture({ user: CLIENT_001 });
-    const { status, body } = await getChats({ token: 'NOT_A_VALID_TOKEN' });
+  it('rejects an invalid token before reading chats', async () => {
+    signIn('client1');
+    const response = await get(BASE, { token: 'not-a-valid-test-token' });
 
-    assert.equal(status, 401);
-    assert.equal(body.success, false);
-    assert.equal(chatQueries().length, 0, 'must not touch Firestore');
+    assert.equal(response.status, 401);
+    assert.equal(response.body.success, false);
+    assert.equal(chatQueries().length, 0);
   });
 });
 
-describe('GET /api/chats — administrator', () => {
-  it('lists every conversation, newest first, including ones with no timestamp', async () => {
-    setFixture({ user: ADMIN });
-    const { status, body } = await getChats({ token: ADMIN.token });
+describe('GET /api/chats: administrator', () => {
+  beforeEach(() => reset({ collections: seed() }));
 
-    assert.equal(status, 200);
-    assert.equal(body.success, true, 'envelope { success, message, data }');
-    assert.ok(Array.isArray(body.data), 'data must be a bare list for listDataOf()');
+  it('lists every conversation newest first and retains records without timestamps', async () => {
+    signIn('admin1');
+    const response = await get(BASE, { token: tokenFor('admin1') });
 
-    // chat-2 (3000) > chat-3 (2000) > chat-1 (1000) > chat-4 (no timestamp)
+    assert.equal(response.status, 200);
+    assert.equal(response.body.success, true);
     assert.deepEqual(
-      body.data.map((c) => c.id),
+      response.body.data.map((chat) => chat.id),
       ['chat-2', 'chat-3', 'chat-1', 'chat-4'],
     );
-    assert.equal(body.data.length, 4, 'no conversation may be dropped');
   });
 
-  it('does NOT filter by the admin uid (regression: admin saw an empty list)', async () => {
-    setFixture({ user: ADMIN });
-    await getChats({ token: ADMIN.token });
+  it('does not filter the administrator list by the administrator UID', async () => {
+    signIn('admin1');
+    await get(BASE, { token: tokenFor('admin1') });
 
-    const queries = chatQueries();
-    assert.equal(queries.length, 1, 'exactly one chats query');
-    assert.deepEqual(
-      queries[0].where,
-      [],
-      'an admin is a participant in no conversation, so the list must not be ' +
-        'filtered by their uid',
-    );
+    const [query] = chatQueries();
+    assert.ok(query);
+    assert.deepEqual(query.where, []);
   });
 
-  it('can still narrow the list with ?userId=', async () => {
-    setFixture({ user: ADMIN });
-    const { status, body } = await getChats({
-      token: ADMIN.token,
-      query: '?userId=client-001',
-    });
+  it('allows an administrator to narrow the list by participant', async () => {
+    signIn('admin1');
+    const response = await get(`${BASE}?userId=client-1`, { token: tokenFor('admin1') });
 
-    assert.equal(status, 200);
-    assert.deepEqual(body.data.map((c) => c.id), ['chat-1']);
-
-    const queries = chatQueries();
-    assert.deepEqual(queries[0].where, [
-      { field: 'participants', op: 'array-contains', value: 'client-001' },
-    ]);
-  });
-});
-
-describe('GET /api/chats — non-administrator', () => {
-  it('lists only the conversations the caller participates in', async () => {
-    setFixture({ user: CLIENT_001 });
-    const { status, body } = await getChats({ token: CLIENT_001.token });
-
-    assert.equal(status, 200);
-    assert.deepEqual(body.data.map((c) => c.id), ['chat-1']);
-
-    const queries = chatQueries();
-    assert.deepEqual(queries[0].where, [
-      { field: 'participants', op: 'array-contains', value: 'client-001' },
-    ]);
-  });
-
-  it('ignores ?userId= from a non-admin (cannot read other users chats)', async () => {
-    setFixture({ user: CLIENT_001 });
-    const { status, body } = await getChats({
-      token: CLIENT_001.token,
-      query: '?userId=client-002',
-    });
-
-    assert.equal(status, 200);
-    assert.deepEqual(
-      body.data.map((c) => c.id),
-      ['chat-1'],
-      'the caller must still only see their own conversations',
-    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.data.map((chat) => chat.id), ['chat-1']);
     assert.deepEqual(chatQueries()[0].where, [
-      { field: 'participants', op: 'array-contains', value: 'client-001' },
+      { field: 'participants', op: 'array-contains', value: 'client-1' },
     ]);
   });
 });
 
-describe('GET /api/chats — Firestore index strategy', () => {
-  it('never combines array-contains with orderBy (no composite index needed)', async () => {
-    for (const user of [ADMIN, CLIENT_001]) {
-      setFixture({ user });
-      await getChats({ token: user.token });
-      await getChats({ token: user.token, query: '?userId=client-002' });
+describe('GET /api/chats: non-administrator', () => {
+  beforeEach(() => reset({ collections: seed() }));
 
-      for (const q of chatQueries()) {
-        const hasArrayContains = q.where.some((w) => w.op === 'array-contains');
-        assert.ok(
-          !(hasArrayContains && q.orderBy.length > 0),
-          'array-contains + orderBy requires a composite index that is not deployed',
-        );
-        assert.equal(
-          q.orderBy.length,
-          0,
-          'ordering is applied in memory (see utils/firestore.js)',
-        );
+  it('lists only conversations the caller participates in', async () => {
+    signIn('client1');
+    const response = await get(BASE, { token: tokenFor('client1') });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.data.map((chat) => chat.id), ['chat-1']);
+    assert.deepEqual(chatQueries()[0].where, [
+      { field: 'participants', op: 'array-contains', value: 'client-1' },
+    ]);
+  });
+
+  it('ignores a caller-supplied userId that would expose another account', async () => {
+    signIn('client1');
+    const response = await get(`${BASE}?userId=client-2`, { token: tokenFor('client1') });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.data.map((chat) => chat.id), ['chat-1']);
+    assert.deepEqual(chatQueries()[0].where, [
+      { field: 'participants', op: 'array-contains', value: 'client-1' },
+    ]);
+  });
+});
+
+describe('GET /api/chats: query and error behavior', () => {
+  beforeEach(() => reset({ collections: seed() }));
+
+  it('filters on the caller/selected participant and sorts in memory', async () => {
+    for (const account of ['admin1', 'client1']) {
+      reset({ collections: seed() });
+      signIn(account);
+      await get(BASE, { token: tokenFor(account) });
+
+      for (const query of chatQueries()) {
+        assert.equal(query.orderBy.length, 0, 'the adapter route sorts after the scoped read');
       }
     }
   });
 
-  it('surfaces a Firestore failure as 500 instead of masking it', async () => {
-    setFixture({ user: ADMIN, mode: 'fail', error: FAILED_PRECONDITION });
-    const { status, body } = await getChats({ token: ADMIN.token });
+  it('surfaces a database read failure as 500 instead of masking it', async () => {
+    signIn('admin1');
+    setFailure(new Error('Simulated PostgREST read failure'));
+    const response = await get(BASE, { token: tokenFor('admin1') });
 
-    assert.equal(status, 500, 'database errors must not be swallowed');
-    assert.equal(body.success, false);
-    assert.match(body.message, /FAILED_PRECONDITION/);
+    assert.equal(response.status, 500);
+    assert.equal(response.body.success, false);
+    assert.match(response.body.message, /Simulated PostgREST read failure/);
   });
 });

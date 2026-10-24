@@ -1,11 +1,12 @@
-import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
- import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
+
 import '../../config/ai_config.dart';
+import '../../services/api_client.dart';
+import '../../state/session_scope.dart';
 import 'package:legalserviceapp/widgets/customapp_bar.dart';
 import 'package:legalserviceapp/constants/colors.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
@@ -26,165 +27,159 @@ class DocumentReviewAI extends StatefulWidget {
 }
 
 class DocumentReviewAIState extends State<DocumentReviewAI> {
-  // State variables (Unchanged)
-  String extractedText = "";
+  String extractedText = '';
   bool isLoading = false;
-  String aiFeedback = "";
-  String fileName = "";
-  double _uploadProgress = 0.0;
+  String aiFeedback = '';
+  String fileName = '';
+  List<int>? _selectedPdfBytes;
 
-  // File handling methods (Unchanged)
   Future<void> pickFile() async {
+    if (isLoading) return;
+    setState(() => isLoading = true);
     try {
-      PlatformFile? result = await FilePicker.pickFile(
+      final selection = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['pdf', 'txt', 'docx'],
+        allowedExtensions: const ['pdf'],
+        withData: true,
       );
+      if (selection == null || selection.files.isEmpty) return;
 
-      if (result != null && result.path != null) {
-        setState(() {
-          fileName = result.name;
-          _uploadProgress = 0.0;
-          // Clear previous results when a new file is selected
-          extractedText = "";
-          aiFeedback = "";
-          isLoading = true; // Show loading immediately for feedback
-        });
-
-        // Simulate upload progress (Visual feedback)
-        for (int i = 0; i <= 100; i += 10) {
-          await Future.delayed(const Duration(milliseconds: 30)); // Slightly faster
-          setState(() => _uploadProgress = i / 100);
-        }
-
-        File file = File(result.path!);
-        if (file.path.toLowerCase().endsWith('.pdf')) {
-          await extractTextFromPDF(file);
-        } else {
-          // Assuming other supported types are text-based
-          extractedText = await file.readAsString();
-          setState(() {}); // Update UI with extracted text
-        }
-
-      } else {
-        _showErrorSnackbar('File picking cancelled or failed.');
+      final picked = selection.files.single;
+      final bytes = picked.bytes ??
+          (picked.path == null ? null : await File(picked.path!).readAsBytes());
+      if (bytes == null || bytes.isEmpty || bytes.length > 10 * 1024 * 1024) {
+        throw const FormatException('Choose a non-empty PDF no larger than 10 MiB.');
       }
-    } catch (e) {
-      _showErrorSnackbar('Error picking file: ${e.toString()}');
+      if (bytes.length < 5 ||
+          bytes[0] != 0x25 ||
+          bytes[1] != 0x50 ||
+          bytes[2] != 0x44 ||
+          bytes[3] != 0x46 ||
+          bytes[4] != 0x2d) {
+        throw const FormatException('The selected file does not have a valid PDF header.');
+      }
+
+      var preview = '';
+      try {
+        final document = PdfDocument(inputBytes: bytes);
+        try {
+          preview = PdfTextExtractor(document).extractText().trim();
+        } finally {
+          document.dispose();
+        }
+      } catch (_) {
+        // Scanned or encrypted PDFs may not expose local text; the AI service
+        // still receives the original PDF if the user explicitly consents.
+      }
+      if (preview.isEmpty) {
+        preview = 'No selectable text was extracted on this device. The PDF can still be submitted for AI review.';
+      }
+      if (!mounted) return;
+      setState(() {
+        fileName = picked.name;
+        _selectedPdfBytes = bytes;
+        extractedText = preview;
+        aiFeedback = '';
+      });
+    } catch (error) {
+      _showErrorSnackbar('Could not read the selected PDF: $error');
     } finally {
-      // Ensure loading is false if pickFile finishes, unless extraction starts it again
-      if (!fileName.isNotEmpty || (fileName.isNotEmpty && extractedText.isNotEmpty)) {
-        setState(() => isLoading = false);
-      }
-      // Reset progress if needed after processing
-      if (_uploadProgress == 1.0) {
-        await Future.delayed(const Duration(milliseconds: 500)); // Keep progress bar visible briefly
-        setState(() => _uploadProgress = 0.0); // Hide progress bar
-      }
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
-  Future<void> extractTextFromPDF(File file) async {
-    // isLoading should already be true from pickFile
-    try {
-      final PdfDocument document = PdfDocument(inputBytes: await file.readAsBytes());
-      extractedText = PdfTextExtractor(document).extractText();
-      document.dispose();
-    } catch (e) {
-      _showErrorSnackbar('Failed to extract text from PDF: ${e.toString()}');
-      extractedText = ""; // Clear text on error
-    } finally {
-      setState(() => isLoading = false); // Stop loading after extraction attempt
-    }
+  Future<bool> _requestDocumentConsent() async {
+    var consented = false;
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Consent to AI document review'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'To review this PDF, it will be uploaded to private Supabase Storage and sent to the configured AI provider (Google Gemini). The server attempts to delete the temporary Storage copy after processing. Do not submit documents unless you are authorized to share them.',
+                  style: GoogleFonts.poppins(fontSize: 13, height: 1.45),
+                ),
+                const SizedBox(height: 12),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: consented,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: Text(
+                    'I consent to this external AI processing.',
+                    style: GoogleFonts.poppins(fontSize: 13),
+                  ),
+                  onChanged: (value) =>
+                      setDialogState(() => consented = value ?? false),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: consented
+                  ? () => Navigator.of(dialogContext).pop(true)
+                  : null,
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return result == true;
   }
 
-  // AI Analysis methods (Unchanged)
   Future<void> analyzeDocument() async {
-    if (extractedText.isEmpty) {
-      _showErrorSnackbar("No document text available to analyze.");
+    final pdfBytes = _selectedPdfBytes;
+    if (pdfBytes == null || pdfBytes.isEmpty) {
+      _showErrorSnackbar('Select a PDF before starting AI review.');
       return;
     }
-    setState(() => isLoading = true);
-    aiFeedback = ""; // Clear previous feedback
-    try {
-      aiFeedback = await fetchAIResponse(extractedText);
-    } catch (e) {
-      _showErrorSnackbar('AI analysis failed: ${e.toString()}');
-    } finally {
-      setState(() => isLoading = false);
-    }
-  }
+    if (!await _requestDocumentConsent() || !mounted) return;
 
-  Future<String> fetchAIResponse(String text) async {
-    // The key comes from --dart-define (see lib/config/ai_config.dart):
-    // it is not committed, and a missing key is reported instead of being
-    // sent to Google as an empty string.
-    if (!AiConfig.isConfigured) {
-      throw Exception(AiConfig.notConfiguredMessage);
-    }
-    final Uri url = AiConfig.generateContentUri();
-
-    final requestBody = jsonEncode({
-      "contents": [{
-        "parts": [{
-          "text": "Analyze the following document professionally. Identify potential risks, ambiguities, or areas needing clarification. Suggest specific edits or clauses for risk mitigation. Structure your response clearly in Markdown format with these sections:\n\n"
-              "## Executive Summary:\n[Provide a brief overview of the document's purpose and key findings.]\n\n"
-              "## Key Risks & Concerns:\n[Use bullet points to list identified risks, vague language, or potential issues.]\n\n"
-              "## Recommended Edits & Mitigations:\n[Provide specific, actionable suggestions for changes or additions to the text. Reference original text snippets if helpful.]\n\n"
-              "## Overall Assessment:\n[Give a concluding remark on the document's readiness or areas requiring significant attention.]\n\n"
-              "---\n**Document Text:**\n$text" // Ensure clear separation
-        }]
-      }],
-      // Add safety settings and generation config for better control (Optional but Recommended)
-      "safetySettings": [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
-      ],
-      "generationConfig": {
-        "temperature": 0.7, // Adjust for creativity vs. predictability
-        "topK": 1,
-        "topP": 1,
-        "maxOutputTokens": 2048, // Adjust based on expected response length
-      }
+    final repository = SessionScope.read(context).repository;
+    setState(() {
+      isLoading = true;
+      aiFeedback = '';
     });
 
+    String? objectPath;
+    var cleanupRequired = false;
     try {
-      final response = await http.post(
-        url,
-        headers: AiConfig.headers,
-        body: requestBody,
-      ).timeout(const Duration(seconds: 90)); // Add timeout
-
-      if (response.statusCode == 200) {
-        final jsonResponse = jsonDecode(response.body);
-        // Safer access to nested JSON structure
-        final text = jsonResponse?["candidates"]?[0]?["content"]?["parts"]?[0]?["text"];
-        if (text != null) {
-          return text;
-        } else {
-          // Check for blocked content due to safety settings
-          final blockReason = jsonResponse?["promptFeedback"]?["blockReason"];
-          if (blockReason != null) {
-            return "AI response blocked due to safety settings: $blockReason. Please review the document content.";
-          }
-          return "AI returned an empty response. The document might be too short or lack analyzable content.";
-        }
-      } else {
-        // Try to parse error message from response body
-        String errorBody = response.body;
+      objectPath = await repository.uploadLegalDocumentPdf(pdfBytes);
+      cleanupRequired = true;
+      final result = await repository.analyzeLegalDocument(objectPath);
+      aiFeedback = result['analysis'] as String;
+      // The Edge Function already attempts deletion before returning. Retry
+      // from the client only when it reports cleanup trouble.
+      cleanupRequired = result['cleanupRequired'] == true;
+    } catch (error) {
+      _showErrorSnackbar('AI analysis failed: $error');
+    } finally {
+      if (objectPath != null && cleanupRequired) {
         try {
-          final errorJson = jsonDecode(errorBody);
-          errorBody = errorJson['error']?['message'] ?? errorBody;
-        } catch (_) { /* Ignore if body is not JSON */ }
-        throw Exception("API Error (${response.statusCode}): $errorBody");
+          await repository.deleteTemporaryLegalDocument(objectPath);
+          cleanupRequired = false;
+        } on ApiException catch (error) {
+          cleanupRequired = !error.isNotFound;
+        } catch (_) {
+          cleanupRequired = true;
+        }
       }
-    } on TimeoutException {
-      throw Exception("API request timed out. Please try again.");
-    } catch (e) {
-      // Rethrow other exceptions for generic handling
-      rethrow;
+      if (mounted) {
+        setState(() => isLoading = false);
+        if (cleanupRequired) {
+          _showErrorSnackbar('AI review may have completed, but temporary document cleanup could not be confirmed. Please contact support.');
+        }
+      }
     }
   }
 
@@ -256,7 +251,7 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
             ),
             const SizedBox(height: defaultPadding / 2),
             Text(
-              "Supports PDF, TXT, DOCX formats",
+              "Private PDF review · up to 10 MiB",
               style: GoogleFonts.poppins(
                 fontSize: 14,
                 color: Colors.grey[600],
@@ -264,25 +259,10 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
             ),
             const SizedBox(height: defaultPadding * 1.5),
 
-            // --- File Name and Progress Section ---
-            // Show file name OR upload button
-            if (fileName.isEmpty && _uploadProgress == 0.0)
+            if (_selectedPdfBytes == null)
               _buildSelectFileButton()
-            else // Show file info and progress
-              _buildFileInfoAndProgress(),
-
-            // --- Progress Bar --- (Now inside the File Info section if needed)
-            // Kept separate for clarity during upload simulation
-            if (_uploadProgress > 0 && _uploadProgress < 1) ...[
-              const SizedBox(height: defaultPadding),
-              LinearProgressIndicator(
-                value: _uploadProgress,
-                backgroundColor: Colors.grey[200],
-                color: primaryColor, // Use primary color
-                minHeight: 6, // Slightly thinner
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ]
+            else
+              _buildFileInfo(),
           ],
         ),
       ),
@@ -312,7 +292,7 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
     );
   }
 
-  Widget _buildFileInfoAndProgress() {
+  Widget _buildFileInfo() {
     return Column(
       children: [
         ListTile(
@@ -324,7 +304,7 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
             maxLines: 1,
           ),
           subtitle: Text(
-            _uploadProgress == 1.0 ? "Ready for analysis" : "Uploading...",
+            "Ready; private upload begins only after consent.",
             style: GoogleFonts.poppins(color: Colors.grey[600]),
           ),
           // Add a trailing button to change the file
@@ -335,8 +315,6 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
           ),
           contentPadding: EdgeInsets.zero, // Remove default padding
         ),
-        // Optionally, show the progress bar integrated here
-        // if (_uploadProgress > 0 && _uploadProgress < 1) ... [ ... Progress Indicator ... ]
       ],
     );
   }
@@ -433,7 +411,7 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
 
   Widget _buildAnalysisTab() {
     // Show loading indicator specifically when AI analysis is running
-    if (isLoading && aiFeedback.isEmpty && extractedText.isNotEmpty) {
+    if (isLoading && aiFeedback.isEmpty && _selectedPdfBytes != null) {
       return const Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -456,21 +434,33 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
             ? Padding(
           padding: const EdgeInsets.all(defaultPadding),
           child: SingleChildScrollView(
-            child: SelectableText( // Make feedback selectable
-              aiFeedback,
-              // Consider using flutter_markdown package here for proper rendering
-              style: GoogleFonts.poppins(fontSize: 15, height: 1.5, color: Colors.black87),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  AiConfig.advisoryNotice,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Colors.deepOrange,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SelectableText(
+                  aiFeedback,
+                  style: GoogleFonts.poppins(fontSize: 15, height: 1.5, color: Colors.black87),
+                ),
+              ],
             ),
           ),
         )
             : _buildEmptyState(
           icon: Icons.auto_awesome_motion_outlined, // Engaging icon
-          message: extractedText.isEmpty
-              ? "Upload and extract text first."
+          message: _selectedPdfBytes == null
+              ? "Upload a PDF first."
               : "Run analysis to see AI feedback.",
           buttonText: "Analyze Document",
-          // Only enable button if text is ready and not loading
-          onButtonPressed: (extractedText.isNotEmpty && !isLoading) ? analyzeDocument : null,
+          onButtonPressed: (_selectedPdfBytes != null && !isLoading) ? analyzeDocument : null,
         )
     );
   }
@@ -528,8 +518,7 @@ class DocumentReviewAIState extends State<DocumentReviewAI> {
   }
 
   Widget? _buildFloatingActionButton() {
-    // Show FAB only if text is ready AND feedback is not yet generated AND not currently loading
-    if (extractedText.isNotEmpty && aiFeedback.isEmpty && !isLoading) {
+    if (_selectedPdfBytes != null && aiFeedback.isEmpty && !isLoading) {
       return FloatingActionButton.extended(
         onPressed: analyzeDocument,
         backgroundColor: accentColor, // Use accent color

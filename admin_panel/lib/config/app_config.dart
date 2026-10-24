@@ -1,23 +1,37 @@
-/// Central configuration for the admin panel.
+/// Compile-time configuration for the admin panel.
 class AppConfig {
-  /// Base URL of the deployed Firebase backend API (Firebase Hosting rewrite ->
-  /// Cloud Functions Gen 2 `api` in `us-central1`).
-  ///
-  /// Production builds target `https://legal-102026.web.app/api` out of the
-  /// box so neither the deployed Admin Web Panel nor local browser sessions
-  /// depend on a server running on a developer laptop.
-  ///
-  /// For local Firebase Emulator development, pass `--dart-define` at run time:
-  ///
-  ///     flutter run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1:5000/api
-  static const String apiBaseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'https://legal-102026.web.app/api',
+  /// Optional URL for still-legacy Express endpoints, now backed by Supabase.
+  /// No Firebase Hosting endpoint is used as a silent fallback.
+  static const String apiBaseUrl = String.fromEnvironment('API_BASE_URL');
+
+  static const String supabaseProjectRef = String.fromEnvironment(
+    'SUPABASE_PROJECT_REF',
+    defaultValue: 'qqfzbecwhewswkyxgebu',
   );
 
-  /// Brand colors taken from the main Legal Services app.
-  static const int primaryColorValue = 0xFF002366; // buttonColor (navy)
-  static const int secondaryColorValue = 0xFF3498DB; // blue
-  static const int accentColorValue = 0xFFEE2D7A; // pink (tabColor)
-  static const int backgroundColorValue = 0xFFECF0F1; // light gray
+  static const String supabaseUrl = String.fromEnvironment(
+    'SUPABASE_URL',
+    defaultValue: 'https://qqfzbecwhewswkyxgebu.supabase.co',
+  );
+
+  /// Public anon/publishable key only. Never embed service-role/secret keys.
+  static const String supabaseAnonKey = String.fromEnvironment(
+    'SUPABASE_ANON_KEY',
+    defaultValue: '',
+  );
+
+  /// Redirect URI for email confirmation and password-recovery links. It must
+  /// be explicitly allow-listed in the Supabase Auth settings.
+  static const String authRedirectUrl = String.fromEnvironment(
+    'SUPABASE_AUTH_REDIRECT_URL',
+    defaultValue: '',
+  );
+
+  static bool get useSupabase =>
+      supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
+
+  static const int primaryColorValue = 0xFF002366;
+  static const int secondaryColorValue = 0xFF3498DB;
+  static const int accentColorValue = 0xFFEE2D7A;
+  static const int backgroundColorValue = 0xFFECF0F1;
 }

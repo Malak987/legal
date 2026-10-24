@@ -75,6 +75,21 @@ jobs:
           publish "$RUNNER_TEMP/backend-unit.log" "backend npm test"
           publish "$RUNNER_TEMP/backend-emulator.log" "backend firebase emulators e2e"
 
+  supabase-edge:
+    name: Supabase Edge Function (Deno type check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check authenticated AI Edge Function
+        run: deno check supabase/functions/ai-assistant/index.ts
+
   admin-panel:
     name: Admin panel (analyze + test + web build)
     runs-on: ubuntu-latest
@@ -108,9 +123,14 @@ jobs:
 
       - name: Build production web bundle (Firebase Hosting target)
         shell: bash
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+          SUPABASE_AUTH_REDIRECT_URL: ${{ vars.SUPABASE_AUTH_REDIRECT_URL }}
         run: |
           set -o pipefail
-          flutter build web 2>&1 | tee "$RUNNER_TEMP/build-web.log"
+          node scripts/build_web.mjs 2>&1 | tee "$RUNNER_TEMP/build-web.log"
 
       - name: Publish failure details as annotations
         if: failure()
@@ -197,7 +217,7 @@ jobs:
             printf '%s\n' "$body"
           }
           publish "$RUNNER_TEMP/analyze.log" "flutter analyze (legal_app)" \
-            '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
+            '^[[:space:]]*(error|warning)[[:space:]]*[•-]'
           publish "$RUNNER_TEMP/test.log" "flutter test (legal_app)" \
             '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'
           publish_block "$RUNNER_TEMP/test.log" "flutter test (legal_app) detail"

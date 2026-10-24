@@ -2,13 +2,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:legal_admin/config/app_config.dart';
 
 void main() {
-  test('AppConfig.apiBaseUrl defaults to deployed Firebase HTTPS endpoint', () {
-    final uri = Uri.parse(AppConfig.apiBaseUrl);
-    expect(AppConfig.apiBaseUrl, 'https://legal-102026.web.app/api');
+  test('unmigrated Express API has no Firebase or localhost fallback', () {
+    expect(AppConfig.apiBaseUrl, isEmpty);
+  });
+
+  test('Supabase URL is the connected project while credentials remain external', () {
+    final uri = Uri.parse(AppConfig.supabaseUrl);
+    expect(AppConfig.supabaseProjectRef, 'qqfzbecwhewswkyxgebu');
+    expect(AppConfig.supabaseUrl, 'https://qqfzbecwhewswkyxgebu.supabase.co');
     expect(uri.scheme, 'https');
-    expect(uri.host, 'legal-102026.web.app');
-    expect(uri.path, '/api');
-    expect(AppConfig.apiBaseUrl.contains('localhost'), isFalse);
-    expect(AppConfig.apiBaseUrl.contains('127.0.0.1'), isFalse);
+    expect(uri.host, 'qqfzbecwhewswkyxgebu.supabase.co');
+    expect(AppConfig.supabaseAnonKey, isEmpty);
+    expect(AppConfig.authRedirectUrl, isEmpty);
+    expect(AppConfig.useSupabase, isFalse);
   });
 }

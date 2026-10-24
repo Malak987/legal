@@ -109,7 +109,13 @@ class _CasesScreenState extends State<CasesScreen> {
                   },
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: 'Refresh cases',
+                onPressed: _reload,
+                icon: const Icon(Icons.refresh),
+              ),
+              const SizedBox(width: 8),
               ElevatedButton.icon(
                 onPressed: () => _openForm(),
                 icon: const Icon(Icons.add),
@@ -137,13 +143,21 @@ class _CasesScreenState extends State<CasesScreen> {
                 itemCount: cases.length,
                 itemBuilder: (context, i) {
                   final c = cases[i];
+                  final category = c.categoryName.trim().isNotEmpty
+                      ? c.categoryName.trim()
+                      : c.caseType.trim();
+                  final details = <String>[
+                    if (c.clientName.trim().isNotEmpty) c.clientName.trim(),
+                    if (category.isNotEmpty) category,
+                    if (c.lawyerName.trim().isNotEmpty)
+                      'Lawyer: ${c.lawyerName.trim()}',
+                    if (c.dueDate.trim().isNotEmpty) 'Due ${c.dueDate.trim()}',
+                  ].join('  •  ');
                   return Card(
                     child: ListTile(
                       title: Text(c.title,
                           style: const TextStyle(fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        '${c.clientName}  •  ${c.caseType}  •  Due ${c.dueDate}',
-                      ),
+                      subtitle: Text(details.isEmpty ? 'No case details' : details),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -204,6 +218,16 @@ class _CaseDialogState extends State<CaseDialog> {
   /// Inline validation message shown when a create is attempted without a
   /// client.
   String? _clientError;
+  bool _lookupsStarted = false;
+  bool _categoriesLoading = true;
+  bool _lawyersLoading = false;
+  bool _assignmentTouched = false;
+  List<LegalCategory> _categories = const <LegalCategory>[];
+  List<Lawyer> _categoryLawyers = const <Lawyer>[];
+  String? _lookupError;
+  String? _assignmentError;
+  String? _selectedCategoryId;
+  String? _selectedLawyerId;
 
   @override
   void initState() {
@@ -216,6 +240,8 @@ class _CaseDialogState extends State<CaseDialog> {
     _desc = TextEditingController(text: c?.description ?? '');
     _priority = c?.priority ?? 'Medium';
     _status = c?.status ?? 'Open';
+    _selectedCategoryId = c?.categoryId.isNotEmpty == true ? c!.categoryId : null;
+    _selectedLawyerId = c?.lawyerId.isNotEmpty == true ? c!.lawyerId : null;
 
     // Editing: resolve the stored owner, so that a legacy record owned by an
     // administrator (or by nobody) is visible rather than becoming a silent
@@ -227,6 +253,96 @@ class _CaseDialogState extends State<CaseDialog> {
         if (mounted) _resolveOwner(c.userId);
       });
     }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_lookupsStarted) return;
+    _lookupsStarted = true;
+    _loadCategories();
+  }
+
+  Future<void> _loadCategories() async {
+    setState(() {
+      _categoriesLoading = true;
+      _lookupError = null;
+    });
+    try {
+      final response = await AuthProvider.of(context).api.get('categories', query: {
+        'page': '1',
+        'limit': '$kMaxPageSize',
+      });
+      final categories = itemsOf(response)
+          .map(LegalCategory.fromJson)
+          .where((category) => category.id.isNotEmpty && category.name.isNotEmpty)
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() {
+        _categories = categories;
+        _categoriesLoading = false;
+      });
+      final selected = _selectedCategoryId;
+      if (selected != null) await _loadLawyers(selected);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _categoriesLoading = false;
+        _lookupError = '$error';
+      });
+    }
+  }
+
+  Future<void> _loadLawyers(String categoryId) async {
+    setState(() {
+      _lawyersLoading = true;
+      _lookupError = null;
+      _categoryLawyers = const <Lawyer>[];
+    });
+    try {
+      final response = await AuthProvider.of(context).api.get('lawyers', query: {
+        'page': '1',
+        'limit': '$kMaxPageSize',
+        'categoryId': categoryId,
+      });
+      final lawyers = itemsOf(response)
+          .map(Lawyer.fromJson)
+          .where((lawyer) => lawyer.id.isNotEmpty)
+          .toList(growable: false);
+      if (!mounted || _selectedCategoryId != categoryId) return;
+      setState(() {
+        _categoryLawyers = lawyers;
+        _lawyersLoading = false;
+      });
+    } catch (error) {
+      if (!mounted || _selectedCategoryId != categoryId) return;
+      setState(() {
+        _lawyersLoading = false;
+        _lookupError = '$error';
+      });
+    }
+  }
+
+  void _onCategoryChanged(String? categoryId) {
+    final selected = categoryId == null || categoryId.isEmpty ? null : categoryId;
+    setState(() {
+      _selectedCategoryId = selected;
+      _selectedLawyerId = null;
+      _assignmentTouched = true;
+      _assignmentError = null;
+      _lookupError = null;
+      _categoryLawyers = const <Lawyer>[];
+      _lawyersLoading = selected != null;
+    });
+    if (selected != null) _loadLawyers(selected);
+  }
+
+  void _onLawyerChanged(String? lawyerId) {
+    setState(() {
+      _selectedLawyerId = lawyerId;
+      _assignmentTouched = true;
+      _assignmentError = null;
+    });
   }
 
   /// Looks up the case's stored owner and preselects it only when the account
@@ -319,9 +435,19 @@ class _CaseDialogState extends State<CaseDialog> {
       return;
     }
 
+    if ((creating || _assignmentTouched) &&
+        (_selectedCategoryId == null || _selectedLawyerId == null)) {
+      setState(() => _assignmentError = 'Select both a category and a lawyer.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select both a category and a lawyer')),
+      );
+      return;
+    }
+
     setState(() {
       _saving = true;
       _clientError = null;
+      _assignmentError = null;
     });
 
     // `clientName` stays the display/legacy field; `userId` is the owner.
@@ -337,6 +463,11 @@ class _CaseDialogState extends State<CaseDialog> {
       'priority': _priority,
       'status': _status,
     };
+
+    if (creating || _assignmentTouched) {
+      body['categoryId'] = _selectedCategoryId ?? '';
+      body['lawyerId'] = _selectedLawyerId ?? '';
+    }
 
     // Sent only for an explicit selection. On edit the key is omitted unless
     // the administrator picked somebody, and `PUT` merges only the fields it
@@ -430,7 +561,103 @@ class _CaseDialogState extends State<CaseDialog> {
               const SizedBox(height: 12),
               TextField(controller: _client, decoration: const InputDecoration(labelText: 'Client name')),
               const SizedBox(height: 12),
-              TextField(controller: _type, decoration: const InputDecoration(labelText: 'Case type')),
+              if (widget.item != null && widget.item!.categoryId.isEmpty) ...[
+                TextField(
+                  controller: _type,
+                  decoration: const InputDecoration(
+                    labelText: 'Legacy case type (uncategorized record)',
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (_categoriesLoading)
+                const LinearProgressIndicator()
+              else if (_lookupError != null && _categories.isEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _loadCategories,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Could not load categories. Retry'),
+                  ),
+                )
+              else if (_categories.isEmpty)
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('No legal categories exist yet. Add a category before creating assigned cases.'),
+                )
+              else
+                DropdownButtonFormField<String>(
+                  initialValue: _categories.any((item) => item.id == _selectedCategoryId)
+                      ? _selectedCategoryId
+                      : '',
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Legal category'),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: '',
+                      child: Text('Select a legal category'),
+                    ),
+                    ..._categories.map(
+                      (category) => DropdownMenuItem<String>(
+                        value: category.id,
+                        child: Text(category.name),
+                      ),
+                    ),
+                  ],
+                  onChanged: _onCategoryChanged,
+                ),
+              if (_selectedCategoryId != null) ...[
+                const SizedBox(height: 12),
+                if (_lawyersLoading)
+                  const LinearProgressIndicator()
+                else if (_lookupError != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => _loadLawyers(_selectedCategoryId!),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Could not load lawyers. Retry'),
+                    ),
+                  )
+                else if (_categoryLawyers.isEmpty)
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('No lawyers are assigned to this category yet.'),
+                  )
+                else
+                  DropdownButtonFormField<String>(
+                    initialValue: _categoryLawyers.any((lawyer) => lawyer.id == _selectedLawyerId)
+                        ? _selectedLawyerId
+                        : '',
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Assigned lawyer'),
+                    items: [
+                      const DropdownMenuItem<String>(
+                        value: '',
+                        child: Text('Select a lawyer'),
+                      ),
+                      ..._categoryLawyers.map(
+                        (lawyer) => DropdownMenuItem<String>(
+                          value: lawyer.id,
+                          child: Text(lawyer.name),
+                        ),
+                      ),
+                    ],
+                    onChanged: _onLawyerChanged,
+                  ),
+              ],
+              if (_assignmentError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _assignmentError!,
+                      style: const TextStyle(fontSize: 12, color: AppTheme.danger),
+                    ),
+                  ),
+                ),
               const SizedBox(height: 12),
               TextField(controller: _due, decoration: const InputDecoration(labelText: 'Due date')),
               const SizedBox(height: 12),

@@ -3,6 +3,10 @@ import 'package:flutter/material.dart';
 import '../../commonwidgets/home_widget.dart';
 import '../../commonwidgets/product_card.dart';
 import '../../constants/colors.dart';
+import '../../models/legal_category.dart';
+import '../../models/paginated_result.dart';
+import '../../services/api_client.dart';
+import '../../services/app_repository.dart';
 import '../../state/session_scope.dart';
 
 import '../../commonwidgets/caregivercategories.dart';
@@ -19,8 +23,19 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  late Future<List<Product>> _future;
+  late Future<PaginatedResult<Product>> _future;
+  final List<Product> _additionalResults = <Product>[];
+  List<LegalCategory> _categories = const <LegalCategory>[];
+  String? _selectedCategoryId;
+  String? _categoriesError;
+  bool _categoriesLoading = true;
+  final Set<String?> _seenLawyerIds = <String?>{};
+  int _requestSeq = 0;
   String? _error;
+  String? _loadMoreError;
+  int _page = 1;
+  bool _hasMore = false;
+  bool _loadingMore = false;
   bool _loaded = false;
 
   @override
@@ -31,19 +46,112 @@ class _HomePageState extends State<HomePage> {
     if (_loaded) return;
     _loaded = true;
     _load();
+    _loadCategories();
+  }
+
+  Future<void> _loadCategories() async {
+    final repository = SessionScope.read(context).repository;
+    setState(() {
+      _categoriesLoading = true;
+      _categoriesError = null;
+    });
+    try {
+      final categories = await repository.fetchCategories();
+      if (!mounted) return;
+      setState(() {
+        _categories = categories;
+        _categoriesLoading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _categoriesLoading = false;
+        _categoriesError = error.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _categoriesLoading = false;
+        _categoriesError = 'Could not load categories. Please try again.';
+      });
+    }
+  }
+
+  void _onCategorySelected(LegalCategory? category) {
+    _selectedCategoryId = category?.id;
+    _load();
   }
 
   Future<void> _load() async {
+    final seq = ++_requestSeq;
     final repository = SessionScope.read(context).repository;
+    final request = repository.fetchLawyerPage(
+      categoryId: _selectedCategoryId,
+      page: 1,
+      limit: AppRepository.lawyerPageSize,
+    );
     setState(() {
       _error = null;
-      _future = repository.fetchLawyers();
+      _loadMoreError = null;
+      _additionalResults.clear();
+      _seenLawyerIds.clear();
+      _page = 1;
+      _hasMore = false;
+      _loadingMore = false;
+      _future = request;
     });
 
     try {
-      await _future;
+      final result = await request;
+      if (mounted && seq == _requestSeq) {
+        setState(() {
+          _seenLawyerIds.addAll(result.items.map((lawyer) => lawyer.id));
+          _page = result.page;
+          _hasMore = result.hasMore;
+        });
+      }
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted && seq == _requestSeq) setState(() => _error = '$e');
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore) return;
+    final seq = _requestSeq;
+    final repository = SessionScope.read(context).repository;
+    setState(() {
+      _loadingMore = true;
+      _loadMoreError = null;
+    });
+    try {
+      final result = await repository.fetchLawyerPage(
+        categoryId: _selectedCategoryId,
+        page: _page + 1,
+        limit: AppRepository.lawyerPageSize,
+      );
+      if (!mounted || seq != _requestSeq) return;
+      setState(() {
+        for (final lawyer in result.items) {
+          if (_seenLawyerIds.add(lawyer.id)) _additionalResults.add(lawyer);
+        }
+        _page = result.page;
+        _hasMore = result.hasMore;
+        _loadingMore = false;
+      });
+    } on ApiException catch (e) {
+      if (mounted && seq == _requestSeq) {
+        setState(() {
+          _loadMoreError = e.message;
+          _loadingMore = false;
+        });
+      }
+    } catch (_) {
+      if (mounted && seq == _requestSeq) {
+        setState(() {
+          _loadMoreError = 'Could not load more lawyers. Please try again.';
+          _loadingMore = false;
+        });
+      }
     }
   }
 
@@ -138,7 +246,14 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 5),
               const SizedBox(height: 5),
-              LegalServiceCategories(),
+              LegalServiceCategories(
+                categories: _categories,
+                selectedCategoryId: _selectedCategoryId,
+                onSelected: _onCategorySelected,
+                isLoading: _categoriesLoading,
+                error: _categoriesError,
+                onRetry: _loadCategories,
+              ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -160,7 +275,7 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
               Expanded(
-                child: FutureBuilder<List<Product>>(
+                child: FutureBuilder<PaginatedResult<Product>>(
                   future: _future,
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
@@ -174,7 +289,11 @@ class _HomePageState extends State<HomePage> {
                       );
                     }
 
-                    final products = snapshot.data ?? [];
+                    final firstPage = snapshot.data;
+                    final products = <Product>[
+                      ...(firstPage?.items ?? const <Product>[]),
+                      ..._additionalResults,
+                    ];
                     if (products.isEmpty) {
                       return const Center(
                         child: Text(
@@ -184,24 +303,61 @@ class _HomePageState extends State<HomePage> {
                       );
                     }
 
-                    return GridView.builder(
-                      padding: EdgeInsets.zero,
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        crossAxisSpacing: 10,
-                        mainAxisSpacing: 8,
-                        childAspectRatio: 0.8,
+                    final hasFooter =
+                        _hasMore || _loadingMore || _loadMoreError != null;
+                    return RefreshIndicator(
+                      onRefresh: _load,
+                      child: GridView.builder(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: EdgeInsets.zero,
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 8,
+                          childAspectRatio: 0.8,
+                        ),
+                        itemCount: products.length + (hasFooter ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index == products.length) {
+                            if (_loadingMore) {
+                              return const Center(
+                                child: CircularProgressIndicator(),
+                              );
+                            }
+                            if (_loadMoreError != null) {
+                              return Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    _loadMoreError!,
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  TextButton(
+                                    onPressed: _loadMore,
+                                    child: const Text('Retry'),
+                                  ),
+                                ],
+                              );
+                            }
+                            return Center(
+                              child: TextButton.icon(
+                                onPressed: _loadMore,
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('Load more'),
+                              ),
+                            );
+                          }
+                          final product = products[index];
+                          return ProductCard(
+                            imagePath: product.imagePath,
+                            name: product.name,
+                            price: product.price,
+                            lawyer: product,
+                            rating: product.rating,
+                          );
+                        },
                       ),
-                      itemCount: products.length,
-                      itemBuilder: (context, index) {
-                        final p = products[index];
-                        return ProductCard(
-                          imagePath: p.imagePath,
-                          name: p.name,
-                          price: p.price,
-                        );
-                      },
                     );
                   },
                 ),

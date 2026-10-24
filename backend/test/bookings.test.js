@@ -33,9 +33,9 @@ after(stopApp);
 
 function seed(overrides = {}) {
   return {
-    users: users('client1', 'client2', 'admin1'),
+    users: users('client1', 'client2', 'lawyer1', 'admin1'),
     lawyers: [
-      { id: 'lawyer-150', name: 'Lawyer One', priceValue: 150 },
+      { id: 'lawyer-150', userId: 'lawyer-1', name: 'Lawyer One', priceValue: 150 },
       { id: 'lawyer-free', name: 'Lawyer Unpriced' },
     ],
     // A booking now has to fall inside the lawyer's published schedule
@@ -393,13 +393,24 @@ describe('bookings 1.2: partial updates keep untouched fields', () => {
     reset({
       collections: seed({
         bookings: [
-          { id: 'bk-active', userId: 'client-1', status: 'Active', totalPrice: 300, hours: 2 },
+          {
+            id: 'bk-active',
+            userId: 'client-1',
+            status: 'Active',
+            lawyerId: 'lawyer-150',
+            lawyerName: 'Lawyer One',
+            date: '2026-11-01',
+            time: '15:00',
+            totalPrice: 300,
+            hours: 2,
+            slotKeys: [],
+          },
         ],
       }),
     }),
   );
 
-  it('does not reset the status to Pending on an unrelated update', async () => {
+  it('preserves lifecycle status and derived price when an admin changes only the time', async () => {
     signIn('admin1');
 
     const res = await put(`${BASE}/bk-active`, {

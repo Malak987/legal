@@ -168,7 +168,14 @@ SessionController _searchSession({
   return SessionController(
     auth: AuthService(
       gateway: FakeAuthGateway(),
-      api: testApiClient(handler: handler),
+      api: testApiClient(
+        handler: (request, attempt) async {
+          if (request.url.path == '/api/categories') {
+            return jsonOk({'items': const <Object>[]});
+          }
+          return handler(request, attempt);
+        },
+      ),
     ),
   );
 }

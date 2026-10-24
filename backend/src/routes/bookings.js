@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { getDb } from '../config/firebase.js';
 import {
   authenticate,
   isOwner,
@@ -7,6 +6,7 @@ import {
   ownerIdFor,
   isAdmin,
   lockOwnerOnUpdate,
+  requireRole,
 } from '../middleware/auth.js';
 import {
   ok,
@@ -23,19 +23,16 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import {
   listDocs,
   getDocById,
-  updateDoc,
-  serverTimestamp,
-} from '../utils/firestore.js';
+} from '../utils/supabase_database.js';
 import { formatClockTime, parseClockTime } from '../utils/scheduling.js';
 import {
-  BOOKINGS_COLLECTION,
-  createReservedBooking,
-  findOverlap,
-  loadAdvertisedSlots,
-  lockRefs,
-  planReservation,
-  releaseLocks,
-} from '../utils/bookingReservation.js';
+  callUserRpc,
+  requestDatabase,
+  rpcErrorToken,
+  rpcRow,
+} from '../utils/supabase_rpc.js';
+import { BOOKINGS_COLLECTION } from '../utils/bookingReservation.js';
+import { isAssignedLawyer, resolveOwnLawyerId } from '../utils/lawyer_identity.js';
 
 const router = Router();
 const COLLECTION = BOOKINGS_COLLECTION;
@@ -45,10 +42,48 @@ const LAWYERS_COLLECTION = 'lawyers';
 // creation; administrators can, and get the price recomputed when they do.
 const CLIENT_IMMUTABLE_FIELDS = ['lawyerId', 'lawyerName', 'date', 'time', 'hours'];
 
+function bookingRpcErrorResponse(res, error) {
+  const token = error?.error || rpcErrorToken(error);
+  const code = error?.code;
+  if (code === '42501' || ['NOT_BOOKING_OWNER', 'ADMIN_REQUIRED', 'BOOKING_CANNOT_BE_CANCELLED'].includes(token)) {
+    return forbidden(res, 'Forbidden. This booking operation is not authorized.');
+  }
+  if (code === 'P0002' || token === 'BOOKING_NOT_FOUND') {
+    return notFound(res, 'Booking not found');
+  }
+  if (token === 'IDEMPOTENCY_KEY_MISMATCH') {
+    return conflict(res, 'Idempotency-Key was already used for a different booking.');
+  }
+  if (token === 'NO_AVAILABILITY') {
+    return badRequest(res, 'The lawyer has published no availability on that date. Choose another date.');
+  }
+  if (token === 'TIME_NOT_AVAILABLE') {
+    return badRequest(res, 'That time is not offered by this lawyer. Choose an available slot.');
+  }
+  if (['BOOKING_OVERLAP', 'LEGACY_BOOKING_REVIEW_REQUIRED', 'BOOKING_SLOT_TAKEN', 'SLOT_TAKEN'].includes(token)) {
+    return conflict(res, token === 'LEGACY_BOOKING_REVIEW_REQUIRED'
+      ? 'An existing booking needs operator review before this slot can be reserved.'
+      : 'The requested time slot is no longer available. Choose another time.');
+  }
+  if (code === '22023' || ['INVALID_BOOKING_DURATION', 'INVALID_BOOKING_TIME', 'INVALID_BOOKING_DATE', 'IDEMPOTENCY_KEY_TOO_LONG', 'LAWYER_NOT_FOUND', 'LAWYER_RATE_NOT_CONFIGURED'].includes(token)) {
+    const messages = {
+      INVALID_BOOKING_DURATION: 'hours must be between 1 and 12.',
+      INVALID_BOOKING_TIME: 'The requested time is invalid.',
+      INVALID_BOOKING_DATE: 'The requested date is invalid.',
+      IDEMPOTENCY_KEY_TOO_LONG: 'Idempotency-Key must be at most 128 characters.',
+      LAWYER_NOT_FOUND: 'Lawyer not found',
+      LAWYER_RATE_NOT_CONFIGURED: 'Lawyer has no configured hourly rate',
+    };
+    return badRequest(res, messages[token] || 'Invalid booking request.');
+  }
+  return null;
+}
+
 // GET /api/bookings?userId=&status=&lawyerId=
 router.get(
   '/',
   authenticate,
+  requireRole('client', 'lawyer', 'admin'),
   asyncHandler(async (req, res) => {
     const q = parseListQuery(req);
     const filters = cleanObject({
@@ -56,12 +91,21 @@ router.get(
       status: req.query.status,
       lawyerId: req.query.lawyerId,
     });
-    // A non-admin is always scoped to their own records. The old test only
-    // applied the scope when `?userId=` was absent, so passing somebody
-    // else's id returned their records instead.
-    if (!isAdmin(req)) filters.userId = req.user.uid;
+    // Scope clients to their own bookings and lawyers to their assigned
+    // catalogue row. Query-string owner/lawyer IDs never broaden access.
+    if (!isAdmin(req) && req.user.role === 'client') {
+      filters.userId = req.user.uid;
+      delete filters.lawyerId;
+    } else if (req.user.role === 'lawyer') {
+      const lawyerId = await resolveOwnLawyerId(req);
+      if (!lawyerId) {
+        return forbidden(res, 'No unique lawyer profile is linked to this account.');
+      }
+      delete filters.userId;
+      filters.lawyerId = lawyerId;
+    }
 
-    const result = await listDocs(getDb(), COLLECTION, {
+    const result = await listDocs(requestDatabase(req), COLLECTION, {
       search: q.search,
       searchFields: ['lawyerName', 'date', 'time'],
       filters,
@@ -76,10 +120,12 @@ router.get(
 router.get(
   '/:id',
   authenticate,
+  requireRole('client', 'lawyer', 'admin'),
   asyncHandler(async (req, res) => {
-    const item = await getDocById(getDb(), COLLECTION, req.params.id);
+    const item = await getDocById(requestDatabase(req), COLLECTION, req.params.id);
     if (!item) return notFound(res, 'Booking not found');
-    if (!isOwner(item, req)) {
+    const canRead = isOwner(item, req) || await isAssignedLawyer(req, item.lawyerId);
+    if (!canRead) {
       return forbidden(res);
     }
     ok(res, item);
@@ -109,28 +155,14 @@ async function priceBooking(db, { lawyerId, hours }) {
   return { lawyer, rate, totalPrice };
 }
 
-// POST /api/bookings
-//
-// The appointment is reserved atomically: the booking document and one
-// reservation document per occupied slot are written in a single Firestore
-// transaction. Two requests for the same slot address the same reservation
-// document, so the SDK's conflict detection — not a read-then-write check —
-// is what lets exactly one of them through.
+// POST /api/bookings. PostgreSQL RPC validates the trusted lawyer rate and
+// availability, then reserves the booking and every occupied slot atomically.
 router.post(
   '/',
   authenticate,
+  requireRole('client', 'admin'),
   asyncHandler(async (req, res) => {
     const data = validate(bookingCreateSchema, { ...req.body, userId: ownerIdFor(req) });
-
-    // Price first: "this lawyer does not exist" and "this lawyer has no rate"
-    // stay the answers they always were, rather than turning into an
-    // availability error because no schedule exists for an unknown lawyer.
-    const priced = await priceBooking(getDb(), {
-      lawyerId: data.lawyerId,
-      hours: data.hours,
-    });
-    if (priced.error) return badRequest(res, priced.error);
-
     const startMinutes = parseClockTime(data.time);
     if (startMinutes === null) {
       return badRequest(
@@ -139,42 +171,36 @@ router.post(
       );
     }
 
-    const db = getDb();
-    const advertised = await loadAdvertisedSlots(db, data.lawyerId, data.date);
-    const plan = planReservation({
-      advertised,
-      startMinutes,
-      hours: data.hours,
-      lawyerId: data.lawyerId,
-      date: data.date,
-    });
-    if (plan.error) return badRequest(res, plan.error);
-
-    // The server is the only source of price and of the starting status.
-    data.totalPrice = priced.totalPrice;
-    data.lawyerName = priced.lawyer.name ?? data.lawyerName ?? '';
-    data.time = formatClockTime(startMinutes);
-    if (!isAdmin(req)) {
-      data.status = 'Pending';
+    const idempotencyKey = String(req.get('Idempotency-Key') || '').trim();
+    if (idempotencyKey.length > 128) {
+      return badRequest(res, 'Idempotency-Key must be at most 128 characters.');
     }
 
-    const outcome = await createReservedBooking(db, {
-      data,
-      lawyerId: data.lawyerId,
-      date: data.date,
-      startMinutes,
-      hours: data.hours,
-      locks: plan.locks,
-    });
-
-    if (outcome.status !== 'created') {
-      return conflict(res, outcome.message);
+    let outcome;
+    try {
+      outcome = await callUserRpc(req, 'rpc_create_booking', {
+        p_lawyer_id: data.lawyerId,
+        p_date: data.date,
+        p_time: formatClockTime(startMinutes),
+        p_hours: data.hours,
+        p_idempotency_key: idempotencyKey || null,
+        p_user_id: data.userId,
+      });
+    } catch (error) {
+      const mapped = bookingRpcErrorResponse(res, error);
+      if (mapped) return mapped;
+      throw error;
     }
 
-    // Read the stored document back so the response keeps the exact shape
-    // `createDoc()` produced (`{ id, ...data, createdAt, updatedAt }`).
-    const saved = await getDocById(db, COLLECTION, outcome.id);
-    created(res, saved, 'Booking created');
+    if (outcome?.error) {
+      const mapped = bookingRpcErrorResponse(res, outcome);
+      if (mapped) return mapped;
+      throw new Error(`Supabase booking RPC returned an unknown error: ${outcome.error}`);
+    }
+    const saved = rpcRow('bookings', outcome?.booking);
+    if (!saved) throw new Error('Supabase booking RPC returned an unexpected result.');
+    if (outcome.replayed) return ok(res, saved, 'Duplicate request ignored');
+    return created(res, saved, 'Booking created');
   }),
 );
 
@@ -182,6 +208,7 @@ router.post(
 router.put(
   '/:id',
   authenticate,
+  requireRole('client', 'admin'),
   asyncHandler(async (req, res) => {
     // `noDefaults` stops a partial update from writing the schema default
     // `status: 'Pending'` over the record's real status.
@@ -189,8 +216,11 @@ router.put(
       presence: 'optional',
       noDefaults: true,
     });
+    // Empty/null time is the legacy API's "unchanged" sentinel, not a new
+    // schedule value.
+    if (data.time === '' || data.time === null) delete data.time;
 
-    const db = getDb();
+    const db = requestDatabase(req);
     const existing = await getDocById(db, COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Booking not found');
     if (!isOwner(existing, req)) {
@@ -250,143 +280,104 @@ router.put(
       nextHours !== existing.hours ||
       nextStart !== parseClockTime(existing.time);
 
-    // ---- Cancelling releases the slot -------------------------------------
-    //
-    // `Cancelled` is terminal and means the appointment did not happen, so
-    // holding the reservation afterwards would strand the slot forever. The
-    // status write and the release are one transaction: a crash between them
-    // cannot leave a cancelled booking still occupying its slot.
-    if (cancelling) {
-      const bookingRef = db.collection(COLLECTION).doc(existing.id);
-      await db.runTransaction(async (tx) => {
-        await releaseLocks(tx, db, existing.slotKeys);
-        tx.update(bookingRef, {
-          ...data,
-          status: 'Cancelled',
-          slotKeys: [],
-          updatedAt: serverTimestamp(),
-        });
-      });
-      return ok(res, await getDocById(db, COLLECTION, existing.id), 'Booking updated');
+    if (data.userId !== undefined && data.userId !== existing.userId) {
+      return badRequest(res, 'Booking ownership cannot be reassigned.');
+    }
+    if (data.lawyerName !== undefined && data.lawyerName !== existing.lawyerName) {
+      return badRequest(res, 'Lawyer name is derived from the lawyer profile and cannot be changed directly.');
+    }
+    if (cancelling && scheduleChanged) {
+      return badRequest(res, 'Cancel and reschedule are separate booking operations.');
+    }
+    if (scheduleChanged && data.status !== undefined && data.status !== existing.status) {
+      return badRequest(res, 'Update booking status and reschedule in separate requests.');
     }
 
-    // ---- Rescheduling re-reserves -----------------------------------------
-    //
-    // Without this an administrator could move an appointment onto a slot
-    // somebody else already holds, which is the same double-booking the create
-    // path refuses.
-    if (isAdmin(req) && scheduleChanged && nextStart !== null) {
-      const advertised = await loadAdvertisedSlots(db, nextLawyerId, nextDate);
-
-      // A row with no lawyer or no date (legacy / hand-written) has no schedule
-      // to check. Refusing the edit would make such a row unrepairable, so the
-      // change is allowed and remains unguarded — documented in the README.
-      if (advertised !== null) {
-        const plan = planReservation({
-          advertised,
-          startMinutes: nextStart,
-          hours: nextHours,
-          lawyerId: nextLawyerId,
-          date: nextDate,
+    if (cancelling) {
+      try {
+        const outcome = await callUserRpc(req, 'rpc_cancel_booking', {
+          p_booking_id: existing.id,
         });
-        if (plan.error) return badRequest(res, plan.error);
-
-        const locks = lockRefs(db, plan.locks);
-        const previousIds = new Set(existing.slotKeys ?? []);
-        const bookingRef = db.collection(COLLECTION).doc(existing.id);
-
-        const outcome = await db.runTransaction(async (tx) => {
-          for (const lock of locks) {
-            const snap = await tx.get(lock.ref);
-            if (!snap.exists) continue;
-            // A reservation this booking already holds is not a conflict with
-            // itself; anything else is somebody else's appointment.
-            if (snap.data()?.bookingId !== existing.id) {
-              return {
-                status: 'taken',
-                message: `The ${lock.slot} slot is already booked. Choose another time.`,
-              };
-            }
-          }
-
-          const clash = await findOverlap(tx, db, {
-            lawyerId: nextLawyerId,
-            date: nextDate,
-            startMinutes: nextStart,
-            hours: nextHours,
-            ignoreId: existing.id,
-          });
-          if (clash) {
-            return {
-              status: 'conflict',
-              message:
-                `That appointment overlaps an existing booking at ${clash.time ?? 'another time'}. ` +
-                'Choose a different slot or a shorter duration.',
-            };
-          }
-
-          // Release the slots this booking no longer occupies...
-          const keptIds = new Set(locks.map((lock) => lock.id));
-          await releaseLocks(
-            tx,
-            db,
-            [...previousIds].filter((id) => !keptIds.has(id)),
-          );
-          // ...and take the new ones.
-          for (const lock of locks) {
-            tx.set(lock.ref, {
-              lawyerId: nextLawyerId,
-              date: nextDate,
-              slot: lock.slot,
-              bookingId: existing.id,
-              userId: existing.userId,
-              createdAt: serverTimestamp(),
-            });
-          }
-
-          tx.update(bookingRef, {
-            ...data,
-            time: formatClockTime(nextStart),
-            slotKeys: locks.map((lock) => lock.id),
-            updatedAt: serverTimestamp(),
-          });
-          return { status: 'updated' };
-        });
-
-        if (outcome.status !== 'updated') {
-          return conflict(res, outcome.message);
-        }
-        return ok(res, await getDocById(db, COLLECTION, existing.id), 'Booking updated');
+        return ok(res, rpcRow('bookings', outcome), 'Booking updated');
+      } catch (error) {
+        const mapped = bookingRpcErrorResponse(res, error);
+        if (mapped) return mapped;
+        throw error;
       }
     }
 
-    const updated = await updateDoc(db, COLLECTION, req.params.id, data);
-    ok(res, updated, 'Booking updated');
+    if (scheduleChanged) {
+      if (!isAdmin(req)) return forbidden(res, 'Only an administrator can reschedule a booking.');
+      if (nextStart === null) return badRequest(res, 'A valid booking time is required.');
+      try {
+        const outcome = await callUserRpc(req, 'rpc_admin_reschedule_booking', {
+          p_booking_id: existing.id,
+          p_lawyer_id: nextLawyerId,
+          p_date: nextDate,
+          p_time: formatClockTime(nextStart),
+          p_hours: nextHours,
+        });
+        if (outcome?.error) {
+          const mapped = bookingRpcErrorResponse(res, outcome);
+          if (mapped) return mapped;
+          throw new Error(`Supabase reschedule RPC returned an unknown error: ${outcome.error}`);
+        }
+        return ok(res, rpcRow('bookings', outcome), 'Booking updated');
+      } catch (error) {
+        const mapped = bookingRpcErrorResponse(res, error);
+        if (mapped) return mapped;
+        throw error;
+      }
+    }
+
+    if (data.status !== undefined && data.status !== existing.status) {
+      if (!isAdmin(req)) return forbidden(res, 'Only an administrator can set this booking status.');
+      try {
+        const outcome = await callUserRpc(req, 'rpc_admin_set_booking_status', {
+          p_booking_id: existing.id,
+          p_status: data.status,
+        });
+        return ok(res, rpcRow('bookings', outcome), 'Booking updated');
+      } catch (error) {
+        const mapped = bookingRpcErrorResponse(res, error);
+        if (mapped) return mapped;
+        throw error;
+      }
+    }
+
+    if (Object.keys(data).some((field) => !['userId'].includes(field))) {
+      return badRequest(res, 'No supported booking changes were supplied.');
+    }
+    return ok(res, existing, 'Booking unchanged');
   }),
 );
 
+
 // DELETE /api/bookings/:id
 //
-// The reservation documents are removed with the booking in one transaction,
-// so a deleted appointment always frees its slot.
+// The Postgres RPC removes the booking and its reservation rows atomically.
 router.delete(
   '/:id',
   authenticate,
+  requireRole('client', 'admin'),
   asyncHandler(async (req, res) => {
-    const db = getDb();
+    const db = requestDatabase(req);
     const existing = await getDocById(db, COLLECTION, req.params.id);
     if (!existing) return notFound(res, 'Booking not found');
     if (!isOwner(existing, req)) {
       return forbidden(res);
     }
 
-    const bookingRef = db.collection(COLLECTION).doc(existing.id);
-    await db.runTransaction(async (tx) => {
-      await releaseLocks(tx, db, existing.slotKeys);
-      tx.delete(bookingRef);
-    });
-
-    ok(res, { id: req.params.id }, 'Booking deleted');
+    try {
+      const outcome = await callUserRpc(req, 'rpc_delete_booking', {
+        p_booking_id: existing.id,
+      });
+      return ok(res, { id: String(outcome?.id || existing.id) }, 'Booking deleted');
+    } catch (error) {
+      const mapped = bookingRpcErrorResponse(res, error);
+      if (mapped) return mapped;
+      throw error;
+    }
   }),
 );
 

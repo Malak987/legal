@@ -7,6 +7,7 @@ import '../../state/session_controller.dart';
 import '../../state/session_scope.dart';
 import '../../state/start_route.dart';
 import '../home/homescreen.dart';
+import '../authentication/reset_password.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -52,8 +53,9 @@ class SplashScreenState extends State<SplashScreen> with TickerProviderStateMixi
     await _recoverProfileOnce(session);
     if (!mounted) return;
 
-    final Widget destination =
-        startScreenFor(session.status) == StartScreen.home
+    final Widget destination = session.isPasswordRecovery
+        ? const ResetPasswordScreen()
+        : startScreenFor(session.status) == StartScreen.home
             ? HomePage()
             : OnboardingScreen();
     Navigator.pushReplacement(

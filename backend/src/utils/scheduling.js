@@ -132,11 +132,9 @@ export function consumedSlotMinutes(advertised, startMinutes, hours) {
 /**
  * Deterministic id of the reservation document for one slot.
  *
- * Two requests for the same (lawyer, date, slot) therefore address the SAME
- * document, which is what turns "is it taken?" into something Firestore's
- * per-document conflict detection can answer — a query inside a transaction is
- * not a uniqueness guarantee (see the harness note in
- * `test/helpers/harness.js` and the same pattern in `routes/wallet.js`).
+ * Two requests for the same (lawyer, date, slot) derive the same stable key;
+ * PostgreSQL's unique (lawyer_id, date, slot) constraint arbitrates concurrent
+ * reservations inside the booking RPC.
  */
 export function slotLockId(lawyerId, date, minutes) {
   return createHash('sha256')

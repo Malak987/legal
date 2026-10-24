@@ -1,0 +1,52 @@
+# Proposed identity, owner, and lawyer-access hardening
+
+**Status: proposal only.** The SQL and rollback files in this directory are not in `supabase/migrations/`, have not been executed, and require explicit approval before any hosted use. All Supabase queries in this review were read-only.
+
+## Live facts checked on 2026-10-24
+
+- The live schema accepts `client`, `lawyer`, and `admin`; it does not accept `owner`.
+- `private.current_app_user_id()` currently falls back to `auth.uid()::text` when there is no matching `public.users` profile. That means “no profile” is not a fully closed identity boundary for RLS policies that compare a row's `user_id` to this helper.
+- `public.link_migrated_auth_user()` is an `AFTER INSERT ON auth.users` trigger. Its live body links the first unlinked `public.users` row with a case-insensitive matching email. It does not require an explicit legacy profile ID or a confirmed email. Auth configuration currently requires email confirmation before normal sign-in, but email equality is still being used as the legacy identity link. This contradicts the migration documentation and the stated “email alone is not proof” requirement.
+- `users_update_self_or_admin` plus the identity guard allows the current administrator role to change role fields. The role-change RPC referenced by Express is not among the three live `rpc_*` functions, so the current API role-change path is not deploy-verified. This proposal keeps legacy `admin` intact and explicitly reserves `owner` changes for `postgres`/`service_role`.
+- The live `cases` and `bookings` SELECT policies expose owner/admin rows only; they do not grant a lawyer access to rows assigned through `lawyers.user_id`.
+- `public.lawyers.user_id` has a SELECT grant to `anon` and `authenticated`. The existing backend sanitizes its public projection, but direct PostgREST column selection is not similarly hidden. Revoking the authenticated grant is deliberately not bundled here because current admin API queries use that column; it needs a separate compatibility design.
+- No case-history, hearing, or case-document table exists. `bookings` is the existing appointment record; `cases.due_date` is text. No additional tables are proposed here.
+
+## Proposed SQL and expected effect
+
+The exact forward SQL is [`20261024_identity_owner_lawyer_access.sql`](20261024_identity_owner_lawyer_access.sql). It is a reviewed draft, not a migration to apply blindly.
+
+1. **Fail closed on missing/unsupported profile.** Replace the private user ID/role helpers so they return no application identity unless a matching profile has a currently supported role. This removes the live Auth-UUID fallback. Result: RLS owner predicates resolve to false for a missing or invalid profile.
+2. **Stop email-only legacy linking and fix public signup roles.** Replace the Auth trigger so it waits for confirmed email or phone; links a legacy row only when admin-controlled `raw_app_meta_data.legacy_uid` and `legacy_migration_verified=true` identify the exact row and a confirmed email matches. A confirmed phone signup can create a `client` profile only. Normal public email signup also defaults to `client`; only the server-side lawyer-onboarding flow may set `raw_app_meta_data.signup_role='lawyer'` before email confirmation. `raw_user_meta_data.role` is ignored. No client metadata or public flow can create `admin` or `owner`.
+3. **Add `owner` without rewriting existing admins.** Add `owner` to the role check and enforce at most one owner with a partial unique index. Keep every existing `admin` profile; do not rename or bulk-convert accounts. `is_admin()` treats both `admin` and `owner` as privileged. Owner creation/removal, identity remapping, and deletion are reserved for a service-role request with a `service_role` JWT claim or a direct SQL-operator session with no PostgREST JWT. The identity guard does not broadly trust `current_user='postgres'` (which SECURITY DEFINER RPCs also observe); the trusted Auth-link trigger uses a transaction-local marker plus nested-trigger checks for its exact legacy-link update. Ordinary authenticated users, including admins and other SECURITY DEFINER RPCs, cannot alter the owner identity.
+4. **Scope case, booking, and slot policies.** Restrict the existing client-owner policies on `cases`, `bookings`, and `booking_slots` to the `client` role; `admin`/`owner` remains explicitly privileged. Add read-only SELECT access for a lawyer only to cases/bookings assigned through the existing `lawyers.user_id -> users.id` relation. Do not grant lawyer writes or booking-slot reads; existing admin-only booking and slot writes remain unchanged.
+5. **No DML/backfill in the migration.** No existing application rows are intentionally changed. New Auth profiles are created only after the corresponding email/phone confirmation; phone-only signups are fixed to `client`. Existing rows remain linked or unlinked as-is.
+
+### Local verification (isolated PGlite only)
+
+The proposal was applied after all ten active local migrations in an in-memory PGlite database. Synthetic fixtures exercised explicit Auth-UUID mapping precedence (including a conflicting UUID-shaped profile), missing-profile fail-closed helpers, unconfirmed/confirmed email and phone signup, client-only phone signup, ignored caller role metadata, trusted lawyer metadata, exact verified legacy linking, rejection of email-only linking, client-owned case reads/writes, assigned-lawyer case/booking reads, no lawyer writes or booking-slot reads, owner-only provisioning, rejection of owner creation/demotion through authenticated and SECURITY DEFINER paths, the single-owner index, and the companion rollback. The RLS fixture mirrored only the relevant local table grants. `node --test test/supabase_migrations.test.js` passes 16/16; targeted route/Auth tests pass 90/90; full backend `npm test` passes 513/513 across 123 suites. These are local fixtures/PGlite tests only—not hosted PostgreSQL 17, Supabase Auth/PostgREST, or production E2E verification. Flutter/Dart are unavailable in this workspace, so Admin Panel and mobile Flutter tests were not run.
+
+### Rollback
+
+The exact reverse SQL is [`20261024_identity_owner_lawyer_access_rollback.sql`](20261024_identity_owner_lawyer_access_rollback.sql). It aborts before changing anything if an `owner` row exists, then restores the helper/Auth-trigger/identity-guard definitions observed live, removes the added lawyer policies and owner-protection triggers/functions, drops the single-owner index, and restores the original role constraint.
+
+**Security caveat:** executing that rollback restores the email-only Auth trigger and Auth-UUID fallback that this proposal is intended to remove. It is technically reversible, but not a recommended operational rollback after public signup has resumed. Prefer a forward corrective migration. If a rollback is approved, first disable the affected signup paths and establish how to preserve accounts created after the forward migration. No rollback has been run.
+
+## Owner provisioning runbook (draft; not performed and currently blocked)
+
+**Deployment blocker:** local source now recognizes the server-verified `owner` role, routes it through admin authorization, accepts a server-provisioned `lawyer` session into a read-only panel workspace, and includes a public lawyer-signup endpoint gated off by default. These changes are not deployed; the live database still rejects `owner`, the live project has no isolated test branch, Flutter tests were not runnable in this workspace, and the endpoint's redirect allow-list is not configured. Do not provision an owner, enable lawyer signup, or change hosted Auth/RLS until the reviewed SQL and corresponding backend/panel builds are separately approved, deployed, and verified.
+
+1. First obtain approval for the role/trigger migration and complete a recoverable backup/restore test. Apply only the reviewed migration in a controlled window.
+2. Create a dedicated Auth user using the authorized Supabase Auth Admin/Invite flow. The intended mailbox owner confirms the address. Do not use a client-side role field or user metadata.
+3. Obtain the Auth UUID from the trusted Auth Admin interface. Match the profile by `public.users.auth_user_id = <that UUID>`; do not match or authorize by email alone. Stop if there is not exactly one row, the address is unconfirmed, or the row is not an ordinary `client` profile created for this new account.
+4. Use a private, one-off operator process with `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and that verified UUID supplied through the process environment. The service key must not enter Flutter, the browser, Git, logs, or chat. The process should assert that no `owner` exists, re-check the exact Auth UUID and confirmed status, update only that profile from `client` to `owner`, and verify the returned row. Do not promote any existing `admin` or `lawyer` row automatically.
+5. Only after an owner-aware backend/Admin release is deployed, verify owner login and RLS behavior with a client JWT and negative tests; record the change in the authorized audit/change log. If either the proposal migration or matching app/backend release is missing or unverified, stop. The live database rejects `owner`; deployed application compatibility has not been verified.
+
+The checked-in SQL files are enough for review; the runbook does not authorize or execute provisioning.
+
+## Gates still required before enabling public signup
+
+- Review and approve the SQL; test it on an isolated PostgreSQL 17/Supabase environment with confirmed and unconfirmed Auth users, an existing unlinked legacy profile, normal client signup, trusted lawyer signup, invalid/missing profiles, and role boundaries.
+- The connected Auth configuration currently has `site_url=http://localhost:3000` and an empty redirect allow-list. Supply the intended web/mobile callback URI and obtain approval before changing production Auth settings.
+- The project currently reports no deployed Edge Functions. The lawyer signup endpoint and AI/document functions are local source only. The lawyer endpoint requires `ENABLE_LAWYER_SIGNUP=true` plus an explicit redirect, defaults closed, and accepts no role/profile IDs from the browser.
+- The mobile client defaults `ENABLE_CLIENT_SIGNUP` to `false`. Do not enable either signup path until the identity migration and callback flow have been approved, applied, and verified.

@@ -1,32 +1,38 @@
-/// A Firestore-backed application profile — the document at `users/{uid}`.
+/// An application profile stored in the Supabase `public.users` table (or the
+/// legacy Firebase-backed API during migration).
 ///
-/// Distinct from the Firebase Authentication account. Auth owns the credential
-/// and the uid; this document owns the name, contact details and the `role`
-/// the backend authorizes against. The two are joined only by the document id
-/// being the Auth uid.
+/// Auth owns credentials and its UUID; this profile owns contact details and
+/// the database-authoritative role. For migrated accounts, `auth_user_id`
+/// explicitly maps that UUID to this profile's application ID.
 ///
-/// Parsing is deliberately defensive: the document is written by the backend
-/// but also editable in the Firebase console, and older records predate fields
-/// such as `address`. A malformed value must never crash a screen.
+/// Parsing is deliberately defensive because legacy records may predate fields
+/// such as `address`. A malformed optional value must not crash a screen.
 class AppProfile {
   const AppProfile({
     required this.uid,
     this.name = '',
     this.email = '',
     this.phone = '',
-    this.role = 'client',
+    // An omitted role is invalid, not a client privilege default.
+    this.role = '',
     this.avatar = '',
     this.address = '',
   });
 
-  /// The Auth uid this profile belongs to (`users/{uid}`).
+  /// Application profile ID (`public.users.id`); it can differ from Auth UUID
+  /// only when an explicit, verified migration mapping exists.
   final String uid;
   final String name;
   final String email;
   final String phone;
 
-  /// `client`, `lawyer` or `admin`. Server-owned: nothing in the app may set it.
+  /// Server-owned role loaded from `public.users`. An empty or unknown value is
+  /// invalid and must never be treated as a client account.
   final String role;
+
+  /// Whether this row declares one of the roles currently supported by the
+  /// live schema. `owner` is intentionally excluded until its migration lands.
+  bool get hasValidRole => const {'client', 'lawyer', 'admin'}.contains(role);
   final String avatar;
   final String address;
 
@@ -45,12 +51,10 @@ class AppProfile {
     return email;
   }
 
-  /// Builds a profile from a `users/{uid}` document.
+  /// Builds a profile from a PostgREST row or legacy API document.
   ///
-  /// `GET /api/users/:id` returns `{ id, ...documentData }`, so the id may
-  /// arrive as `id`; documents written elsewhere may only carry `uid`. Both
-  /// are accepted, and a missing role falls back to `client` — the same
-  /// default the backend applies when it reads a profile.
+  /// The row ID is preferred; legacy JSON may carry only `uid`. A missing role
+  /// remains empty so callers can fail closed.
   factory AppProfile.fromJson(Map<String, dynamic> json) {
     String text(String key) {
       final value = json[key];
@@ -67,7 +71,7 @@ class AppProfile {
       name: text('name'),
       email: text('email'),
       phone: text('phone'),
-      role: role.isEmpty ? 'client' : role,
+      role: role,
       avatar: text('avatar'),
       address: text('address'),
     );

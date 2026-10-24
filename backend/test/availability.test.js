@@ -28,13 +28,18 @@ const BASE = '/api/availability';
 before(startApp);
 after(stopApp);
 
-function seed() {
+function seed(overrides = {}) {
   return {
     users: users('client1', 'lawyer1', 'lawyer2', 'admin1'),
+    lawyers: [
+      { id: 'lawyer-1', userId: 'lawyer-1', name: 'Lawyer One' },
+      { id: 'lawyer-2', userId: 'lawyer-2', name: 'Lawyer Two' },
+    ],
     availability: [
       { id: 'slot-1', lawyerId: 'lawyer-1', lawyerName: 'Lawyer One', date: '2026-11-02', slots: ['09:00'] },
       { id: 'slot-2', lawyerId: 'lawyer-2', lawyerName: 'Lawyer Two', date: '2026-11-03', slots: ['10:00'] },
     ],
+    ...overrides,
   };
 }
 
@@ -84,6 +89,33 @@ describe('availability: creation', () => {
     assert.equal(res.status, 201);
     assert.equal(res.body.data.date, '2026-12-05');
     assert.equal(docs('availability').length, 3);
+  });
+
+  it('resolves a distinct lawyer-row ID instead of assuming it equals the Auth/profile ID', async () => {
+    reset({ collections: seed({
+      lawyers: [
+        { id: 'lawyer-record-1', userId: 'lawyer-1', name: 'Lawyer One' },
+        { id: 'lawyer-record-2', userId: 'lawyer-2', name: 'Lawyer Two' },
+      ],
+      availability: [
+        { id: 'linked-slot', lawyerId: 'lawyer-record-1', lawyerName: 'Lawyer One', date: '2026-12-07', slots: ['09:00'] },
+      ],
+    }) });
+    signIn('lawyer1');
+
+    const update = await put(`${BASE}/linked-slot`, {
+      token: tokenFor('lawyer1'),
+      body: { slots: ['10:00'] },
+    });
+    assert.equal(update.status, 200, JSON.stringify(update.body));
+    assert.equal(update.body.data.lawyerId, 'lawyer-record-1');
+
+    const created = await post(BASE, {
+      token: tokenFor('lawyer1'),
+      body: { lawyerId: 'lawyer-record-2', date: '2026-12-08', slots: ['09:00'] },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal(created.body.data.lawyerId, 'lawyer-record-1');
   });
 
   it('lets an admin create a slot for a lawyer', async () => {
@@ -236,5 +268,12 @@ describe('availability: public reads stay public', () => {
 
     assert.equal(res.status, 200);
     assert.equal(res.body.data.lawyerId, 'lawyer-1');
+  });
+
+  it('serves the authenticated lawyer their own schedule through /mine', async () => {
+    signIn('lawyer1');
+    const res = await get(`${BASE}/mine`, { token: tokenFor('lawyer1') });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body.data.items.map((item) => item.id), ['slot-1']);
   });
 });
