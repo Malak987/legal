@@ -130,6 +130,7 @@ Future<void> tapSave(WidgetTester tester) async {
 Future<void> chooseFamilyAssignment(WidgetTester tester) async {
   final categoryField = find.text('Select a legal category');
   await tester.ensureVisible(categoryField);
+  await tester.pumpAndSettle();
   await tester.tap(categoryField);
   await tester.pumpAndSettle();
   await tester.tap(find.text('Family Law'));

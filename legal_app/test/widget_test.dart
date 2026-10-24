@@ -199,7 +199,7 @@ void _searchTests() {
         ],
         'total': 2,
         'page': 1,
-        'limit': 100,
+        'limit': 20,
         'totalPages': 1,
       }),
     );
@@ -221,8 +221,8 @@ void _searchTests() {
         'items': const <Object>[],
         'total': 0,
         'page': 1,
-        'limit': 100,
-        'totalPages': 0,
+        'limit': 20,
+        'totalPages': 1,
       }),
     );
     addTearDown(session.dispose);
