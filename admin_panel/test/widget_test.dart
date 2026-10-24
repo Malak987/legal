@@ -29,7 +29,7 @@ Future<void> enterPassword(
   String password = 'secret-password',
 }) async {
   final emailField = find.byWidgetPredicate(
-    (widget) => widget is TextField && widget.decoration.labelText == 'Email',
+    (widget) => widget is TextField && widget.decoration?.labelText == 'Email',
   );
   final passwordField = find.byWidgetPredicate(
     (widget) => widget is TextField && widget.obscureText,
