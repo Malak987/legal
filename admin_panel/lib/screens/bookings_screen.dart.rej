@@ -1,0 +1,10 @@
+diff a/admin_panel/lib/screens/bookings_screen.dart b/admin_panel/lib/screens/bookings_screen.dart	(rejected hunks)
+@@ -104,7 +104,7 @@ class _BookingsScreenState extends State<BookingsScreen> {
+                 items: const [
+                   DropdownMenuItem(value: '', child: Text('All')),
+                   DropdownMenuItem(value: 'Pending', child: Text('Pending')),
+-                  DropdownMenuItem(value: 'Active', child: Text('Active')),
++                  DropdownMenuItem(value: 'Confirmed', child: Text('Confirmed')),
+                   DropdownMenuItem(value: 'Completed', child: Text('Completed')),
+                   DropdownMenuItem(value: 'Cancelled', child: Text('Cancelled')),
+                 ],

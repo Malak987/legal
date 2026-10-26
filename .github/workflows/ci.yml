@@ -128,7 +128,6 @@ jobs:
           # The web build job compiles only; use a non-production public value when
           # repository variables are absent, and never deploy this CI artifact.
           SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY || 'ci-public-anon-key-for-build-only' }}
-          API_BASE_URL: ${{ vars.API_BASE_URL }}
           SUPABASE_AUTH_REDIRECT_URL: ${{ vars.SUPABASE_AUTH_REDIRECT_URL }}
         run: |
           set -o pipefail

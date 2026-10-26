@@ -48,11 +48,8 @@ Future<SessionController> _pumpSignedIn(
     auth: AuthService(
       gateway: gateway,
       api: testApiClient(
+        userProfile: profileJson(role: role),
         handler: (request, attempt) async {
-          if (request.url.path.endsWith('/users/uid-1') &&
-              request.method == 'GET') {
-            return jsonOk(profileJson(role: role));
-          }
           return handler(request, attempt);
         },
       ),

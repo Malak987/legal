@@ -126,6 +126,12 @@ class FakeApiService implements ApiService {
   @override
   Future<String?> Function()? tokenProvider;
 
+  @override
+  Future<String?> Function()? forceRefreshTokenProvider;
+
+  @override
+  bool get isConfigured => true;
+
   /// The `Authorization` header attached to the most recent request.
   String? lastAuthHeader;
 

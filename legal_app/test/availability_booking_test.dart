@@ -116,8 +116,8 @@ class _Fake {
     final path = request.url.path;
     final method = request.method;
 
-    if (path.contains('/users/')) {
-      return jsonOk(profileJson());
+    if (path.contains('/users')) {
+      return jsonOk([profileJson()]);
     }
     if (path.endsWith('/availability') && method == 'GET') {
       availabilityCalls++;
@@ -213,7 +213,7 @@ void _screenTests() {
     final session = SessionController(
       auth: AuthService(
         gateway: gateway,
-        api: testApiClient(handler: fake.handle),
+        api: testApiClient(handler: fake.handle, userProfile: profileJson()),
       ),
     );
     addTearDown(session.dispose);

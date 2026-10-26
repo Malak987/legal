@@ -1,0 +1,108 @@
+diff a/admin_panel/lib/screens/users_screen.dart b/admin_panel/lib/screens/users_screen.dart	(rejected hunks)
+@@ -7,7 +7,7 @@ import '../providers/auth_provider.dart';
+ import '../services/api_service.dart';
+ import '../widgets/common.dart';
+ 
+-/// Manage users with a sortable data table (list, filter, edit, delete).
++/// Browse users and edit profile fields that do not change Auth identity.
+ class UsersScreen extends StatefulWidget {
+   const UsersScreen({super.key});
+ 
+@@ -64,40 +64,6 @@ class _UsersScreenState extends State<UsersScreen> {
+     }
+   }
+ 
+-  Future<void> _delete(AppUser user) async {
+-    final api = AuthProvider.of(context).api;
+-    final confirm = await showDialog<bool>(
+-      context: context,
+-      builder: (_) => AlertDialog(
+-        title: const Text('Delete user'),
+-        content: Text('Delete "${user.name}" (${user.email})?'),
+-        actions: [
+-          TextButton(
+-            onPressed: () => Navigator.pop(context, false),
+-            child: const Text('Cancel'),
+-          ),
+-          TextButton(
+-            onPressed: () => Navigator.pop(context, true),
+-            child: const Text('Delete', style: TextStyle(color: AppTheme.danger)),
+-          ),
+-        ],
+-      ),
+-    );
+-    if (confirm != true) return;
+-    try {
+-      await api.delete('users/${user.id}');
+-      if (mounted) {
+-        ScaffoldMessenger.of(context)
+-            .showSnackBar(const SnackBar(content: Text('User deleted')));
+-        _reload();
+-      }
+-    } catch (e) {
+-      if (mounted) {
+-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+-      }
+-    }
+-  }
+-
+   @override
+   Widget build(BuildContext context) {
+     return Column(
+@@ -123,6 +89,7 @@ class _UsersScreenState extends State<UsersScreen> {
+                 hint: const Text('All roles'),
+                 items: const [
+                   DropdownMenuItem(value: '', child: Text('All roles')),
++                  DropdownMenuItem(value: 'owner', child: Text('Owner')),
+                   DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                   DropdownMenuItem(value: 'lawyer', child: Text('Lawyer')),
+                   DropdownMenuItem(value: 'client', child: Text('Client')),
+@@ -182,14 +149,6 @@ class _UsersScreenState extends State<UsersScreen> {
+                                   tooltip: 'Edit user',
+                                   onPressed: () => _openEdit(u),
+                                 ),
+-                                IconButton(
+-                                  icon: const Icon(
+-                                    Icons.delete,
+-                                    color: AppTheme.danger,
+-                                  ),
+-                                  tooltip: 'Delete user',
+-                                  onPressed: () => _delete(u),
+-                                ),
+                               ],
+                             ),
+                           ),
+@@ -261,10 +220,9 @@ class _UserEditDialogState extends State<UserEditDialog> {
+ 
+   Future<void> _save() async {
+     final name = _name.text.trim();
+-    final email = _email.text.trim();
+-    if (name.length < 2 || email.isEmpty) {
++    if (name.length < 2) {
+       ScaffoldMessenger.of(context).showSnackBar(
+-        const SnackBar(content: Text('Name and email are required')),
++        const SnackBar(content: Text('Name must be at least two characters')),
+       );
+       return;
+     }
+@@ -273,7 +231,6 @@ class _UserEditDialogState extends State<UserEditDialog> {
+     try {
+       await AuthProvider.of(context).api.put('users/${widget.user.id}', body: {
+         'name': name,
+-        'email': email,
+         'phone': _phone.text.trim(),
+         'address': _address.text.trim(),
+       });
+@@ -304,7 +261,11 @@ class _UserEditDialogState extends State<UserEditDialog> {
+               const SizedBox(height: 12),
+               TextField(
+                 controller: _email,
+-                decoration: const InputDecoration(labelText: 'Email'),
++                readOnly: true,
++                decoration: const InputDecoration(
++                  labelText: 'Email',
++                  helperText: 'Managed by Supabase Auth; change requires verification.',
++                ),
+               ),
+               const SizedBox(height: 12),
+               TextField(

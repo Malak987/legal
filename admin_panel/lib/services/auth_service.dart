@@ -123,6 +123,7 @@ class AuthService {
             (authRedirectUrl ?? AppConfig.authRedirectUrl).trim(),
         _sessionStore = sessionStore ?? SecureAdminSessionStore() {
     _api.tokenProvider = freshToken;
+    _api.forceRefreshTokenProvider = () => freshToken(forceRefresh: true);
   }
 
   static const Duration _requestTimeout = Duration(seconds: 20);

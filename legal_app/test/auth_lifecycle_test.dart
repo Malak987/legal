@@ -32,7 +32,7 @@ void main() {
       );
 
       expect(profile.name, 'Sara');
-      expect(calls, ['GET /api/users/uid-new']);
+      expect(calls, ['GET /rest/v1/users']);
       expect(gateway.createAccountCalls, 1);
     });
 
@@ -280,7 +280,7 @@ void main() {
 
     test('a profile update that returns a non-client role closes the session', () async {
       final session = build(
-        responder: (method) => method == 'PUT'
+        responder: (method) => method == 'PATCH'
             ? jsonOk(profileJson(role: 'lawyer', name: 'Sara'))
             : jsonOk(profileJson(role: 'client')),
       );
@@ -518,7 +518,6 @@ void main() {
         return http.Response(jsonEncode(<dynamic>[profileRow]), 200);
       });
       final api = ApiClient(
-        baseUrl: 'http://legacy-api.test/api',
         client: client,
         idTokenProvider: () async => 'supabase-access-token',
         currentUidProvider: () => authUid,
@@ -814,7 +813,6 @@ void main() {
         sessionStore: MemoryAuthSessionStore(),
       );
       final api = ApiClient(
-        baseUrl: 'http://legacy-api.test/api',
         client: client,
         idTokenProvider: () => gateway.getAccessToken(),
         currentUidProvider: () => gateway.currentUser?.uid,
@@ -886,7 +884,6 @@ void main() {
         sessionStore: MemoryAuthSessionStore(),
       );
       final api = ApiClient(
-        baseUrl: 'http://legacy-api.test/api',
         client: client,
         idTokenProvider: () => gateway.getAccessToken(),
         forceRefreshTokenProvider: () => gateway.getAccessToken(forceRefresh: true),

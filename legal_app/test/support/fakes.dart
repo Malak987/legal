@@ -152,11 +152,17 @@ class FakeAuthGateway implements AuthGateway {
 }
 
 /// A 200 response carrying the backend's `{ success, data }` envelope.
-http.Response jsonOk(Object? data, {int status = 200}) {
+///
+/// Use this only for legacy API compatibility tests. For Supabase-native
+/// flows, use [supabaseOk] instead.
+http.Response jsonOk(Object? data, {int status = 200, Map<String, String>? headers}) {
   return http.Response(
-    jsonEncode({'success': true, 'data': data}),
+    jsonEncode(data),
     status,
-    headers: {'content-type': 'application/json'},
+    headers: {
+      'content-type': 'application/json',
+      if (headers != null) ...headers,
+    },
   );
 }
 
@@ -164,6 +170,27 @@ http.Response jsonOk(Object? data, {int status = 200}) {
 http.Response jsonError(int status, String message) {
   return http.Response(
     jsonEncode({'success': false, 'message': message}),
+    status,
+    headers: {'content-type': 'application/json'},
+  );
+}
+
+/// A Supabase-native PostgREST or RPC response (raw JSON).
+http.Response supabaseOk(Object? data, {int status = 200, Map<String, String>? headers}) {
+  return http.Response(
+    jsonEncode(data),
+    status,
+    headers: {
+      'content-type': 'application/json',
+      if (headers != null) ...headers,
+    },
+  );
+}
+
+/// A Supabase-native error response.
+http.Response supabaseError(int status, String message) {
+  return http.Response(
+    jsonEncode({'message': message, 'code': status.toString()}),
     status,
     headers: {'content-type': 'application/json'},
   );
@@ -178,21 +205,35 @@ ApiClient testApiClient({
       handler,
   String uid = 'uid-1',
   String token = 'test-token',
+  Map<String, dynamic>? userProfile,
   Duration requestTimeout = ApiClient.defaultRequestTimeout,
 }) {
   final counts = <String, int>{};
   final client = MockClient((request) async {
+    if (userProfile != null && request.url.path.contains('/rest/v1/users') && request.method == 'GET') {
+      return supabaseOk([userProfile]);
+    }
     final key = '${request.method} ${request.url.path}';
     final attempt = (counts[key] ?? 0) + 1;
     counts[key] = attempt;
-    return handler(request, attempt);
+    final response = await handler(request, attempt);
+    if (request.url.path.contains('/rest/v1/users') && response.statusCode >= 200 && response.statusCode < 300) {
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return supabaseOk([decoded], status: response.statusCode, headers: response.headers);
+        }
+      } catch (_) {}
+    }
+    return response;
   });
 
   return ApiClient(
-    baseUrl: 'http://test.local/api',
     client: client,
     idTokenProvider: () async => token,
     currentUidProvider: () => uid,
+    supabaseUrl: 'https://test.supabase.co',
+    supabaseAnonKey: 'test-anon-key',
     requestTimeout: requestTimeout,
   );
 }
@@ -200,14 +241,17 @@ ApiClient testApiClient({
 /// Convenience: a profile document as `GET /api/users/:id` returns it.
 Map<String, dynamic> profileJson({
   String id = 'uid-1',
+  String? uid,
   String name = 'Sara Ali',
   String email = 'sara@example.com',
   String role = 'client',
   String? phone,
   String? address,
 }) {
+  final resolvedId = uid ?? id;
   return {
-    'id': id,
+    'id': resolvedId,
+    'uid': resolvedId,
     'name': name,
     'email': email,
     'role': role,

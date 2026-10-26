@@ -1981,8 +1981,8 @@ describe('legal categories and lawyer/case assignments (isolated PGlite migratio
   let categoryDb;
   const categoryAdmin = '00000000-0000-4000-8000-000000000021';
   const categoryClient = '00000000-0000-4000-8000-000000000022';
-  const corporateCategoryId = 'category-corporate';
-  const familyCategoryId = 'category-family';
+  let corporateCategoryId;
+  let familyCategoryId;
 
   async function setCategorySubject(subject, role = 'authenticated') {
     await categoryDb.query("SELECT set_config('request.jwt.claim.sub', $1, true)", [subject ?? '']);
@@ -2045,6 +2045,11 @@ describe('legal categories and lawyer/case assignments (isolated PGlite migratio
       '20261024021423_restrict_subscription_owner_updates.sql',
       categoryMigrationFile,
       '20261024123238_secure_rls_helper_functions_private_schema.sql',
+      '20261025140000_supabase_security_storage.sql',
+      '20261025141000_identity_owner_lawyer_access.sql',
+      '20261025142000_authenticated_transactional_rpcs.sql',
+      '20261025143000_supabase_native_workflows.sql',
+      '20261025144000_admin_native_workflows.sql',
     ]);
     await applyMigrations(categoryDb, files.slice(0, 2));
 
@@ -2141,16 +2146,14 @@ describe('legal categories and lawyer/case assignments (isolated PGlite migratio
     }
 
     await withCategoryAdmin(async () => {
-      await categoryDb.query(
-        `INSERT INTO public.legal_categories (id, name, slug)
-         VALUES ($1, 'Corporate Law', 'corporate-law')`,
-        [corporateCategoryId],
-      );
-      await categoryDb.query(
-        `INSERT INTO public.legal_categories (id, name, slug)
-         VALUES ($1, 'Family Law', 'family-law')`,
-        [familyCategoryId],
-      );
+      corporateCategoryId = (await categoryDb.query(
+        `INSERT INTO public.legal_categories (name, slug)
+         VALUES ('Corporate Law', 'corporate-law') RETURNING id`,
+      )).rows[0].id;
+      familyCategoryId = (await categoryDb.query(
+        `INSERT INTO public.legal_categories (name, slug)
+         VALUES ('Family Law', 'family-law') RETURNING id`,
+      )).rows[0].id;
     });
 
     await categoryDb.query(
@@ -2223,6 +2226,69 @@ describe('legal categories and lawyer/case assignments (isolated PGlite migratio
       (error) => error.code === '23505',
     );
   });
+
+  it('exposes private lawyer links only through the administrator-checked RPC', async () => {
+    const lawyerUserId = 'category-lawyer-profile';
+    const categoryName = (await categoryDb.query(
+      'SELECT name FROM public.legal_categories WHERE id = $1',
+      [corporateCategoryId],
+    )).rows[0].name;
+    await categoryDb.query(
+      `INSERT INTO public.users (id, uid, name, email, role)
+       VALUES ($1, $1, 'Provisioned Lawyer', 'provisioned-lawyer@example.test', 'lawyer')`,
+      [lawyerUserId],
+    );
+
+    await withCategoryAdmin(async () => {
+      const saved = (await categoryDb.query(
+        `SELECT public.rpc_admin_lawyer_save(
+           NULL, $1, $2, $3, '10 years', '$100/hour', 100,
+           'images/lawyer2.png', 0, 'Cairo', 'Synthetic test profile', false, false
+         ) AS result`,
+        ['Provisioned Counsel', lawyerUserId, corporateCategoryId],
+      )).rows[0].result;
+      assert.equal(saved.user_id, lawyerUserId);
+      assert.equal(saved.category_id, corporateCategoryId);
+      assert.equal(saved.specialty, categoryName);
+
+      const page = (await categoryDb.query(
+        `SELECT public.rpc_admin_lawyers_page(1, 10, 'Provisioned', NULL, NULL, NULL) AS result`,
+      )).rows[0].result;
+      assert.equal(page.total, 1);
+      assert.equal(page.items[0].user_id, lawyerUserId);
+
+      await expectCategorySqlError(
+        `INSERT INTO public.lawyers (user_id, name, specialty, price, price_value, category_id)
+         VALUES ($1, 'Bypass Attempt', 'Commercial Law', '$100/hour', 100, $2)`,
+        [lawyerUserId, corporateCategoryId],
+        '42501',
+        { withinTransaction: true },
+      );
+      await expectCategorySqlError(
+        `SELECT public.rpc_admin_lawyer_save(
+           NULL, 'Second Profile', $1, $2, '', '$100/hour', 100,
+           'images/lawyer2.png', 0, '', '', false, false
+         )`,
+        [lawyerUserId, corporateCategoryId],
+        '23505',
+        { withinTransaction: true },
+      );
+    });
+
+    await categoryDb.exec('BEGIN');
+    try {
+      await categoryDb.exec('SET LOCAL ROLE authenticated');
+      await setCategorySubject(categoryClient);
+      await expectCategorySqlError(
+        `SELECT public.rpc_admin_lawyers_page(1, 10, NULL, NULL, NULL, NULL)`,
+        [],
+        '42501',
+        { withinTransaction: true },
+      );
+    } finally {
+      await categoryDb.exec('ROLLBACK');
+    }
+  });
 });
 
 describe('identity, owner, lawyer and phone-auth proposal (isolated PGlite only)', () => {
@@ -2284,7 +2350,10 @@ describe('identity, owner, lawyer and phone-auth proposal (isolated PGlite only)
     identityDb = new PGlite();
     await identityDb.exec(bootstrapSql);
     const files = await migrationFiles();
-    await applyMigrations(identityDb, files);
+    const preProposalFiles = files.filter(
+      (file) => file < '20261025140000_supabase_security_storage.sql',
+    );
+    await applyMigrations(identityDb, preProposalFiles);
     baselineCaseBookingPolicies = (await identityDb.query(
       `SELECT tablename, policyname, permissive, roles, cmd, qual, with_check
          FROM pg_policies

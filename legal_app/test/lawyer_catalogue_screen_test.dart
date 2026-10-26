@@ -44,7 +44,6 @@ Future<void> _pumpWithApi(
   required Future<http.Response> Function(http.Request request) handler,
 }) async {
   final api = ApiClient(
-    baseUrl: 'http://test.local/api',
     client: MockClient((request) {
       if (request.url.path == '/api/categories') {
         return Future<http.Response>.value(jsonOk(<String, dynamic>{

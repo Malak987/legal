@@ -1,0 +1,12 @@
+diff a/admin_panel/test/app_config_test.dart b/admin_panel/test/app_config_test.dart	(rejected hunks)
+@@ -2,10 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
+ import 'package:legal_admin/config/app_config.dart';
+ 
+ void main() {
+-  test('unmigrated Express API has no Firebase or localhost fallback', () {
+-    expect(AppConfig.apiBaseUrl, isEmpty);
+-  });
+-
+   test('Supabase URL is the connected project while credentials remain external', () {
+     final uri = Uri.parse(AppConfig.supabaseUrl);
+     expect(AppConfig.supabaseProjectRef, 'qqfzbecwhewswkyxgebu');

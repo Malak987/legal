@@ -53,7 +53,10 @@ void main() {
     session = SessionController(
       auth: AuthService(
         gateway: gateway,
-        api: testApiClient(handler: (_, __) async => jsonOk(profileJson())),
+        api: testApiClient(
+          userProfile: profileJson(),
+          handler: (_, __) async => jsonOk(const {}),
+        ),
       ),
     );
   });

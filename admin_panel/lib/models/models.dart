@@ -19,6 +19,7 @@ class LegalCategory {
 class Lawyer {
   final String id;
   final String name;
+  final String userId;
   final String specialty;
   final String experience;
   final String categoryId;
@@ -40,6 +41,7 @@ class Lawyer {
   Lawyer({
     required this.id,
     required this.name,
+    this.userId = '',
     this.specialty = '',
     this.experience = '',
     this.categoryId = '',
@@ -58,6 +60,7 @@ class Lawyer {
     return Lawyer(
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
+      userId: json['userId']?.toString() ?? json['user_id']?.toString() ?? '',
       specialty: json['specialty']?.toString() ?? '',
       experience: json['experience']?.toString() ?? '',
       categoryId: json['categoryId']?.toString() ?? json['category_id']?.toString() ?? '',
@@ -74,6 +77,7 @@ class Lawyer {
 
   Map<String, dynamic> toJson() => {
         'name': name,
+        if (userId.isNotEmpty) 'userId': userId,
         'specialty': specialty,
         'experience': experience,
         if (categoryId.isNotEmpty) 'categoryId': categoryId,
