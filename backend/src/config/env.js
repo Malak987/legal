@@ -54,12 +54,12 @@ export function resolveFirebaseProjectId(envVars = process.env) {
 
 /** Resolve a comma-separated CORS override or environment-appropriate defaults. */
 export function resolveCorsOrigins(envVars = process.env) {
-  const explicit = (envVars.CORS_ORIGINS || '').trim();
+  const nodeEnv = (envVars.NODE_ENV || 'development').trim();
+  const explicit = (nodeEnv === 'production' ? '' : envVars.CORS_ORIGINS || '').trim();
   if (explicit) {
     return explicit.split(',').map((value) => value.trim()).filter(Boolean);
   }
 
-  const nodeEnv = (envVars.NODE_ENV || 'development').trim();
   if (nodeEnv !== 'production') {
     return ['http://localhost:3000', 'http://localhost:5173'];
   }
