@@ -1,9 +1,0 @@
-diff a/admin_panel/lib/services/auth_service.dart b/admin_panel/lib/services/auth_service.dart	(rejected hunks)
-@@ -123,6 +123,7 @@ class AuthService {
-             (authRedirectUrl ?? AppConfig.authRedirectUrl).trim(),
-         _sessionStore = sessionStore ?? SecureAdminSessionStore() {
-     _api.tokenProvider = freshToken;
-+    _api.forceRefreshTokenProvider = () => freshToken(forceRefresh: true);
-   }
- 
-   static const Duration _requestTimeout = Duration(seconds: 20);
