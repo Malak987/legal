@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
+import '../config/supabase_client_config.dart';
 import '../config/supabase_config.dart';
 import '../models/app_profile.dart';
 import 'api_client.dart';
@@ -105,7 +106,10 @@ abstract interface class AuthGateway {
 /// Supabase Auth REST gateway with rotating, securely persisted refresh-token
 /// sessions. Only the public anon/publishable key is accepted by this client.
 class SupabaseAuthGateway implements AuthGateway {
+  /// [config] is the startup-validated configuration shared with [ApiClient].
+  /// [supabaseUrl]/[supabaseAnonKey] remain as test overrides.
   SupabaseAuthGateway({
+    SupabaseClientConfig? config,
     http.Client? client,
     String? supabaseUrl,
     String? supabaseAnonKey,
@@ -116,9 +120,11 @@ class SupabaseAuthGateway implements AuthGateway {
         _allowClientSignup =
             allowClientSignup ?? SupabaseConfig.enableClientSignup,
         _ownsClient = client == null,
-        _supabaseUrl = (supabaseUrl ?? SupabaseConfig.supabaseUrl).trim(),
-        _supabaseAnonKey =
-            (supabaseAnonKey ?? SupabaseConfig.supabaseAnonKey).trim(),
+        _config = SupabaseClientConfig.select(
+          config: config,
+          url: supabaseUrl,
+          anonKey: supabaseAnonKey,
+        ),
         _sessionStore = sessionStore ?? SecureAuthSessionStore(),
         _authRedirectUrl =
             (authRedirectUrl ?? SupabaseConfig.authRedirectUrl).trim();
@@ -129,8 +135,7 @@ class SupabaseAuthGateway implements AuthGateway {
   final http.Client _client;
   final bool _allowClientSignup;
   final bool _ownsClient;
-  final String _supabaseUrl;
-  final String _supabaseAnonKey;
+  final SupabaseClientConfig _config;
   final AuthSessionStore _sessionStore;
   final String _authRedirectUrl;
   final StreamController<AuthUser?> _authController =
@@ -143,6 +148,14 @@ class SupabaseAuthGateway implements AuthGateway {
   Future<void>? _refreshInFlight;
   bool _isPasswordRecovery = false;
   bool _disposed = false;
+
+  /// The validated configuration used for every Auth request.
+  SupabaseClientConfig get config => _config;
+
+  bool get isConfigured => _config.isValid;
+
+  String get _supabaseUrl => _config.url;
+  String get _supabaseAnonKey => _config.anonKey;
 
   @override
   Stream<AuthUser?> get authStateChanges => _authController.stream;
@@ -556,9 +569,9 @@ class SupabaseAuthGateway implements AuthGateway {
   }
 
   void _ensureConfigured() {
-    if (_supabaseUrl.isEmpty || _supabaseAnonKey.isEmpty) {
+    if (!_config.isValid) {
       throw AuthException(
-        'Supabase authentication is not configured for this build. Provide the project URL and public anon/publishable key.',
+        _config.errorMessage,
         code: 'auth-not-configured',
       );
     }
@@ -658,7 +671,7 @@ class SupabaseAuthGateway implements AuthGateway {
   Future<void> signOut() async {
     final token = _accessToken;
     await _clearSession(notify: true);
-    if (token != null && token.isNotEmpty && _supabaseAnonKey.isNotEmpty) {
+    if (token != null && token.isNotEmpty && _config.isValid) {
       try {
         await _send('POST', _authUri('logout'), bearerToken: token);
       } catch (_) {

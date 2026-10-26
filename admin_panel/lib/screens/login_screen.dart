@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../config/theme.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/common.dart';
 
 /// Internal-panel sign-in using Supabase Auth and a server-owned profile role.
 class LoginScreen extends StatefulWidget {
@@ -81,36 +82,36 @@ class _LoginScreenState extends State<LoginScreen> {
             padding: const EdgeInsets.all(24),
             child: Card(
               margin: EdgeInsets.zero,
-              elevation: 6,
               child: Padding(
-                padding: const EdgeInsets.all(28),
+                padding: const EdgeInsets.all(AppSpacing.xxl),
                 child: Form(
                   key: _formKey,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: const BoxDecoration(
-                          color: AppTheme.primary,
-                          shape: BoxShape.circle,
+                      Center(
+                        child: Container(
+                          width: 56,
+                          height: 56,
+                          decoration: const BoxDecoration(
+                            color: AppTheme.sidebar,
+                            borderRadius: AppRadius.lgAll,
+                          ),
+                          child: const Icon(Icons.gavel_rounded, color: AppTheme.gold, size: 30),
                         ),
-                        child: const Icon(Icons.gavel, color: Colors.white, size: 40),
                       ),
-                      const SizedBox(height: 20),
-                      const Text(
+                      const SizedBox(height: AppSpacing.lg),
+                      Text(
                         'Legal Services',
                         textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                        ),
+                        style: Theme.of(context).textTheme.headlineSmall,
                       ),
-                      const Text(
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
                         'Admin & Lawyer Workspace',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey),
+                        style: Theme.of(context).textTheme.bodyMedium!.copyWith(color: AppTheme.textSecondary),
                       ),
                       const SizedBox(height: 28),
                       // Persistent, actionable message. This is what replaces
@@ -118,34 +119,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       // session restoration rejected the account, the user is
                       // told exactly why.
                       if (auth.error != null) ...[
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.red.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.red.shade200),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(
-                                Icons.error_outline,
-                                color: Colors.red.shade700,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  auth.error!,
-                                  style: TextStyle(
-                                    color: Colors.red.shade800,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                        InlineMessage(message: auth.error!),
                         const SizedBox(height: 20),
                       ],
                       TextFormField(
@@ -166,6 +140,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           labelText: 'Password',
                           prefixIcon: const Icon(Icons.lock_outline),
                           suffixIcon: IconButton(
+                            tooltip: _obscure ? 'Show password' : 'Hide password',
                             icon: Icon(
                               _obscure ? Icons.visibility : Icons.visibility_off,
                             ),

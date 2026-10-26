@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_errors.dart';
 import '../services/api_service.dart';
+import '../widgets/client_picker.dart';
 import '../widgets/common.dart';
+import '../widgets/pagination.dart';
 
 /// Manage lawyers (list, create, update, delete).
 class LawyersScreen extends StatefulWidget {
@@ -16,7 +19,8 @@ class LawyersScreen extends StatefulWidget {
 }
 
 class _LawyersScreenState extends State<LawyersScreen> {
-  late Future<List<Lawyer>> _future;
+  late Future<Paginated<Lawyer>> _future;
+  int _page = 1;
   String _search = '';
 
   /// Debounces search input so one keystroke does not equal one request.
@@ -28,18 +32,32 @@ class _LawyersScreenState extends State<LawyersScreen> {
     _future = _fetch();
   }
 
-  Future<List<Lawyer>> _fetch() async {
-    final res = await AuthProvider.of(context).api.get('lawyers', query: {
-      'page': '1',
-      'limit': '$kMaxPageSize',
-      if (_search.isNotEmpty) 'search': _search,
-    });
-    return itemsOf(res).map(Lawyer.fromJson).toList();
+  Future<Paginated<Lawyer>> _fetch() {
+    final api = AuthProvider.of(context).api;
+    final search = _search;
+    return loadPaginated<Lawyer>(
+      page: _page,
+      fromJson: Lawyer.fromJson,
+      request: (page) => api.get('lawyers', query: {
+        'page': '$page',
+        'limit': '$kMaxPageSize',
+        if (search.isNotEmpty) 'search': search,
+      }),
+    );
   }
 
-  void _reload() {
+  /// Re-fetches; [resetPage] returns to page 1 (search/filter changes).
+  void _reload({bool resetPage = false}) {
     if (!mounted) return;
     setState(() {
+      if (resetPage) _page = 1;
+      _future = _fetch();
+    });
+  }
+
+  void _goToPage(int page) {
+    setState(() {
+      _page = page;
       _future = _fetch();
     });
   }
@@ -66,7 +84,8 @@ class _LawyersScreenState extends State<LawyersScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete', style: TextStyle(color: AppTheme.danger)),
+            style: AppTheme.destructiveButtonStyle,
+            child: const Text('Delete'),
           ),
         ],
       ),
@@ -81,7 +100,7 @@ class _LawyersScreenState extends State<LawyersScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(reportError(e))));
       }
     }
   }
@@ -96,56 +115,39 @@ class _LawyersScreenState extends State<LawyersScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: SearchField(
-                  hint: 'Search lawyers...',
-                  onChanged: (v) {
-                    _search = v;
-                    _searchDebounce?.cancel();
-                    _searchDebounce =
-                        Timer(const Duration(milliseconds: 350), _reload);
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Refresh lawyers',
-                onPressed: _reload,
-                icon: const Icon(Icons.refresh),
-              ),
-              const SizedBox(width: 8),
-              ElevatedButton.icon(
-                onPressed: () => _openForm(),
-                icon: const Icon(Icons.add),
-                label: const Text('Add Lawyer'),
-              ),
-            ],
+        ListToolbar(
+          search: SearchField(
+            hint: 'Search lawyers...',
+            onChanged: (v) {
+              _search = v;
+              _searchDebounce?.cancel();
+              _searchDebounce = Timer(const Duration(milliseconds: 350), () => _reload(resetPage: true));
+            },
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'Refresh lawyers',
+              onPressed: _reload,
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+          primary: ElevatedButton.icon(
+            onPressed: () => _openForm(),
+            icon: const Icon(Icons.add),
+            label: const Text('Add Lawyer'),
           ),
         ),
         Expanded(
-          child: FutureBuilder<List<Lawyer>>(
+          child: PagedFutureView<Lawyer>(
             future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const LoadingView();
-              }
-              if (snapshot.hasError) {
-                return ErrorBanner(
-                  message: '${snapshot.error}',
-                  onRetry: _reload,
-                );
-              }
-              final lawyers = snapshot.data ?? [];
-              if (lawyers.isEmpty) {
-                return const EmptyState(
+            onRetry: _reload,
+            onPageChanged: _goToPage,
+            errorContext: 'load lawyer list',
+            empty: const EmptyState(
                   icon: Icons.gavel,
                   message: 'No lawyers found',
-                );
-              }
+                ),
+            itemsBuilder: (context, lawyers) {
               return ListView.builder(
                 padding: const EdgeInsets.only(bottom: 24),
                 itemCount: lawyers.length,
@@ -154,48 +156,29 @@ class _LawyersScreenState extends State<LawyersScreen> {
                   final experience = l.experience.trim().isEmpty
                       ? 'Experience not set'
                       : l.experience.trim();
-                  return Card(
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: AppTheme.primary.withValues(alpha: 0.1),
-                        child: const Icon(Icons.person, color: AppTheme.primary),
+                  return RecordTile(
+                    leading: const RecordAvatar(icon: Icons.person_outline),
+                    title: l.name,
+                    details: [l.specialty, experience, l.price, '★ ${l.rating}'],
+                    badges: [
+                      if (l.isPopular)
+                        const StatusBadge(label: 'Popular', color: AppTheme.accent, icon: Icons.trending_up),
+                      if (l.isTop)
+                        const StatusBadge(label: 'Top', color: AppTheme.secondary, icon: Icons.workspace_premium_outlined),
+                    ],
+                    actions: [
+                      RowAction(
+                        icon: Icons.edit,
+                        tooltip: 'Edit lawyer',
+                        onPressed: () => _openForm(lawyer: l),
                       ),
-                      title: Text(l.name,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        '${l.specialty}  •  $experience  •  '
-                        '${l.price}  •  ⭐ ${l.rating}',
+                      RowAction(
+                        icon: Icons.delete,
+                        tooltip: 'Delete lawyer',
+                        destructive: true,
+                        onPressed: () => _delete(l),
                       ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (l.isPopular)
-                            const Padding(
-                              padding: EdgeInsets.only(right: 6),
-                              child: Chip(
-                                label: Text('Popular', style: TextStyle(fontSize: 11)),
-                                visualDensity: VisualDensity.compact,
-                              ),
-                            ),
-                          if (l.isTop)
-                            const Padding(
-                              padding: EdgeInsets.only(right: 6),
-                              child: Chip(
-                                label: Text('Top', style: TextStyle(fontSize: 11)),
-                                visualDensity: VisualDensity.compact,
-                              ),
-                            ),
-                          IconButton(
-                            icon: const Icon(Icons.edit, color: AppTheme.secondary),
-                            onPressed: () => _openForm(lawyer: l),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete, color: AppTheme.danger),
-                            onPressed: () => _delete(l),
-                          ),
-                        ],
-                      ),
-                    ),
+                    ],
                   );
                 },
               );
@@ -223,7 +206,17 @@ class _LawyerDialogState extends State<LawyerDialog> {
   late final TextEditingController _experience;
   late final TextEditingController _location;
   late final TextEditingController _image;
+  late final TextEditingController _bio;
   late double _rating;
+
+  /// The linked `lawyer`-role account (`lawyers.user_id`). The lawyer
+  /// workspace and assigned-case access depend on this link.
+  String? _linkedUserId;
+  String _linkedUserLabel = '';
+
+  /// True only after an explicit pick or unlink. The `userId` key is sent
+  /// only then, so an untouched form never changes the stored link.
+  bool _linkChanged = false;
   bool _isPopular = false;
   bool _isTop = false;
   bool _saving = false;
@@ -243,6 +236,9 @@ class _LawyerDialogState extends State<LawyerDialog> {
     _experience = TextEditingController(text: l?.experience ?? '');
     _location = TextEditingController(text: l?.location ?? '');
     _image = TextEditingController(text: l?.image ?? '');
+    _bio = TextEditingController(text: l?.bio ?? '');
+    _linkedUserId = l?.userId.isNotEmpty == true ? l!.userId : null;
+    _linkedUserLabel = _linkedUserId ?? '';
     _rating = l?.rating ?? 4.5;
     _isPopular = l?.isPopular ?? false;
     _isTop = l?.isTop ?? false;
@@ -256,6 +252,7 @@ class _LawyerDialogState extends State<LawyerDialog> {
     _experience.dispose();
     _location.dispose();
     _image.dispose();
+    _bio.dispose();
     super.dispose();
   }
 
@@ -287,13 +284,16 @@ class _LawyerDialogState extends State<LawyerDialog> {
   }
 
   Future<void> _save() async {
-    if (_name.text.trim().isEmpty) {
+    // rpc_admin_lawyer_save rejects names shorter than 2 characters.
+    if (_name.text.trim().length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Name is required')),
+        const SnackBar(content: Text('Name must be at least 2 characters')),
       );
       return;
     }
-    if (widget.lawyer == null && (_categoryId == null || _categoryId!.isEmpty)) {
+    // The save RPC requires a category on create and on edit
+    // (CATEGORY_REQUIRED); an empty selection never clears a stored one.
+    if (_categoryId == null || _categoryId!.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Select a legal category for this lawyer')),
       );
@@ -316,7 +316,9 @@ class _LawyerDialogState extends State<LawyerDialog> {
         );
         return;
       }
-    } else if (widget.lawyer == null) {
+    } else if (widget.lawyer == null || (widget.lawyer!.priceValue ?? 0) <= 0) {
+      // A stored rate of 0 is rejected by the save RPC, so "keep the current
+      // rate" is only possible when a positive rate is already stored.
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Hourly rate is required so clients can book this lawyer'),
@@ -332,6 +334,7 @@ class _LawyerDialogState extends State<LawyerDialog> {
       'price': _price.text.trim(),
       'location': _location.text.trim(),
       'image': _image.text.trim(),
+      'bio': _bio.text.trim(),
       'rating': _rating,
       'isPopular': _isPopular,
       'isTop': _isTop,
@@ -344,6 +347,8 @@ class _LawyerDialogState extends State<LawyerDialog> {
     // Added after the literal instead of with a collection-`if`: the stored
     // rate must simply be absent when the field was left empty on edit.
     if (rate != null) body['priceValue'] = rate;
+    // An empty string unlinks (the RPC stores NULL); absent keeps the link.
+    if (_linkChanged) body['userId'] = _linkedUserId ?? '';
     try {
       final api = AuthProvider.of(context).api;
       if (widget.lawyer == null) {
@@ -356,9 +361,60 @@ class _LawyerDialogState extends State<LawyerDialog> {
       if (mounted) {
         setState(() => _saving = false);
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+            .showSnackBar(SnackBar(content: Text(reportError(e))));
       }
     }
+  }
+
+  /// Linked lawyer-account section: shows the current link, offers an
+  /// explicit unlink, and a picker restricted to `lawyer`-role profiles.
+  Widget _buildAccountLink() {
+    final linked = _linkedUserId;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              linked == null ? Icons.link_off : Icons.link,
+              size: 16,
+              color: linked == null ? Colors.grey : AppTheme.success,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                linked == null
+                    ? 'No lawyer account linked (the lawyer cannot sign in to '
+                        'their workspace).'
+                    : 'Linked account: $_linkedUserLabel'
+                        '${_linkedUserLabel == linked ? '' : ' ($linked)'}',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+              ),
+            ),
+            if (linked != null)
+              TextButton(
+                onPressed: () => setState(() {
+                  _linkedUserId = null;
+                  _linkedUserLabel = '';
+                  _linkChanged = true;
+                }),
+                child: const Text('Unlink'),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClientPickerField(
+          selectedUserId: _linkedUserId,
+          requiredRole: 'lawyer',
+          roleLabel: 'lawyer account',
+          onSelected: (user) => setState(() {
+            _linkedUserId = user.id;
+            _linkedUserLabel = user.name.isEmpty ? user.id : user.name;
+            _linkChanged = true;
+          }),
+        ),
+      ],
+    );
   }
 
   @override
@@ -373,8 +429,11 @@ class _LawyerDialogState extends State<LawyerDialog> {
             children: [
               TextField(
                 controller: _name,
+                maxLength: 160,
                 decoration: const InputDecoration(labelText: 'Name'),
               ),
+              _buildAccountLink(),
+              const SizedBox(height: 12),
               const SizedBox(height: 12),
               FutureBuilder<List<LegalCategory>>(
                 future: _categoriesFuture,
@@ -420,7 +479,7 @@ class _LawyerDialogState extends State<LawyerDialog> {
                         value: '',
                         child: Text(widget.lawyer == null
                             ? 'Select a category'
-                            : 'No category (legacy profile)'),
+                            : 'Select a category (required)'),
                       ),
                       ...categories.map(
                         (category) => DropdownMenuItem<String>(
@@ -439,6 +498,7 @@ class _LawyerDialogState extends State<LawyerDialog> {
               const SizedBox(height: 12),
               TextField(
                 controller: _experience,
+                maxLength: 120,
                 decoration: const InputDecoration(
                   labelText: 'Experience',
                   hintText: 'e.g. 8 years or Senior counsel',
@@ -447,6 +507,7 @@ class _LawyerDialogState extends State<LawyerDialog> {
               const SizedBox(height: 12),
               TextField(
                 controller: _price,
+                maxLength: 80,
                 decoration: const InputDecoration(labelText: 'Price (e.g. \$150/hr)'),
               ),
               const SizedBox(height: 12),
@@ -463,17 +524,33 @@ class _LawyerDialogState extends State<LawyerDialog> {
               const SizedBox(height: 12),
               TextField(
                 controller: _location,
+                maxLength: 200,
                 decoration: const InputDecoration(labelText: 'Location'),
               ),
               const SizedBox(height: 12),
               TextField(
+                controller: _bio,
+                maxLines: 4,
+                maxLength: 4000,
+                decoration: const InputDecoration(
+                  labelText: 'Bio',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
                 controller: _image,
+                maxLength: 500,
                 decoration: const InputDecoration(labelText: 'Image path (optional)'),
               ),
               const SizedBox(height: 12),
               Row(
                 children: [
-                  Text('Rating: ${_rating.toStringAsFixed(1)}'),
+                  Tooltip(
+                    message: 'Recalculated automatically when clients add or '
+                        'change reviews.',
+                    child: Text('Rating: ${_rating.toStringAsFixed(1)}'),
+                  ),
                   Expanded(
                     child: Slider(
                       value: _rating,

@@ -342,6 +342,8 @@ void main() {
       expect(body['clientName'], 'Sara Ali');
       expect(body['categoryId'], 'family-category');
       expect(body['lawyerId'], 'family-lawyer');
+      // The category name is stored as the legacy case type shown by the app.
+      expect(body['caseType'], 'Family Law');
       expect(body['title'], 'Contract review');
       // Unrelated fields keep their defaults.
       expect(body['status'], 'Open');

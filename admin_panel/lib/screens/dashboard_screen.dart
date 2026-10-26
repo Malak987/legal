@@ -1,5 +1,8 @@
+import 'dart:math' as math;
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../config/theme.dart';
 import '../models/models.dart';
@@ -76,125 +79,105 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) return const LoadingView(message: 'Loading dashboard...');
-    if (_error != null) return ErrorBanner(message: _error!, onRetry: _load);
+    if (_error != null) {
+      return ErrorBanner(
+        title: 'Could not load the dashboard',
+        message: _error!,
+        onRetry: _load,
+      );
+    }
 
     final s = _stats!;
+    final theme = Theme.of(context);
+    final compact = MediaQuery.sizeOf(context).width < AppBreakpoints.medium;
+    final pad = compact ? AppSpacing.lg : AppSpacing.xl;
+
+    void go(String title) => widget.onNavigate?.call(title);
 
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(pad, pad, pad, AppSpacing.xxl),
         children: [
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              _metric('Users', '${s.users}', Icons.people, AppTheme.primary),
-              _metric('Lawyers', '${s.lawyers}', Icons.gavel, AppTheme.secondary),
-              _metric('Cases', '${s.cases}', Icons.folder_copy, AppTheme.accent),
-              _metric('Bookings', '${s.bookings}', Icons.event_available,
-                  AppTheme.success),
-              _metric('Reviews', '${s.reviews}', Icons.star, AppTheme.warning),
-              _metric('Subscriptions', '${s.subscriptions}', Icons.subscriptions,
-                  AppTheme.primary),
-            ],
-          ),
-          const SizedBox(height: 20),
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                flex: 3,
-                child: Card(
-                  margin: EdgeInsets.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Bookings by status',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        SizedBox(
-                          height: 240,
-                          child: BarChart(_barData(s)),
-                        ),
-                      ],
-                    ),
-                  ),
+                child: Text(
+                  'Platform activity at a glance',
+                  style: theme.textTheme.bodyMedium!.copyWith(color: AppTheme.textSecondary),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: Card(
-                  margin: EdgeInsets.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Overview',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        _overviewRow('Active', s.activeBookings, AppTheme.success),
-                        _overviewRow(
-                            'Completed', s.completedBookings, AppTheme.secondary),
-                        _overviewRow(
-                            'Cancelled', s.cancelledBookings, AppTheme.danger),
-                        const Divider(height: 32),
-                        const Text('Total wallet balance'),
-                        const SizedBox(height: 4),
-                        Text(
-                          '\$${_formatMoney(s.totalWalletBalance)}',
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.primary,
-                          ),
-                        ),
-                      ],
+              compact
+                  ? IconButton(
+                      tooltip: 'Refresh dashboard',
+                      onPressed: _load,
+                      icon: const Icon(Icons.refresh),
+                    )
+                  : OutlinedButton.icon(
+                      onPressed: _load,
+                      icon: const Icon(Icons.refresh, size: 18),
+                      label: const Text('Refresh'),
                     ),
-                  ),
-                ),
-              ),
             ],
           ),
-          const SizedBox(height: 20),
-          Card(
-            margin: EdgeInsets.zero,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Quick actions',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      _quickAction('Manage Lawyers', Icons.gavel, 'Lawyers'),
-                      _quickAction('Manage Users', Icons.people, 'Users'),
-                      _quickAction('View Bookings', Icons.event_available, 'Bookings'),
-                      _quickAction('View Cases', Icons.folder_copy, 'Cases'),
-                    ],
-                  ),
-                ],
-              ),
+          const SizedBox(height: AppSpacing.lg),
+          ResponsiveGrid(
+            children: [
+              StatCard(label: 'Users', value: _count(s.users), icon: Icons.people_outline, color: AppTheme.primary, onTap: () => go('Users')),
+              StatCard(label: 'Lawyers', value: _count(s.lawyers), icon: Icons.gavel, color: AppTheme.secondary, onTap: () => go('Lawyers')),
+              StatCard(label: 'Cases', value: _count(s.cases), icon: Icons.folder_copy_outlined, color: AppTheme.accent, onTap: () => go('Cases')),
+              StatCard(label: 'Bookings', value: _count(s.bookings), icon: Icons.event_available_outlined, color: AppTheme.success, onTap: () => go('Bookings')),
+              StatCard(label: 'Reviews', value: _count(s.reviews), icon: Icons.star_outline, color: AppTheme.warning, onTap: () => go('Reviews')),
+              StatCard(label: 'Plans', value: _count(s.plans), icon: Icons.workspace_premium_outlined, color: AppTheme.primary, onTap: () => go('Plans')),
+              StatCard(label: 'Subscriptions', value: _count(s.subscriptions), icon: Icons.card_membership_outlined, color: AppTheme.secondary, onTap: () => go('Subscriptions')),
+              StatCard(label: 'Wallet balance', value: _money(s.totalWalletBalance), icon: Icons.account_balance_wallet_outlined, color: AppTheme.success),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          // Side by side on wide layouts; stacked on narrow ones so the
+          // chart and breakdown are not squeezed into unreadable columns.
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final chart = SectionCard(
+                title: 'Bookings by status',
+                subtitle: 'Active, completed and cancelled bookings',
+                child: SizedBox(height: 240, child: BarChart(_barData(s))),
+              );
+              final breakdown = SectionCard(
+                title: 'Status breakdown',
+                subtitle: 'Share of the bookings shown in the chart',
+                child: _breakdown(s),
+              );
+              if (constraints.maxWidth < 760) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [chart, const SizedBox(height: AppSpacing.lg), breakdown],
+                );
+              }
+              return IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(flex: 3, child: chart),
+                    const SizedBox(width: AppSpacing.lg),
+                    Expanded(flex: 2, child: breakdown),
+                  ],
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          SectionCard(
+            title: 'Quick actions',
+            child: Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: [
+                _quickAction('Manage Lawyers', Icons.gavel, 'Lawyers'),
+                _quickAction('Manage Users', Icons.people_outline, 'Users'),
+                _quickAction('View Bookings', Icons.event_available_outlined, 'Bookings'),
+                _quickAction('View Cases', Icons.folder_copy_outlined, 'Cases'),
+              ],
             ),
           ),
         ],
@@ -202,28 +185,66 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _metric(String label, String value, IconData icon, Color color) {
-    return SizedBox(
-      width: 180,
-      child: StatCard(label: label, value: value, icon: icon, color: color),
-    );
-  }
-
-  Widget _overviewRow(String label, int value, Color color) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Container(
-            width: 12,
-            height: 12,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+  Widget _breakdown(DashboardStats s) {
+    final theme = Theme.of(context);
+    final rows = [
+      ('Active', s.activeBookings, AppTheme.success),
+      ('Completed', s.completedBookings, AppTheme.secondary),
+      ('Cancelled', s.cancelledBookings, AppTheme.danger),
+    ];
+    final total = rows.fold<int>(0, (sum, r) => sum + r.$2);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final (label, value, color) in rows)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(color: color, borderRadius: const BorderRadius.all(Radius.circular(3))),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(child: Text(label, style: theme.textTheme.bodyMedium)),
+                    Text(_count(value), style: theme.textTheme.titleSmall),
+                    SizedBox(
+                      width: 52,
+                      child: Text(
+                        total == 0 ? '—' : '${(value * 100 / total).round()}%',
+                        textAlign: TextAlign.right,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.xs + 2),
+                ClipRRect(
+                  borderRadius: const BorderRadius.all(Radius.circular(3)),
+                  child: LinearProgressIndicator(
+                    value: total == 0 ? 0 : value / total,
+                    minHeight: 6,
+                    color: color,
+                    backgroundColor: const Color(0xFFEEF2F7),
+                  ),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(width: 10),
-          Expanded(child: Text(label)),
-          Text('$value', style: const TextStyle(fontWeight: FontWeight.bold)),
-        ],
-      ),
+        const Divider(),
+        const SizedBox(height: AppSpacing.md),
+        Row(
+          children: [
+            Expanded(child: Text('Total', style: theme.textTheme.bodyMedium!.copyWith(color: AppTheme.textSecondary))),
+            Text(_count(total), style: theme.textTheme.titleSmall),
+            const SizedBox(width: 52),
+          ],
+        ),
+      ],
     );
   }
 
@@ -236,58 +257,69 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   BarChartData _barData(DashboardStats s) {
-    final groups = [
-      BarChartGroupData(
-        x: 0,
-        barRods: [
-          BarChartRodData(
-            toY: s.activeBookings.toDouble(),
-            color: AppTheme.success,
-            width: 22,
-            borderRadius: BorderRadius.circular(4),
-          ),
-        ],
-      ),
-      BarChartGroupData(
-        x: 1,
-        barRods: [
-          BarChartRodData(
-            toY: s.completedBookings.toDouble(),
-            color: AppTheme.secondary,
-            width: 22,
-            borderRadius: BorderRadius.circular(4),
-          ),
-        ],
-      ),
-      BarChartGroupData(
-        x: 2,
-        barRods: [
-          BarChartRodData(
-            toY: s.cancelledBookings.toDouble(),
-            color: AppTheme.danger,
-            width: 22,
-            borderRadius: BorderRadius.circular(4),
-          ),
-        ],
-      ),
-    ];
+    final values = [s.activeBookings, s.completedBookings, s.cancelledBookings];
+    const colors = [AppTheme.success, AppTheme.secondary, AppTheme.danger];
+    const labels = ['Active', 'Completed', 'Cancelled'];
+    final maxValue = values.fold<int>(0, (m, v) => v > m ? v : m);
+    final interval = _niceInterval(maxValue / 4);
+    final maxY = maxValue == 0 ? 4 * interval : (maxValue / interval).ceil() * interval;
+    final axisStyle = Theme.of(context).textTheme.bodySmall!.copyWith(fontSize: 11.5);
+    // Reserve room for the longest y-axis label so it never wraps.
+    final longest = NumberFormat.compact().format(maxY).length;
 
     return BarChartData(
-      barGroups: groups,
+      maxY: maxY,
+      minY: 0,
+      alignment: BarChartAlignment.spaceAround,
+      barGroups: [
+        for (var i = 0; i < values.length; i++)
+          BarChartGroupData(
+            x: i,
+            barRods: [
+              BarChartRodData(
+                toY: values[i].toDouble(),
+                color: colors[i],
+                width: 32,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+              ),
+            ],
+          ),
+      ],
+      barTouchData: BarTouchData(
+        touchTooltipData: BarTouchTooltipData(
+          getTooltipColor: (_) => AppTheme.textPrimary,
+          tooltipRoundedRadius: AppRadius.sm,
+          getTooltipItem: (group, groupIndex, rod, rodIndex) => BarTooltipItem(
+            '${labels[group.x]}: ${_count(rod.toY.round())}',
+            const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ),
       titlesData: FlTitlesData(
-        leftTitles: const AxisTitles(
-          sideTitles: SideTitles(showTitles: true, reservedSize: 30),
+        leftTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            interval: interval,
+            reservedSize: 14.0 + longest * 7.5,
+            getTitlesWidget: (value, meta) {
+              if (value > maxY) return const SizedBox.shrink();
+              return SideTitleWidget(
+                meta: meta,
+                child: Text(NumberFormat.compact().format(value), style: axisStyle, maxLines: 1, softWrap: false),
+              );
+            },
+          ),
         ),
         bottomTitles: AxisTitles(
           sideTitles: SideTitles(
             showTitles: true,
+            reservedSize: 28,
             getTitlesWidget: (value, meta) {
-              const labels = ['Active', 'Completed', 'Cancelled'];
               final i = value.toInt();
               if (i < 0 || i >= labels.length) return const SizedBox.shrink();
-              return Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(labels[i], style: const TextStyle(fontSize: 11)),
+              return SideTitleWidget(
+                meta: meta,
+                child: Text(labels[i], style: axisStyle.copyWith(color: AppTheme.textSecondary)),
               );
             },
           ),
@@ -295,13 +327,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
       ),
-      gridData: const FlGridData(show: true, drawVerticalLine: false),
-      borderData: FlBorderData(show: false),
+      gridData: FlGridData(
+        show: true,
+        drawVerticalLine: false,
+        horizontalInterval: interval,
+        getDrawingHorizontalLine: (_) => const FlLine(color: AppTheme.border, strokeWidth: 1),
+      ),
+      borderData: FlBorderData(
+        show: true,
+        border: const Border(bottom: BorderSide(color: AppTheme.borderStrong)),
+      ),
     );
   }
 }
 
-String _formatMoney(double value) {
-  if (value == value.roundToDouble()) return value.toStringAsFixed(0);
-  return value.toStringAsFixed(2);
+/// A "nice" axis step (1, 2, 2.5 or 5 × 10ⁿ) at or above [raw].
+double _niceInterval(double raw) {
+  if (raw <= 1) return 1;
+  final exponent = (math.log(raw) / math.ln10).floor();
+  final magnitude = math.pow(10, exponent).toDouble();
+  for (final step in [1.0, 2.0, 2.5, 5.0, 10.0]) {
+    if (raw <= step * magnitude) return step * magnitude;
+  }
+  return 10 * magnitude;
 }
+
+String _count(int value) => NumberFormat.decimalPattern().format(value);
+
+String _money(double value) => NumberFormat.currency(
+      symbol: r'$',
+      decimalDigits: value == value.roundToDouble() ? 0 : 2,
+    ).format(value);

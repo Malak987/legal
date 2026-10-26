@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_errors.dart';
 import '../services/api_service.dart';
+import '../widgets/client_picker.dart';
 import '../widgets/common.dart';
+import '../widgets/pagination.dart';
 
 /// Manage notifications: view, create, mark as read, delete.
 class NotificationsScreen extends StatefulWidget {
@@ -15,7 +18,8 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  late Future<List<NotificationItem>> _future;
+  late Future<Paginated<NotificationItem>> _future;
+  int _page = 1;
 
   @override
   void initState() {
@@ -23,16 +27,27 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     _future = _fetch();
   }
 
-  Future<List<NotificationItem>> _fetch() async {
-    final res = await AuthProvider.of(context)
-        .api
-        .get('notifications', query: {'page': '1', 'limit': '$kMaxPageSize'});
-    return itemsOf(res).map(NotificationItem.fromJson).toList();
+  Future<Paginated<NotificationItem>> _fetch() {
+    final api = AuthProvider.of(context).api;
+    return loadPaginated<NotificationItem>(
+      page: _page,
+      fromJson: NotificationItem.fromJson,
+      request: (page) => api.get('notifications', query: {'page': '$page', 'limit': '$kMaxPageSize'}),
+    );
   }
 
-  void _reload() {
+  /// Re-fetches; [resetPage] returns to page 1 (search/filter changes).
+  void _reload({bool resetPage = false}) {
     if (!mounted) return;
     setState(() {
+      if (resetPage) _page = 1;
+      _future = _fetch();
+    });
+  }
+
+  void _goToPage(int page) {
+    setState(() {
+      _page = page;
       _future = _fetch();
     });
   }
@@ -53,18 +68,37 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       if (mounted) _reload();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(reportError(e))));
       }
     }
   }
 
   Future<void> _delete(NotificationItem n) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete notification'),
+        content: Text('Delete "${n.title}"? The recipient will no longer see it.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: AppTheme.destructiveButtonStyle,
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
     try {
       await AuthProvider.of(context).api.delete('notifications/${n.id}');
       if (mounted) _reload();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(reportError(e))));
       }
     }
   }
@@ -73,79 +107,65 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Row(
-            children: [
-              const Spacer(),
-              ElevatedButton.icon(
-                onPressed: _openForm,
-                icon: const Icon(Icons.add),
-                label: const Text('New Notification'),
-              ),
-            ],
+        ListToolbar(
+          primary: ElevatedButton.icon(
+            onPressed: _openForm,
+            icon: const Icon(Icons.add),
+            label: const Text('New Notification'),
           ),
         ),
         Expanded(
-          child: FutureBuilder<List<NotificationItem>>(
+          child: PagedFutureView<NotificationItem>(
             future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const LoadingView();
-              }
-              if (snapshot.hasError) {
-                return ErrorBanner(message: '${snapshot.error}', onRetry: _reload);
-              }
-              final items = snapshot.data ?? [];
-              if (items.isEmpty) {
-                return const EmptyState(
+            onRetry: _reload,
+            onPageChanged: _goToPage,
+            errorContext: 'load notificationitem list',
+            empty: const EmptyState(
                   icon: Icons.notifications,
                   message: 'No notifications found',
-                );
-              }
+                ),
+            itemsBuilder: (context, items) {
               return ListView.builder(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.only(bottom: AppSpacing.xl),
                 itemCount: items.length,
                 itemBuilder: (context, i) {
                   final n = items[i];
-                  return Card(
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: n.read
-                            ? Colors.grey.shade300
-                            : AppTheme.primary.withValues(alpha: 0.12),
-                        child: Icon(
-                          Icons.notifications,
-                          color: n.read ? Colors.grey : AppTheme.primary,
-                        ),
-                      ),
-                      title: Text(
-                        n.title,
-                        style: TextStyle(
-                          fontWeight: n.read ? FontWeight.normal : FontWeight.bold,
-                        ),
-                      ),
-                      subtitle: Text(n.content, maxLines: 2),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: Icon(
-                              n.read
-                                  ? Icons.mark_email_unread
-                                  : Icons.mark_email_read,
-                              color: AppTheme.secondary,
-                            ),
-                            tooltip: n.read ? 'Mark unread' : 'Mark read',
-                            onPressed: () => _markRead(n),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete, color: AppTheme.danger),
-                            onPressed: () => _delete(n),
-                          ),
-                        ],
-                      ),
+                  return RecordTile(
+                    leading: RecordAvatar(
+                      icon: n.read ? Icons.notifications_none : Icons.notifications_active_outlined,
+                      color: n.read ? AppTheme.textMuted : AppTheme.primary,
                     ),
+                    title: n.title,
+                    subtitle: 'To: ${n.recipientLabel}',
+                    extra: n.content.trim().isEmpty
+                        ? null
+                        : Padding(
+                            padding: const EdgeInsets.only(top: AppSpacing.xs),
+                            child: Text(
+                              n.content,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary, height: 1.4),
+                            ),
+                          ),
+                    badges: [
+                      n.read
+                          ? const StatusBadge(label: 'Read', color: AppTheme.textMuted, icon: Icons.done_all)
+                          : const StatusBadge(label: 'Unread', color: AppTheme.secondary),
+                    ],
+                    actions: [
+                      RowAction(
+                        icon: n.read ? Icons.mark_email_unread : Icons.mark_email_read,
+                        tooltip: n.read ? 'Mark unread' : 'Mark read',
+                        onPressed: () => _markRead(n),
+                      ),
+                      RowAction(
+                        icon: Icons.delete,
+                        tooltip: 'Delete notification',
+                        destructive: true,
+                        onPressed: () => _delete(n),
+                      ),
+                    ],
                   );
                 },
               );
@@ -167,39 +187,51 @@ class NotificationDialog extends StatefulWidget {
 class _NotificationDialogState extends State<NotificationDialog> {
   final _title = TextEditingController();
   final _content = TextEditingController();
-  final _userId = TextEditingController();
   final _type = TextEditingController();
   bool _saving = false;
+
+  /// notifications.user_id is NOT NULL and there is no broadcast contract, so
+  /// every notification needs exactly one recipient chosen from the picker.
+  String _recipientRole = 'client';
+  AppUser? _recipient;
 
   @override
   void dispose() {
     _title.dispose();
     _content.dispose();
-    _userId.dispose();
     _type.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
-    if (_title.text.trim().isEmpty) {
+    if (_title.text.trim().length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Title is required')),
+        const SnackBar(content: Text('Title must be at least 2 characters')),
+      );
+      return;
+    }
+    final recipient = _recipient;
+    if (recipient == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a recipient')),
       );
       return;
     }
     setState(() => _saving = true);
+    final type = _type.text.trim();
     try {
       await AuthProvider.of(context).api.post('notifications', body: {
         'title': _title.text.trim(),
         'content': _content.text.trim(),
-        'type': _type.text.trim(),
-        if (_userId.text.trim().isNotEmpty) 'userId': _userId.text.trim(),
+        // Omitted when empty so the column default ('general') applies.
+        if (type.isNotEmpty) 'type': type,
+        'userId': recipient.id,
       });
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(reportError(e))));
       }
     }
   }
@@ -222,16 +254,43 @@ class _NotificationDialogState extends State<NotificationDialog> {
                 decoration: const InputDecoration(labelText: 'Content'),
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _userId,
-                decoration: const InputDecoration(
-                  labelText: 'User ID (optional — leave empty for all)',
-                ),
+              DropdownButtonFormField<String>(
+                initialValue: _recipientRole,
+                decoration: const InputDecoration(labelText: 'Recipient role'),
+                items: const [
+                  DropdownMenuItem(value: 'client', child: Text('Client')),
+                  DropdownMenuItem(value: 'lawyer', child: Text('Lawyer')),
+                  DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                ],
+                onChanged: (v) => setState(() {
+                  _recipientRole = v ?? 'client';
+                  _recipient = null;
+                }),
               ),
+              const SizedBox(height: 12),
+              ClientPickerField(
+                // Re-created per role so the search restarts for that role.
+                key: ValueKey('recipient-$_recipientRole'),
+                selectedUserId: _recipient?.id,
+                requiredRole: _recipientRole,
+                roleLabel: _recipientRole,
+                onSelected: (user) => setState(() => _recipient = user),
+              ),
+              if (_recipient != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Recipient: ${_recipient!.name} (${_recipient!.id})',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                  ),
+                ),
               const SizedBox(height: 12),
               TextField(
                 controller: _type,
-                decoration: const InputDecoration(labelText: 'Type (booking, payment...)'),
+                decoration: const InputDecoration(
+                  labelText: 'Type (optional, e.g. booking, payment)',
+                  helperText: 'Defaults to "general"',
+                ),
               ),
             ],
           ),

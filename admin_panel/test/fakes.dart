@@ -7,6 +7,7 @@
 
 import 'dart:async';
 
+import 'package:legal_admin/config/supabase_config.dart';
 import 'package:legal_admin/services/api_service.dart';
 import 'package:legal_admin/services/auth_service.dart';
 
@@ -131,6 +132,13 @@ class FakeApiService implements ApiService {
 
   @override
   bool get isConfigured => true;
+
+  @override
+  final SupabaseConfig config = SupabaseConfig.resolve(
+    url: 'https://example.supabase.co',
+    anonKey: 'test-anon-key',
+    requireKnownKeyFormat: false,
+  );
 
   /// The `Authorization` header attached to the most recent request.
   String? lastAuthHeader;

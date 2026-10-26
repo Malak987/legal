@@ -62,35 +62,54 @@ class _HomeShellState extends State<HomeShell> {
       _items = [
         NavItem(
           title: 'Dashboard',
-          icon: Icons.dashboard,
+          icon: Icons.space_dashboard_outlined,
           screen: DashboardScreen(onNavigate: _selectByTitle),
         ),
-        NavItem(title: 'Lawyers', icon: Icons.gavel, screen: const LawyersScreen()),
-        NavItem(title: 'Categories', icon: Icons.category, screen: const CategoriesScreen()),
-        NavItem(title: 'Users', icon: Icons.people, screen: const UsersScreen()),
-        NavItem(title: 'Cases', icon: Icons.folder_copy, screen: const CasesScreen()),
+        NavItem(title: 'Lawyers', icon: Icons.gavel, group: 'Legal', screen: const LawyersScreen()),
+        NavItem(
+          title: 'Categories',
+          icon: Icons.category_outlined,
+          group: 'Legal',
+          screen: const CategoriesScreen(),
+        ),
+        NavItem(title: 'Cases', icon: Icons.folder_copy_outlined, group: 'Legal', screen: const CasesScreen()),
+        NavItem(title: 'Users', icon: Icons.people_outline, group: 'Clients & scheduling', screen: const UsersScreen()),
         NavItem(
           title: 'Bookings',
-          icon: Icons.event_available,
+          icon: Icons.event_available_outlined,
+          group: 'Clients & scheduling',
           screen: const BookingsScreen(),
         ),
-        NavItem(title: 'Reviews', icon: Icons.star, screen: const ReviewsScreen()),
+        NavItem(
+          title: 'Reviews',
+          icon: Icons.star_outline,
+          group: 'Clients & scheduling',
+          screen: const ReviewsScreen(),
+        ),
         NavItem(
           title: 'Plans',
-          icon: Icons.subscriptions,
+          icon: Icons.workspace_premium_outlined,
+          group: 'Billing',
           screen: const PlansScreen(),
         ),
         NavItem(
           title: 'Subscriptions',
-          icon: Icons.card_membership,
+          icon: Icons.card_membership_outlined,
+          group: 'Billing',
           screen: const SubscriptionsScreen(),
         ),
         NavItem(
           title: 'Notifications',
-          icon: Icons.notifications,
+          icon: Icons.notifications_none,
+          group: 'Communication',
           screen: const NotificationsScreen(),
         ),
-        NavItem(title: 'Chats', icon: Icons.message, screen: const ChatsScreen()),
+        NavItem(
+          title: 'Chats',
+          icon: Icons.chat_bubble_outline,
+          group: 'Communication',
+          screen: const ChatsScreen(),
+        ),
       ];
     }
     _current = _items.first;

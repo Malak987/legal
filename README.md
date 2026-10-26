@@ -8,7 +8,7 @@ A legal-services platform in an explicit Firebase-to-Supabase transition, with t
 |------|------|------------|
 | Cloud API | `backend/` | Node.js 22 + Express REST API deployed on **Firebase Cloud Functions (Gen 2)** (`us-central1`) behind **Firebase Hosting** (`https://legal-102026.web.app/api`) |
 | Admin console | `admin_panel/` | Flutter Web admin app deployed on **Firebase Hosting** (`https://legal-102026.web.app`) |
-| Mobile app | `legal_app/` | Flutter client for clients and lawyers, talking directly to `https://legal-102026.web.app/api` |
+| Mobile app | `legal_app/` | Flutter client (Android/iOS, plus web) talking directly to Supabase Auth/PostgREST/Edge Functions; requires the Supabase public Dart defines at build time (see [`legal_app/README.md`](legal_app/README.md#supabase-configuration-required)) |
 
 The legacy Firebase Auth/Firestore path remains in the repository and is not
 removed or represented as cut over. Current Supabase-backed routes authenticate
@@ -122,13 +122,18 @@ curl -i -X POST https://legal-102026.web.app/api/users/me \
 
 ### Step D — Build Production Mobile App (`legal_app`)
 
-Both `legal_app` and `admin_panel` already default to `https://legal-102026.web.app/api` out of the box — no `--dart-define` flag is needed unless pointing to a staging/custom domain:
+Both Flutter apps talk to Supabase directly and have **no built-in key**. Each build must receive `SUPABASE_URL` and the public `SUPABASE_ANON_KEY` as Dart defines on the exact `flutter` command. Shell or hosting environment variables are not read by the compiled app. A build without them shows a configuration screen instead of the login flow.
 
 ```bash
 cd legal_app
 flutter pub get
-flutter build apk --release
+cp supabase.local.example.json supabase.local.json   # git-ignored; paste the PUBLIC key
+flutter build apk --release --dart-define-from-file=supabase.local.json
+# or, validated first (refuses missing/placeholder/secret keys):
+dart run tool/supabase_flutter.dart build apk --release
 ```
+
+See [`legal_app/README.md`](legal_app/README.md#supabase-configuration-required) for iOS, web and IDE instructions, and [`admin_panel/README.md`](admin_panel/README.md#supabase-configuration-required) for the admin panel (`node scripts/run_web.mjs` / `node scripts/build_web.mjs`).
 
 ---
 
@@ -149,10 +154,10 @@ Point clients at the local emulator only when explicitly desired:
 
 | Client | Local Emulator Command | Production Default (no flags needed) |
 |--------|------------------------|--------------------------------------|
-| Admin Web (`admin_panel`) | `flutter run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1:5000/api` | `https://legal-102026.web.app/api` |
-| Mobile Android Emulator (`legal_app`) | `flutter run --dart-define=USE_LOCAL_EMULATOR=true` | `https://legal-102026.web.app/api` |
-| Mobile iOS Simulator / Desktop (`legal_app`) | `flutter run --dart-define=USE_LOCAL_EMULATOR=true` | `https://legal-102026.web.app/api` |
-| Custom API override | `flutter run --dart-define=API_BASE_URL=https://custom.example.com/api` | `https://legal-102026.web.app/api` |
+| Admin Web (`admin_panel`) | `node scripts/run_web.mjs` (or `flutter run -d chrome --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=<public key>`) | No default key: Supabase defines are required (see `admin_panel/README.md`) |
+| Mobile (`legal_app`, Android/iOS/web) | `dart run tool/supabase_flutter.dart run` (or `flutter run --dart-define-from-file=supabase.local.json`) | No default key: Supabase defines are required (see `legal_app/README.md`) |
+
+Neither Flutter client reads `API_BASE_URL` or `USE_LOCAL_EMULATOR` any more; those defines are ignored.
 
 **Synthetic test seed (Supabase only):** From `backend/`, `npm run seed:test` is for an isolated local Supabase stack only; it refuses `NODE_ENV=production`, requires `LEGAL_ALLOW_TEST_SEED=true`, and accepts only a loopback `SUPABASE_TEST_URL` plus the local stack's `SUPABASE_TEST_SERVICE_ROLE_KEY`. The seed uses synthetic records with `.invalid` email addresses, creates no Auth users or passwords, and is not the Firebase Emulator seeder. Never point it at a hosted project or use a production key. See [`supabase/README.md`](supabase/README.md#synthetic-local-seed) for the full guard contract.
 
@@ -195,8 +200,8 @@ The resource routes enforce field- and role-specific ownership rules; an adminis
 ```bash
 cd backend     && npm test                     # verified locally after the deployment fix
 cd admin_panel && flutter pub get && flutter analyze && flutter test
-cd admin_panel && node scripts/build_web.mjs    # requires public SUPABASE_ANON_KEY in environment
-cd legal_app   && flutter pub get && flutter analyze --no-fatal-infos --no-fatal-warnings && flutter test
+cd admin_panel && node scripts/build_web.mjs    # requires public SUPABASE_ANON_KEY (env or supabase.local.json)
+cd legal_app   && flutter pub get && flutter analyze --no-fatal-infos --no-fatal-warnings && flutter test   # tests need no key
 ```
 
 ---

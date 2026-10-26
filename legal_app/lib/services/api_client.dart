@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-import '../config/supabase_config.dart';
+import '../config/supabase_client_config.dart';
 import '../models/app_profile.dart';
 import '../models/paginated_result.dart';
 
@@ -19,6 +19,7 @@ class ApiClient {
     IdTokenProvider? idTokenProvider,
     IdTokenProvider? forceRefreshTokenProvider,
     String? Function()? currentUidProvider,
+    SupabaseClientConfig? config,
     String? supabaseUrl,
     String? supabaseAnonKey,
     Duration requestTimeout = defaultRequestTimeout,
@@ -26,9 +27,11 @@ class ApiClient {
         _idTokenProvider = idTokenProvider,
         _forceRefreshTokenProvider = forceRefreshTokenProvider,
         _currentUidProvider = currentUidProvider,
-        _supabaseUrl = (supabaseUrl ?? SupabaseConfig.supabaseUrl).trim(),
-        _supabaseAnonKey =
-            (supabaseAnonKey ?? SupabaseConfig.supabaseAnonKey).trim(),
+        config = SupabaseClientConfig.select(
+          config: config,
+          url: supabaseUrl,
+          anonKey: supabaseAnonKey,
+        ),
         _requestTimeout = requestTimeout;
 
   static const Duration defaultRequestTimeout = Duration(seconds: 20);
@@ -38,8 +41,12 @@ class ApiClient {
   final IdTokenProvider? _idTokenProvider;
   final IdTokenProvider? _forceRefreshTokenProvider;
   final String? Function()? _currentUidProvider;
-  final String _supabaseUrl;
-  final String _supabaseAnonKey;
+
+  /// Validated configuration shared with [SupabaseAuthGateway].
+  final SupabaseClientConfig config;
+
+  String get _supabaseUrl => config.url;
+  String get _supabaseAnonKey => config.anonKey;
   final Duration _requestTimeout;
 
   String? _applicationUid;
@@ -47,8 +54,7 @@ class ApiClient {
   AppProfile? _lastSupabaseProfile;
 
   /// Supabase is the only configured data platform for this client.
-  bool get usesSupabase =>
-      _supabaseUrl.isNotEmpty && _supabaseAnonKey.isNotEmpty;
+  bool get usesSupabase => config.isValid;
 
   /// Compatibility aliases for screens that still describe the data slice.
   bool get usesSupabaseLawyerCatalog => usesSupabase;
@@ -114,7 +120,7 @@ class ApiClient {
     bool returnRepresentation = false,
   }) async {
     if (!usesSupabase) {
-      throw ApiException('Supabase profile access is not configured.', 503);
+      throw ApiException(config.errorMessage, 503);
     }
 
     for (var attempt = 0; attempt < 2; attempt++) {
@@ -260,7 +266,7 @@ class ApiClient {
       throw ApiException('Invalid Supabase table name.', 400);
     }
     if (!usesSupabase) {
-      throw ApiException('Supabase is not configured for this build.', 503);
+      throw ApiException(config.errorMessage, 503);
     }
     final uri = _supabaseResourceUri('rest/v1/$table', query: query);
     http.Response response;
@@ -453,7 +459,7 @@ class ApiClient {
       throw ApiException('Invalid page request.', 400);
     }
     if (!usesSupabase) {
-      throw ApiException('Supabase is not configured for this build.', 503);
+      throw ApiException(config.errorMessage, 503);
     }
     final offset = (page - 1) * limit;
     final pageQuery = <String, String>{
@@ -543,7 +549,7 @@ class ApiClient {
     Map<String, String> extraHeaders = const <String, String>{},
   }) async {
     if (!usesSupabase) {
-      throw ApiException('Supabase is not configured for this build.', 503);
+      throw ApiException(config.errorMessage, 503);
     }
     for (var attempt = 0; attempt < 2; attempt++) {
       final token = await _freshToken(force: attempt == 1);
@@ -616,7 +622,7 @@ class ApiClient {
 
   Future<String> _requireSupabaseApplicationUid() async {
     if (!usesSupabase) {
-      throw ApiException('Supabase is not configured for this build.', 503);
+      throw ApiException(config.errorMessage, 503);
     }
     final authUid = _authUid?.trim();
     if (authUid == null || authUid.isEmpty) {

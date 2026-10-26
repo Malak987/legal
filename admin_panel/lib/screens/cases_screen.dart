@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_errors.dart';
 import '../services/api_service.dart';
 import '../widgets/client_picker.dart';
 import '../widgets/common.dart';
+import '../widgets/pagination.dart';
 
 /// Manage legal cases.
 class CasesScreen extends StatefulWidget {
@@ -17,8 +19,17 @@ class CasesScreen extends StatefulWidget {
 }
 
 class _CasesScreenState extends State<CasesScreen> {
-  late Future<List<CaseItem>> _future;
+  late Future<Paginated<CaseItem>> _future;
+  int _page = 1;
   String _search = '';
+  String? _status;
+  String? _priority;
+  String? _categoryId;
+  String? _lawyerId;
+  List<LegalCategory> _filterCategories = const <LegalCategory>[];
+  List<Lawyer> _filterLawyers = const <Lawyer>[];
+  String? _categoryFilterError;
+  String? _lawyerFilterError;
 
   /// Debounces search input so one keystroke does not equal one request.
   Timer? _searchDebounce;
@@ -27,6 +38,7 @@ class _CasesScreenState extends State<CasesScreen> {
   void initState() {
     super.initState();
     _future = _fetch();
+    _loadFilterOptions();
   }
 
   @override
@@ -37,18 +49,166 @@ class _CasesScreenState extends State<CasesScreen> {
     super.dispose();
   }
 
-  Future<List<CaseItem>> _fetch() async {
-    final res = await AuthProvider.of(context).api.get('cases', query: {
-      'page': '1',
+  Future<Paginated<CaseItem>> _fetch() {
+    final api = AuthProvider.of(context).api;
+    final query = <String, String>{
       'limit': '$kMaxPageSize',
       if (_search.isNotEmpty) 'search': _search,
-    });
-    return itemsOf(res).map(CaseItem.fromJson).toList();
+      'status': ?_status,
+      'priority': ?_priority,
+      'categoryId': ?_categoryId,
+      'lawyerId': ?_lawyerId,
+    };
+    return loadPaginated<CaseItem>(
+      page: _page,
+      fromJson: CaseItem.fromJson,
+      request: (page) => api.get('cases', query: {'page': '$page', ...query}),
+    );
   }
 
-  void _reload() {
+  static const List<String> _statusOptions = <String>['Open', 'In Progress', 'Pending', 'Closed'];
+  static const List<String> _priorityOptions = <String>['High', 'Medium', 'Low'];
+
+  bool get _hasFilters =>
+      _status != null || _priority != null || _categoryId != null || _lawyerId != null;
+
+  /// Loads category/lawyer filter options once. A failure disables only that
+  /// filter (with the reason as tooltip); the case list keeps working.
+  Future<void> _loadFilterOptions() async {
+    final api = AuthProvider.of(context).api;
+    try {
+      final response = await api.get('categories', query: {'page': '1', 'limit': '$kMaxPageSize'});
+      final categories = itemsOf(response)
+          .map(LegalCategory.fromJson)
+          .where((c) => c.id.isNotEmpty && c.name.isNotEmpty)
+          .toList(growable: false);
+      if (mounted) setState(() => _filterCategories = categories);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _categoryFilterError =
+            'Category filter unavailable: ${reportError(error, context: 'case category filter')}');
+      }
+    }
+    try {
+      final response = await api.get('lawyers', query: {'page': '1', 'limit': '$kMaxPageSize'});
+      final lawyers = itemsOf(response)
+          .map(Lawyer.fromJson)
+          .where((l) => l.id.isNotEmpty)
+          .toList(growable: false);
+      if (mounted) setState(() => _filterLawyers = lawyers);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _lawyerFilterError =
+            'Lawyer filter unavailable: ${reportError(error, context: 'case lawyer filter')}');
+      }
+    }
+  }
+
+  Widget _filterDropdown({
+    required String id,
+    required String label,
+    required String? value,
+    required Map<String, String> options,
+    required ValueChanged<String?> onChanged,
+    String? disabledReason,
+  }) {
+    // Keep a selected value visible even if it is not among the loaded options.
+    final entries = <String, String>{
+      if (value != null && !options.containsKey(value)) value: value,
+      ...options,
+    };
+    return FilterDropdown<String?>(
+      label: label,
+      value: value,
+      dropdownKey: Key('case-filter-$id'),
+      disabledReason: disabledReason,
+      items: [
+        DropdownMenuItem<String?>(
+          value: null,
+          child: Text('All', style: TextStyle(color: Colors.grey.shade700)),
+        ),
+        for (final entry in entries.entries)
+          DropdownMenuItem<String?>(
+            value: entry.key,
+            child: Text(entry.value, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: onChanged,
+    );
+  }
+
+  List<Widget> _buildFilters() {
+    return [
+          _filterDropdown(
+            id: 'status',
+            label: 'Status',
+            value: _status,
+            options: {for (final s in _statusOptions) s: s},
+            onChanged: (v) {
+              _status = v;
+              _reload(resetPage: true);
+            },
+          ),
+          _filterDropdown(
+            id: 'priority',
+            label: 'Priority',
+            value: _priority,
+            options: {for (final p in _priorityOptions) p: p},
+            onChanged: (v) {
+              _priority = v;
+              _reload(resetPage: true);
+            },
+          ),
+          _filterDropdown(
+            id: 'category',
+            label: 'Category',
+            value: _categoryId,
+            options: {for (final c in _filterCategories) c.id: c.name},
+            disabledReason: _categoryFilterError,
+            onChanged: (v) {
+              _categoryId = v;
+              _reload(resetPage: true);
+            },
+          ),
+          _filterDropdown(
+            id: 'lawyer',
+            label: 'Lawyer',
+            value: _lawyerId,
+            options: {for (final l in _filterLawyers) l.id: l.name.isEmpty ? l.id : l.name},
+            disabledReason: _lawyerFilterError,
+            onChanged: (v) {
+              _lawyerId = v;
+              _reload(resetPage: true);
+            },
+          ),
+          if (_hasFilters)
+            TextButton.icon(
+              key: const Key('case-filter-clear'),
+              onPressed: () {
+                _status = null;
+                _priority = null;
+                _categoryId = null;
+                _lawyerId = null;
+                _reload(resetPage: true);
+              },
+              icon: const Icon(Icons.filter_alt_off, size: 18),
+              label: const Text('Clear filters'),
+            ),
+    ];
+  }
+
+  /// Re-fetches; [resetPage] returns to page 1 (search/filter changes).
+  void _reload({bool resetPage = false}) {
     if (!mounted) return;
     setState(() {
+      if (resetPage) _page = 1;
+      _future = _fetch();
+    });
+  }
+
+  void _goToPage(int page) {
+    setState(() {
+      _page = page;
       _future = _fetch();
     });
   }
@@ -75,7 +235,8 @@ class _CasesScreenState extends State<CasesScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete', style: TextStyle(color: AppTheme.danger)),
+            style: AppTheme.destructiveButtonStyle,
+            child: const Text('Delete'),
           ),
         ],
       ),
@@ -90,7 +251,7 @@ class _CasesScreenState extends State<CasesScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(reportError(e))));
       }
     }
   }
@@ -99,50 +260,37 @@ class _CasesScreenState extends State<CasesScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: SearchField(
-                  hint: 'Search cases...',
-                  onChanged: (v) {
-                    _search = v;
-                    _searchDebounce?.cancel();
-                    _searchDebounce =
-                        Timer(const Duration(milliseconds: 350), _reload);
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Refresh cases',
-                onPressed: _reload,
-                icon: const Icon(Icons.refresh),
-              ),
-              const SizedBox(width: 8),
-              ElevatedButton.icon(
-                onPressed: () => _openForm(),
-                icon: const Icon(Icons.add),
-                label: const Text('Add Case'),
-              ),
-            ],
+        ListToolbar(
+          search: SearchField(
+            hint: 'Search cases...',
+            onChanged: (v) {
+              _search = v;
+              _searchDebounce?.cancel();
+              _searchDebounce = Timer(const Duration(milliseconds: 350), () => _reload(resetPage: true));
+            },
+          ),
+          filters: _buildFilters(),
+          actions: [
+            IconButton(
+              tooltip: 'Refresh cases',
+              onPressed: _reload,
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+          primary: ElevatedButton.icon(
+            onPressed: () => _openForm(),
+            icon: const Icon(Icons.add),
+            label: const Text('Add Case'),
           ),
         ),
         Expanded(
-          child: FutureBuilder<List<CaseItem>>(
+          child: PagedFutureView<CaseItem>(
             future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const LoadingView();
-              }
-              if (snapshot.hasError) {
-                return ErrorBanner(message: '${snapshot.error}', onRetry: _reload);
-              }
-              final cases = snapshot.data ?? [];
-              if (cases.isEmpty) {
-                return const EmptyState(icon: Icons.folder_copy, message: 'No cases found');
-              }
+            onRetry: _reload,
+            onPageChanged: _goToPage,
+            errorContext: 'load caseitem list',
+            empty: const EmptyState(icon: Icons.folder_copy, message: 'No cases found'),
+            itemsBuilder: (context, cases) {
               return ListView.builder(
                 padding: const EdgeInsets.only(bottom: 24),
                 itemCount: cases.length,
@@ -157,29 +305,27 @@ class _CasesScreenState extends State<CasesScreen> {
                     if (c.lawyerName.trim().isNotEmpty)
                       'Lawyer: ${c.lawyerName.trim()}',
                     if (c.dueDate.trim().isNotEmpty) 'Due ${c.dueDate.trim()}',
-                  ].join('  •  ');
-                  return Card(
-                    child: ListTile(
-                      title: Text(c.title,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
-                      subtitle: Text(details.isEmpty ? 'No case details' : details),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          PriorityChip(priority: c.priority),
-                          const SizedBox(width: 6),
-                          StatusChip(status: c.status),
-                          IconButton(
-                            icon: const Icon(Icons.edit, color: AppTheme.secondary),
-                            onPressed: () => _openForm(item: c),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete, color: AppTheme.danger),
-                            onPressed: () => _delete(c),
-                          ),
-                        ],
+                  ];
+                  return RecordTile(
+                    title: c.title,
+                    details: details.isEmpty ? const ['No case details'] : details,
+                    badges: [
+                      PriorityChip(priority: c.priority),
+                      StatusChip(status: c.status),
+                    ],
+                    actions: [
+                      RowAction(
+                        icon: Icons.edit,
+                        tooltip: 'Edit case',
+                        onPressed: () => _openForm(item: c),
                       ),
-                    ),
+                      RowAction(
+                        icon: Icons.delete,
+                        tooltip: 'Delete case',
+                        destructive: true,
+                        onPressed: () => _delete(c),
+                      ),
+                    ],
                   );
                 },
               );
@@ -293,7 +439,7 @@ class _CaseDialogState extends State<CaseDialog> {
       if (!mounted) return;
       setState(() {
         _categoriesLoading = false;
-        _lookupError = '$error';
+        _lookupError = friendlyError(error);
       });
     }
   }
@@ -323,7 +469,7 @@ class _CaseDialogState extends State<CaseDialog> {
       if (!mounted || _selectedCategoryId != categoryId) return;
       setState(() {
         _lawyersLoading = false;
-        _lookupError = '$error';
+        _lookupError = friendlyError(error);
       });
     }
   }
@@ -420,10 +566,32 @@ class _CaseDialogState extends State<CaseDialog> {
     super.dispose();
   }
 
+  /// Opens a calendar and writes the date as `yyyy-MM-dd`, the format the
+  /// mobile app uses for due dates. The text field stays editable so legacy
+  /// free-text values are preserved unless the administrator changes them.
+  Future<void> _pickDueDate() async {
+    final now = DateTime.now();
+    final initial = DateTime.tryParse(_due.text.trim()) ?? now;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year - 10),
+      lastDate: DateTime(now.year + 10),
+    );
+    if (picked == null || !mounted) return;
+    String two(int v) => v.toString().padLeft(2, '0');
+    setState(() {
+      _due.text = '${picked.year}-${two(picked.month)}-${two(picked.day)}';
+    });
+  }
+
   Future<void> _save() async {
-    if (_title.text.trim().isEmpty) {
+    // Mirrors the database contract: cases.title must contain at least two
+    // non-space characters (and at most 200 in rpc_admin_case_update).
+    final title = _title.text.trim();
+    if (title.length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Title is required')),
+        const SnackBar(content: Text('Title must be at least 2 characters')),
       );
       return;
     }
@@ -459,10 +627,23 @@ class _CaseDialogState extends State<CaseDialog> {
     var clientName = _client.text.trim();
     if (clientName.isEmpty) clientName = _selectedClient?.name ?? '';
 
+    // A categorized case carries the category name as its legacy case type,
+    // which the mobile app displays. rpc_admin_case_update and the category
+    // rename trigger keep the same invariant; a direct insert must set it.
+    var caseType = _type.text.trim();
+    if (creating || _assignmentTouched) {
+      for (final category in _categories) {
+        if (category.id == _selectedCategoryId) {
+          caseType = category.name;
+          break;
+        }
+      }
+    }
+
     final body = <String, dynamic>{
-      'title': _title.text.trim(),
+      'title': title,
       'clientName': clientName,
-      'caseType': _type.text.trim(),
+      'caseType': caseType,
       'dueDate': _due.text.trim(),
       'description': _desc.text.trim(),
       'priority': _priority,
@@ -490,7 +671,7 @@ class _CaseDialogState extends State<CaseDialog> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(reportError(e))));
       }
     }
   }
@@ -505,7 +686,11 @@ class _CaseDialogState extends State<CaseDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: _title, decoration: const InputDecoration(labelText: 'Title')),
+              TextField(
+                controller: _title,
+                maxLength: 200,
+                decoration: const InputDecoration(labelText: 'Title'),
+              ),
               const SizedBox(height: 12),
               if (_resolvingOwner)
                 Padding(
@@ -564,11 +749,16 @@ class _CaseDialogState extends State<CaseDialog> {
                   ),
                 ),
               const SizedBox(height: 12),
-              TextField(controller: _client, decoration: const InputDecoration(labelText: 'Client name')),
+              TextField(
+                controller: _client,
+                maxLength: 160,
+                decoration: const InputDecoration(labelText: 'Client name'),
+              ),
               const SizedBox(height: 12),
               if (widget.item != null && widget.item!.categoryId.isEmpty) ...[
                 TextField(
                   controller: _type,
+                  maxLength: 120,
                   decoration: const InputDecoration(
                     labelText: 'Legacy case type (uncategorized record)',
                   ),
@@ -664,11 +854,23 @@ class _CaseDialogState extends State<CaseDialog> {
                   ),
                 ),
               const SizedBox(height: 12),
-              TextField(controller: _due, decoration: const InputDecoration(labelText: 'Due date')),
+              TextField(
+                controller: _due,
+                decoration: InputDecoration(
+                  labelText: 'Due date',
+                  hintText: 'YYYY-MM-DD',
+                  suffixIcon: IconButton(
+                    tooltip: 'Pick due date',
+                    icon: const Icon(Icons.calendar_today),
+                    onPressed: _pickDueDate,
+                  ),
+                ),
+              ),
               const SizedBox(height: 12),
               TextField(
                 controller: _desc,
                 maxLines: 3,
+                maxLength: 4000,
                 decoration: const InputDecoration(labelText: 'Description'),
               ),
               const SizedBox(height: 12),

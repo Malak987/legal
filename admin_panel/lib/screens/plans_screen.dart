@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_errors.dart';
 import '../services/api_service.dart';
 import '../widgets/common.dart';
+import '../widgets/pagination.dart';
 
 /// Manage subscription plans.
 class PlansScreen extends StatefulWidget {
@@ -15,7 +17,8 @@ class PlansScreen extends StatefulWidget {
 }
 
 class _PlansScreenState extends State<PlansScreen> {
-  late Future<List<Plan>> _future;
+  late Future<Paginated<Plan>> _future;
+  int _page = 1;
 
   @override
   void initState() {
@@ -23,16 +26,27 @@ class _PlansScreenState extends State<PlansScreen> {
     _future = _fetch();
   }
 
-  Future<List<Plan>> _fetch() async {
-    final res = await AuthProvider.of(context)
-        .api
-        .get('plans', query: {'page': '1', 'limit': '$kMaxPageSize'});
-    return itemsOf(res).map(Plan.fromJson).toList();
+  Future<Paginated<Plan>> _fetch() {
+    final api = AuthProvider.of(context).api;
+    return loadPaginated<Plan>(
+      page: _page,
+      fromJson: Plan.fromJson,
+      request: (page) => api.get('plans', query: {'page': '$page', 'limit': '$kMaxPageSize'}),
+    );
   }
 
-  void _reload() {
+  /// Re-fetches; [resetPage] returns to page 1 (search/filter changes).
+  void _reload({bool resetPage = false}) {
     if (!mounted) return;
     setState(() {
+      if (resetPage) _page = 1;
+      _future = _fetch();
+    });
+  }
+
+  void _goToPage(int page) {
+    setState(() {
+      _page = page;
       _future = _fetch();
     });
   }
@@ -59,7 +73,8 @@ class _PlansScreenState extends State<PlansScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete', style: TextStyle(color: AppTheme.danger)),
+            style: AppTheme.destructiveButtonStyle,
+            child: const Text('Delete'),
           ),
         ],
       ),
@@ -70,7 +85,7 @@ class _PlansScreenState extends State<PlansScreen> {
       if (mounted) _reload();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(reportError(e))));
       }
     }
   }
@@ -87,140 +102,116 @@ class _PlansScreenState extends State<PlansScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Row(
-            children: [
-              const Spacer(),
-              ElevatedButton.icon(
-                onPressed: () => _openForm(),
-                icon: const Icon(Icons.add),
-                label: const Text('Add Plan'),
-              ),
-            ],
+        ListToolbar(
+          leading: Text(
+            'Subscription plans offered to clients.',
+            style: Theme.of(context).textTheme.bodyMedium!.copyWith(color: AppTheme.textSecondary),
+          ),
+          primary: ElevatedButton.icon(
+            onPressed: () => _openForm(),
+            icon: const Icon(Icons.add),
+            label: const Text('Add Plan'),
           ),
         ),
         Expanded(
-          child: FutureBuilder<List<Plan>>(
+          child: PagedFutureView<Plan>(
             future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const LoadingView();
-              }
-              if (snapshot.hasError) {
-                return ErrorBanner(message: '${snapshot.error}', onRetry: _reload);
-              }
-              final plans = snapshot.data ?? [];
-              if (plans.isEmpty) {
-                return const EmptyState(
+            onRetry: _reload,
+            onPageChanged: _goToPage,
+            errorContext: 'load plan list',
+            empty: const EmptyState(
                   icon: Icons.subscriptions,
                   message: 'No plans found',
-                );
-              }
-              return GridView.builder(
-                padding: const EdgeInsets.all(16),
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 320,
-                  mainAxisSpacing: 14,
-                  crossAxisSpacing: 14,
-                  childAspectRatio: 0.95,
                 ),
-                itemCount: plans.length,
-                itemBuilder: (context, i) {
-                  final p = plans[i];
-                  final color = _parseColor(p.color);
-                  return Card(
-                    margin: EdgeInsets.zero,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  p.title,
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                              if (p.isPopular)
-                                const Chip(
-                                  label: Text('Popular',
-                                      style: TextStyle(fontSize: 11)),
-                                  visualDensity: VisualDensity.compact,
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: color,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              p.price,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          Expanded(
-                            child: SingleChildScrollView(
+            itemsBuilder: (context, plans) {
+              final compact = MediaQuery.sizeOf(context).width < AppBreakpoints.medium;
+              final theme = Theme.of(context);
+              // Cards size to their content (no fixed aspect ratio), so long
+              // feature lists can never overflow the card.
+              return SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  compact ? AppSpacing.lg : AppSpacing.xl,
+                  AppSpacing.xs,
+                  compact ? AppSpacing.lg : AppSpacing.xl,
+                  AppSpacing.xl,
+                ),
+                child: ResponsiveGrid(
+                  minItemWidth: 250,
+                  spacing: AppSpacing.lg,
+                  children: [
+                    for (final p in plans)
+                      Card(
+                        margin: EdgeInsets.zero,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(height: 4, color: _parseColor(p.color)),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.sm),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  for (final f in p.features)
-                                    Padding(
-                                      padding:
-                                          const EdgeInsets.symmetric(vertical: 4),
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          const Icon(Icons.check_circle,
-                                              size: 16,
-                                              color: AppTheme.success),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                              child: Text(f,
-                                                  style:
-                                                      const TextStyle(fontSize: 13))),
-                                        ],
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(
+                                        child: Text(p.title, style: theme.textTheme.titleMedium!.copyWith(fontSize: 17)),
                                       ),
-                                    ),
+                                      if (p.isPopular)
+                                        const StatusBadge(label: 'Popular', color: AppTheme.accent, icon: Icons.trending_up),
+                                    ],
+                                  ),
+                                  const SizedBox(height: AppSpacing.sm),
+                                  Text(p.price, style: theme.textTheme.headlineSmall),
+                                  const SizedBox(height: AppSpacing.md),
+                                  if (p.features.isEmpty)
+                                    Text('No features listed', style: theme.textTheme.bodySmall)
+                                  else
+                                    for (final f in p.features)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(vertical: 3),
+                                        child: Row(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            const Padding(
+                                              padding: EdgeInsets.only(top: 2),
+                                              child: Icon(Icons.check, size: 16, color: AppTheme.success),
+                                            ),
+                                            const SizedBox(width: AppSpacing.sm),
+                                            Expanded(child: Text(f, style: theme.textTheme.bodyMedium!.copyWith(fontSize: 13.5))),
+                                          ],
+                                        ),
+                                      ),
                                 ],
                               ),
                             ),
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.edit,
-                                    color: AppTheme.secondary),
-                                onPressed: () => _openForm(plan: p),
+                            const Divider(),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs, vertical: AppSpacing.xxs),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  RowAction(
+                                    icon: Icons.edit,
+                                    tooltip: 'Edit plan',
+                                    onPressed: () => _openForm(plan: p),
+                                  ),
+                                  RowAction(
+                                    icon: Icons.delete,
+                                    tooltip: 'Delete plan',
+                                    destructive: true,
+                                    onPressed: () => _delete(p),
+                                  ),
+                                ],
                               ),
-                              IconButton(
-                                icon: const Icon(Icons.delete,
-                                    color: AppTheme.danger),
-                                onPressed: () => _delete(p),
-                              ),
-                            ],
-                          ),
-                        ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  );
-                },
+                  ],
+                ),
               );
             },
           ),
@@ -241,8 +232,17 @@ class PlanDialog extends StatefulWidget {
 class _PlanDialogState extends State<PlanDialog> {
   late final TextEditingController _title;
   late final TextEditingController _price;
+  late final TextEditingController _priceValue;
   late final TextEditingController _features;
   late String _color;
+
+  static const Map<String, String> _palette = {
+    '#3498DB': 'Blue',
+    '#E74C3C': 'Red',
+    '#27AE60': 'Green',
+    '#F39C12': 'Orange',
+    '#8E44AD': 'Purple',
+  };
   bool _popular = false;
   bool _saving = false;
 
@@ -252,6 +252,14 @@ class _PlanDialogState extends State<PlanDialog> {
     final p = widget.plan;
     _title = TextEditingController(text: p?.title ?? '');
     _price = TextEditingController(text: p?.price ?? '');
+    final value = p?.priceValue ?? 0;
+    _priceValue = TextEditingController(
+      text: p == null
+          ? ''
+          : (value == value.roundToDouble()
+              ? value.toStringAsFixed(0)
+              : value.toString()),
+    );
     _features = TextEditingController(text: p?.features.join('\n') ?? '');
     _color = p?.color ?? '#3498DB';
     _popular = p?.isPopular ?? false;
@@ -261,14 +269,31 @@ class _PlanDialogState extends State<PlanDialog> {
   void dispose() {
     _title.dispose();
     _price.dispose();
+    _priceValue.dispose();
     _features.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
-    if (_title.text.trim().isEmpty) {
+    // plans.title CHECK requires at least 2 non-space characters.
+    if (_title.text.trim().length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Title is required')),
+        const SnackBar(content: Text('Title must be at least 2 characters')),
+      );
+      return;
+    }
+    // plans.price_value is NUMERIC(12,2) NOT NULL CHECK (>= 0).
+    final valueText = _priceValue.text.trim();
+    final priceValue = valueText.isEmpty ? 0.0 : double.tryParse(valueText);
+    if (priceValue == null ||
+        !priceValue.isFinite ||
+        priceValue < 0 ||
+        priceValue >= 10000000000 ||
+        priceValue != double.parse(priceValue.toStringAsFixed(2))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Numeric price must be 0 or more, with at most 2 decimals'),
+        ),
       );
       return;
     }
@@ -276,6 +301,7 @@ class _PlanDialogState extends State<PlanDialog> {
     final body = {
       'title': _title.text.trim(),
       'price': _price.text.trim(),
+      'priceValue': priceValue,
       'color': _color,
       'isPopular': _popular,
       'features': _features.text
@@ -295,7 +321,7 @@ class _PlanDialogState extends State<PlanDialog> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(reportError(e))));
       }
     }
   }
@@ -312,7 +338,22 @@ class _PlanDialogState extends State<PlanDialog> {
             children: [
               TextField(controller: _title, decoration: const InputDecoration(labelText: 'Title')),
               const SizedBox(height: 12),
-              TextField(controller: _price, decoration: const InputDecoration(labelText: 'Price')),
+              TextField(
+                controller: _price,
+                decoration: const InputDecoration(
+                  labelText: 'Price label',
+                  hintText: r'e.g. $29 / month',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _priceValue,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Numeric price (e.g. 29)',
+                  helperText: 'Used to order plans in the app and admin panel',
+                ),
+              ),
               const SizedBox(height: 12),
               TextField(
                 controller: _features,
@@ -326,12 +367,17 @@ class _PlanDialogState extends State<PlanDialog> {
               DropdownButtonFormField<String>(
                 initialValue: _color,
                 decoration: const InputDecoration(labelText: 'Color'),
-                items: const [
-                  DropdownMenuItem(value: '#3498DB', child: Text('Blue')),
-                  DropdownMenuItem(value: '#E74C3C', child: Text('Red')),
-                  DropdownMenuItem(value: '#27AE60', child: Text('Green')),
-                  DropdownMenuItem(value: '#F39C12', child: Text('Orange')),
-                  DropdownMenuItem(value: '#8E44AD', child: Text('Purple')),
+                // A stored colour outside the palette (e.g. the DB default
+                // #3A86FF) is kept as its own entry; otherwise the dropdown
+                // has no item matching its value and fails to build.
+                items: [
+                  for (final entry in _palette.entries)
+                    DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+                  if (!_palette.containsKey(_color))
+                    DropdownMenuItem(
+                      value: _color,
+                      child: Text('Current ($_color)'),
+                    ),
                 ],
                 onChanged: (v) => setState(() => _color = v ?? '#3498DB'),
               ),

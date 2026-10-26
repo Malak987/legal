@@ -121,17 +121,29 @@ jobs:
           set -o pipefail
           flutter test 2>&1 | tee "$RUNNER_TEMP/test.log"
 
-      - name: Build production web bundle (Firebase Hosting target)
+      - name: Test web build scripts
         shell: bash
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          # The web build job compiles only; use a non-production public value when
-          # repository variables are absent, and never deploy this CI artifact.
-          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY || 'ci-public-anon-key-for-build-only' }}
-          SUPABASE_AUTH_REDIRECT_URL: ${{ vars.SUPABASE_AUTH_REDIRECT_URL }}
         run: |
           set -o pipefail
-          node scripts/build_web.mjs 2>&1 | tee "$RUNNER_TEMP/build-web.log"
+          node --test scripts/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/scripts-test.log"
+
+      - name: Build web bundle (Firebase Hosting target)
+        shell: bash
+        env:
+          # Public client configuration compiled in as Dart defines. Configure
+          # the repository variable SUPABASE_ANON_KEY (Settings > Secrets and
+          # variables > Actions > Variables) with the project's PUBLIC
+          # anon/publishable key; never a service-role/secret key.
+          # SUPABASE_URL defaults to the connected project when unset.
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          SUPABASE_AUTH_REDIRECT_URL: ${{ vars.SUPABASE_AUTH_REDIRECT_URL }}
+        # Without the variable this compiles a key-less, non-deployable check
+        # into build/web-compile-check (warning annotation) instead of
+        # embedding a fake key; invalid values always fail the job.
+        run: |
+          set -o pipefail
+          node scripts/build_web.mjs --allow-unconfigured-compile-check 2>&1 | tee "$RUNNER_TEMP/build-web.log"
 
       - name: Publish failure details as annotations
         if: failure()
@@ -151,8 +163,10 @@ jobs:
             '^[[:space:]]*(error|warning|info)[[:space:]]*[•-]'
           publish "$RUNNER_TEMP/test.log" "flutter test" \
             '\[E\]|Expected:|Actual:|EXCEPTION|failed|Error:'
+          publish "$RUNNER_TEMP/scripts-test.log" "web build script tests" \
+            '^not ok|AssertionError|Error:'
           publish "$RUNNER_TEMP/build-web.log" "flutter build web" \
-            'Error:|Failed|Exception'
+            'Error:|Failed|Exception|configuration is invalid'
 
   legal-app:
     name: Mobile app (analyze + test)

@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_errors.dart';
 import '../services/api_service.dart';
 import '../widgets/common.dart';
+import '../widgets/pagination.dart';
 
 /// Read-only landing page for a server-verified lawyer account.
 class LawyerOverviewScreen extends StatefulWidget {
@@ -35,9 +37,9 @@ class _LawyerOverviewScreenState extends State<LawyerOverviewScreen> {
       api.get('availability/mine', query: {'page': '1', 'limit': '$kMaxPageSize'}),
     ]);
     return _LawyerOverview(
-      cases: itemsOf(results[0]).length,
-      bookings: itemsOf(results[1]).length,
-      slots: itemsOf(results[2]).length,
+      cases: paginatedOf(results[0], (json) => json).total,
+      bookings: paginatedOf(results[1], (json) => json).total,
+      slots: paginatedOf(results[2], (json) => json).total,
     );
   }
 
@@ -60,40 +62,52 @@ class _LawyerOverviewScreenState extends State<LawyerOverviewScreen> {
           return const LoadingView(message: 'Loading your workspace...');
         }
         if (snapshot.hasError) {
-          return ErrorBanner(message: '${snapshot.error}', onRetry: _reload);
+          return ErrorBanner(
+            message: reportError(snapshot.error!, context: 'load lawyer overview'),
+            onRetry: _reload,
+          );
         }
         final totals = snapshot.data!;
+        final compact = MediaQuery.sizeOf(context).width < AppBreakpoints.medium;
+        final pad = compact ? AppSpacing.lg : AppSpacing.xl;
         return ListView(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.fromLTRB(pad, pad, pad, AppSpacing.xxl),
           children: [
             Card(
-              color: AppTheme.primary,
+              margin: EdgeInsets.zero,
               child: Padding(
-                padding: const EdgeInsets.all(22),
-                child: Column(
+                padding: const EdgeInsets.all(AppSpacing.xl),
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      displayName.isEmpty ? 'Lawyer workspace' : 'Welcome, $displayName',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
+                    if (!compact) ...[
+                      const RecordAvatar(icon: Icons.gavel),
+                      const SizedBox(width: AppSpacing.lg),
+                    ],
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            displayName.isEmpty ? 'Lawyer workspace' : 'Welcome, $displayName',
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          Text(
+                            'Review only the cases and appointments assigned to your verified lawyer profile. This workspace does not provide client or case editing.',
+                            style: Theme.of(context).textTheme.bodyMedium!.copyWith(color: AppTheme.textSecondary),
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Review only the cases and appointments assigned to your verified lawyer profile. This workspace does not provide client or case editing.',
-                      style: TextStyle(color: Colors.white70, height: 1.45),
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 18),
-            Wrap(
-              spacing: 14,
-              runSpacing: 14,
+            const SizedBox(height: AppSpacing.lg),
+            ResponsiveGrid(
+              minItemWidth: 150,
+              maxColumns: 3,
               children: [
                 _overviewCard(
                   context,
@@ -140,15 +154,12 @@ class _LawyerOverviewScreenState extends State<LawyerOverviewScreen> {
     IconData icon,
     String destination,
   ) {
-    return SizedBox(
-      width: 260,
-      child: StatCard(
-        label: label,
-        value: value,
-        icon: icon,
-        color: AppTheme.secondary,
-        onTap: () => widget.onNavigate(destination),
-      ),
+    return StatCard(
+      label: label,
+      value: value,
+      icon: icon,
+      color: AppTheme.secondary,
+      onTap: () => widget.onNavigate(destination),
     );
   }
 }
@@ -171,7 +182,8 @@ class LawyerCasesScreen extends StatefulWidget {
 }
 
 class _LawyerCasesScreenState extends State<LawyerCasesScreen> {
-  late Future<List<CaseItem>> _future;
+  late Future<Paginated<CaseItem>> _future;
+  int _page = 1;
   Timer? _searchDebounce;
   String _search = '';
 
@@ -187,18 +199,32 @@ class _LawyerCasesScreenState extends State<LawyerCasesScreen> {
     super.dispose();
   }
 
-  Future<List<CaseItem>> _fetch() async {
-    final response = await AuthProvider.of(context).api.get('cases', query: {
-      'page': '1',
-      'limit': '$kMaxPageSize',
-      if (_search.trim().isNotEmpty) 'search': _search.trim(),
-    });
-    return itemsOf(response).map(CaseItem.fromJson).toList(growable: false);
+  Future<Paginated<CaseItem>> _fetch() {
+    final api = AuthProvider.of(context).api;
+    final search = _search.trim();
+    return loadPaginated<CaseItem>(
+      page: _page,
+      fromJson: CaseItem.fromJson,
+      request: (page) => api.get('cases', query: {
+        'page': '$page',
+        'limit': '$kMaxPageSize',
+        if (search.isNotEmpty) 'search': search,
+      }),
+    );
   }
 
-  void _reload() {
+  /// Re-fetches; [resetPage] returns to page 1 (search/filter changes).
+  void _reload({bool resetPage = false}) {
     if (!mounted) return;
     setState(() {
+      if (resetPage) _page = 1;
+      _future = _fetch();
+    });
+  }
+
+  void _goToPage(int page) {
+    setState(() {
+      _page = page;
       _future = _fetch();
     });
   }
@@ -207,49 +233,37 @@ class _LawyerCasesScreenState extends State<LawyerCasesScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: SearchField(
-                  hint: 'Search assigned cases...',
-                  onChanged: (value) {
-                    _search = value;
-                    _searchDebounce?.cancel();
-                    _searchDebounce = Timer(
-                      const Duration(milliseconds: 350),
-                      _reload,
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Refresh assigned cases',
-                onPressed: _reload,
-                icon: const Icon(Icons.refresh),
-              ),
-            ],
+        ListToolbar(
+          search: SearchField(
+            hint: 'Search assigned cases...',
+            onChanged: (value) {
+              _search = value;
+              _searchDebounce?.cancel();
+              _searchDebounce = Timer(
+                const Duration(milliseconds: 350),
+                () => _reload(resetPage: true),
+              );
+            },
           ),
+          actions: [
+            IconButton(
+              tooltip: 'Refresh assigned cases',
+              onPressed: _reload,
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
         ),
         Expanded(
-          child: FutureBuilder<List<CaseItem>>(
+          child: PagedFutureView<CaseItem>(
             future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const LoadingView();
-              }
-              if (snapshot.hasError) {
-                return ErrorBanner(message: '${snapshot.error}', onRetry: _reload);
-              }
-              final cases = snapshot.data ?? const <CaseItem>[];
-              if (cases.isEmpty) {
-                return const EmptyState(
+            onRetry: _reload,
+            onPageChanged: _goToPage,
+            errorContext: 'load caseitem list',
+            empty: const EmptyState(
                   icon: Icons.folder_copy_outlined,
                   message: 'No cases are assigned to your profile',
-                );
-              }
+                ),
+            itemsBuilder: (context, cases) {
               return ListView.builder(
                 padding: const EdgeInsets.only(bottom: 24),
                 itemCount: cases.length,
@@ -264,29 +278,13 @@ class _LawyerCasesScreenState extends State<LawyerCasesScreen> {
                     if (item.dueDate.trim().isNotEmpty) 'Due ${item.dueDate.trim()}',
                     if (item.description.trim().isNotEmpty) item.description.trim(),
                   ];
-                  return Card(
-                    child: ListTile(
-                      isThreeLine: detailLines.length > 1,
-                      title: Text(
-                        item.title,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text(
-                        detailLines.isEmpty ? 'No case details' : detailLines.join('  •  '),
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          StatusChip(status: item.status),
-                          const SizedBox(height: 5),
-                          PriorityChip(priority: item.priority),
-                        ],
-                      ),
-                    ),
+                  return RecordTile(
+                    title: item.title,
+                    details: detailLines.isEmpty ? const ['No case details'] : detailLines,
+                    badges: [
+                      StatusChip(status: item.status),
+                      PriorityChip(priority: item.priority),
+                    ],
                   );
                 },
               );
@@ -308,7 +306,8 @@ class LawyerBookingsScreen extends StatefulWidget {
 }
 
 class _LawyerBookingsScreenState extends State<LawyerBookingsScreen> {
-  late Future<List<Booking>> _future;
+  late Future<Paginated<Booking>> _future;
+  int _page = 1;
   String? _status;
 
   @override
@@ -317,22 +316,32 @@ class _LawyerBookingsScreenState extends State<LawyerBookingsScreen> {
     _future = _fetch();
   }
 
-  Future<List<Booking>> _fetch() async {
-    final query = <String, String>{
-      'page': '1',
-      'limit': '$kMaxPageSize',
-    };
+  Future<Paginated<Booking>> _fetch() {
+    final api = AuthProvider.of(context).api;
     final status = _status;
-    if (status != null) query['status'] = status;
-
-    final response =
-        await AuthProvider.of(context).api.get('bookings', query: query);
-    return itemsOf(response).map(Booking.fromJson).toList(growable: false);
+    return loadPaginated<Booking>(
+      page: _page,
+      fromJson: Booking.fromJson,
+      request: (page) => api.get('bookings', query: {
+        'page': '$page',
+        'limit': '$kMaxPageSize',
+        'status': ?status,
+      }),
+    );
   }
 
-  void _reload() {
+  /// Re-fetches; [resetPage] returns to page 1 (search/filter changes).
+  void _reload({bool resetPage = false}) {
     if (!mounted) return;
     setState(() {
+      if (resetPage) _page = 1;
+      _future = _fetch();
+    });
+  }
+
+  void _goToPage(int page) {
+    setState(() {
+      _page = page;
       _future = _fetch();
     });
   }
@@ -341,68 +350,53 @@ class _LawyerBookingsScreenState extends State<LawyerBookingsScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Row(
-            children: [
-              const Text('Status:'),
-              const SizedBox(width: 12),
-              DropdownButton<String>(
-                value: _status ?? '',
-                items: const [
-                  DropdownMenuItem(value: '', child: Text('All')),
-                  DropdownMenuItem(value: 'Pending', child: Text('Pending')),
-                  DropdownMenuItem(value: 'Active', child: Text('Active')),
-                  DropdownMenuItem(value: 'Completed', child: Text('Completed')),
-                  DropdownMenuItem(value: 'Cancelled', child: Text('Cancelled')),
-                ],
-                onChanged: (value) {
-                  setState(() => _status = value == null || value.isEmpty ? null : value);
-                  _reload();
-                },
-              ),
-              const Spacer(),
-              IconButton(
-                tooltip: 'Refresh assigned bookings',
-                onPressed: _reload,
-                icon: const Icon(Icons.refresh),
-              ),
-            ],
-          ),
+        ListToolbar(
+          filters: [
+            FilterDropdown<String>(
+              label: 'Status',
+              value: _status ?? '',
+              items: const [
+                DropdownMenuItem(value: '', child: Text('All statuses')),
+                DropdownMenuItem(value: 'Pending', child: Text('Pending')),
+                DropdownMenuItem(value: 'Active', child: Text('Active')),
+                DropdownMenuItem(value: 'Completed', child: Text('Completed')),
+                DropdownMenuItem(value: 'Cancelled', child: Text('Cancelled')),
+              ],
+              onChanged: (value) {
+                _status = value == null || value.isEmpty ? null : value;
+                _reload(resetPage: true);
+              },
+            ),
+          ],
+          actions: [
+            IconButton(
+              tooltip: 'Refresh assigned bookings',
+              onPressed: _reload,
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
         ),
         Expanded(
-          child: FutureBuilder<List<Booking>>(
+          child: PagedFutureView<Booking>(
             future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const LoadingView();
-              }
-              if (snapshot.hasError) {
-                return ErrorBanner(message: '${snapshot.error}', onRetry: _reload);
-              }
-              final bookings = snapshot.data ?? const <Booking>[];
-              if (bookings.isEmpty) {
-                return const EmptyState(
+            onRetry: _reload,
+            onPageChanged: _goToPage,
+            errorContext: 'load booking list',
+            empty: const EmptyState(
                   icon: Icons.event_available_outlined,
                   message: 'No appointments are assigned to your profile',
-                );
-              }
+                ),
+            itemsBuilder: (context, bookings) {
               return ListView.builder(
                 padding: const EdgeInsets.only(bottom: 24),
                 itemCount: bookings.length,
                 itemBuilder: (context, index) {
                   final booking = bookings[index];
-                  return Card(
-                    child: ListTile(
-                      title: Text(
-                        booking.lawyerName.isEmpty ? 'Appointment' : booking.lawyerName,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text(
-                        '${booking.date}  •  ${booking.time}  •  ${booking.hours}h',
-                      ),
-                      trailing: StatusChip(status: booking.status),
-                    ),
+                  return RecordTile(
+                    leading: const RecordAvatar(icon: Icons.event_outlined),
+                    title: booking.lawyerName.isEmpty ? 'Appointment' : booking.lawyerName,
+                    details: [booking.date, booking.time, '${booking.hours}h'],
+                    badges: [StatusChip(status: booking.status)],
                   );
                 },
               );
@@ -424,7 +418,8 @@ class LawyerAvailabilityScreen extends StatefulWidget {
 }
 
 class _LawyerAvailabilityScreenState extends State<LawyerAvailabilityScreen> {
-  late Future<List<Map<String, dynamic>>> _future;
+  late Future<Paginated<Map<String, dynamic>>> _future;
+  int _page = 1;
 
   @override
   void initState() {
@@ -432,12 +427,16 @@ class _LawyerAvailabilityScreenState extends State<LawyerAvailabilityScreen> {
     _future = _fetch();
   }
 
-  Future<List<Map<String, dynamic>>> _fetch() async {
-    final response = await AuthProvider.of(context).api.get('availability/mine', query: {
-      'page': '1',
-      'limit': '$kMaxPageSize',
-    });
-    return itemsOf(response);
+  Future<Paginated<Map<String, dynamic>>> _fetch() {
+    final api = AuthProvider.of(context).api;
+    return loadPaginated<Map<String, dynamic>>(
+      page: _page,
+      fromJson: (json) => json,
+      request: (page) => api.get('availability/mine', query: {
+        'page': '$page',
+        'limit': '$kMaxPageSize',
+      }),
+    );
   }
 
   void _reload() {
@@ -447,38 +446,37 @@ class _LawyerAvailabilityScreenState extends State<LawyerAvailabilityScreen> {
     });
   }
 
+  void _goToPage(int page) {
+    setState(() {
+      _page = page;
+      _future = _fetch();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<Map<String, dynamic>>>(
+    return PagedFutureView<Map<String, dynamic>>(
       future: _future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const LoadingView();
-        }
-        if (snapshot.hasError) {
-          return ErrorBanner(message: '${snapshot.error}', onRetry: _reload);
-        }
-        final slots = snapshot.data ?? const <Map<String, dynamic>>[];
-        if (slots.isEmpty) {
-          return const EmptyState(
-            icon: Icons.schedule_outlined,
-            message: 'No availability entries found',
-          );
-        }
+      onRetry: _reload,
+      onPageChanged: _goToPage,
+      errorContext: 'load availability',
+      empty: const EmptyState(
+        icon: Icons.schedule_outlined,
+        message: 'No availability entries found',
+      ),
+      itemsBuilder: (context, slots) {
         return ListView.builder(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
           itemCount: slots.length,
           itemBuilder: (context, index) {
             final slot = slots[index];
             final values = slot['slots'] is List
                 ? (slot['slots'] as List).map((value) => value.toString()).toList()
                 : const <String>[];
-            return Card(
-              child: ListTile(
-                leading: const Icon(Icons.calendar_month_outlined, color: AppTheme.secondary),
-                title: Text(slot['date']?.toString() ?? 'Date not provided'),
-                subtitle: Text(values.isEmpty ? 'No time slots listed' : values.join('  •  ')),
-              ),
+            return RecordTile(
+              leading: const RecordAvatar(icon: Icons.calendar_month_outlined, color: AppTheme.secondary),
+              title: slot['date']?.toString() ?? 'Date not provided',
+              details: values.isEmpty ? const ['No time slots listed'] : values,
             );
           },
         );

@@ -3,19 +3,42 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'config/supabase_config.dart';
 import 'config/theme.dart';
 import 'providers/auth_provider.dart';
+import 'screens/config_error_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'services/auth_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  runApp(bootstrapAdminApp());
+}
 
+/// Startup sequence: validate the compiled Supabase configuration first, then
+/// create exactly one [AuthService] (which owns the shared [ApiService]) and
+/// start refresh-token restoration.
+///
+/// With an invalid configuration no auth/data service is created and no
+/// network request is made; a configuration screen explains how to rebuild.
+Widget bootstrapAdminApp({
+  SupabaseConfig? config,
+  AuthService Function(SupabaseConfig config)? createAuthService,
+}) {
+  final resolved = config ?? SupabaseConfig.environment;
+  if (!resolved.isValid) {
+    // Safe to log: the message never contains the key value.
+    debugPrint(resolved.errorMessage);
+    return SupabaseConfigErrorApp(config: resolved);
+  }
+  final authService = createAuthService != null
+      ? createAuthService(resolved)
+      : AuthService(config: resolved);
   // One Supabase-backed provider owns refresh-token restoration for the panel.
-  final authProvider = AuthProvider(AuthService())..bindAuthState();
+  final authProvider = AuthProvider(authService)..bindAuthState();
   unawaited(authProvider.restore());
-  runApp(AdminApp(authProvider: authProvider));
+  return AdminApp(authProvider: authProvider);
 }
 
 class AdminApp extends StatelessWidget {

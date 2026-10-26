@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_errors.dart';
 import '../services/api_service.dart';
 
 /// Searchable picker over users with one exact server-owned application role.
@@ -114,7 +115,7 @@ class _ClientPickerFieldState extends State<ClientPickerField> {
       if (!mounted || seq != _requestSeq) return;
       setState(() {
         _loading = false;
-        _error = '$e';
+        _error = reportError(e, context: 'load ${widget.roleLabel}s');
       });
     }
   }

@@ -11,6 +11,9 @@ const repoRoot = path.resolve(testDir, '../..');
 const migrationsDir = path.join(repoRoot, 'supabase', 'migrations');
 const archivedCandidatesDir = path.join(repoRoot, 'supabase', 'archive', 'unapplied_candidates');
 const categoryMigrationFile = '20261024102004_legal_categories_and_assignments.sql';
+const liveReconciledMigrationFile =
+  '20261025122424_tighten_anon_grants_and_optimize_user_policies.sql';
+const firstPendingMigrationFile = '20261025140000_supabase_security_storage.sql';
 const archivedCandidateFiles = [
   '20261023100000_harden_rls_auth_and_storage.sql',
   '20261023101500_authenticated_transactional_rpcs.sql',
@@ -2045,6 +2048,9 @@ describe('legal categories and lawyer/case assignments (isolated PGlite migratio
       '20261024021423_restrict_subscription_owner_updates.sql',
       categoryMigrationFile,
       '20261024123238_secure_rls_helper_functions_private_schema.sql',
+      // Applied directly to the live project and reconciled verbatim from
+      // supabase_migrations.schema_migrations; it must precede the 1400xx set.
+      '20261025122424_tighten_anon_grants_and_optimize_user_policies.sql',
       '20261025140000_supabase_security_storage.sql',
       '20261025141000_identity_owner_lawyer_access.sql',
       '20261025142000_authenticated_transactional_rpcs.sql',
@@ -2350,8 +2356,14 @@ describe('identity, owner, lawyer and phone-auth proposal (isolated PGlite only)
     identityDb = new PGlite();
     await identityDb.exec(bootstrapSql);
     const files = await migrationFiles();
+    // The standalone proposal was authored against the baseline that preceded
+    // the live-only 20261025122424 reconciliation file. That live migration's
+    // users_update_self_or_admin WITH CHECK self-references public.users and
+    // raises 42P17; the adopted 1400xx chain replaces it (covered by the
+    // "live-parity chain" suite below), so the proposal keeps its own baseline.
     const preProposalFiles = files.filter(
-      (file) => file < '20261025140000_supabase_security_storage.sql',
+      (file) => file < '20261025140000_supabase_security_storage.sql'
+        && file !== liveReconciledMigrationFile,
     );
     await applyMigrations(identityDb, preProposalFiles);
     baselineCaseBookingPolicies = (await identityDb.query(
@@ -2756,5 +2768,146 @@ describe('identity, owner, lawyer and phone-auth proposal (isolated PGlite only)
       [],
     );
     assert.equal(helper.rows[0].id, null);
+  });
+});
+
+describe('live-parity chain through 20261025122424 vs pending 1400xx migrations (PGlite)', () => {
+  // The connected project's schema_migrations ends at 20261025122424; its
+  // columns, policies, constraints, triggers and function bodies were checked
+  // read-only against this exact local chain. This suite reproduces the three
+  // admin-panel runtime failures on that state and proves the already
+  // committed (but not yet deployed) 1400xx migrations resolve them.
+  let liveDb;
+  const liveAdmin = '00000000-0000-4000-8000-000000000071';
+  const liveClient = '00000000-0000-4000-8000-000000000072';
+
+  async function asLive(role, subject, callback) {
+    await liveDb.exec('BEGIN');
+    try {
+      await liveDb.exec(`SET LOCAL ROLE ${role}`);
+      await liveDb.query("SELECT set_config('request.jwt.claim.sub', $1, true)", [subject ?? '']);
+      await liveDb.query("SELECT set_config('request.jwt.claim.role', $1, true)", [role]);
+      return await callback();
+    } finally {
+      await liveDb.exec('ROLLBACK');
+    }
+  }
+
+  async function liveSqlState(role, subject, statement) {
+    return asLive(role, subject, async () => {
+      try {
+        await liveDb.query(statement);
+        return 'ok';
+      } catch (error) {
+        return error.code;
+      }
+    });
+  }
+
+  before(async () => {
+    liveDb = new PGlite();
+    await liveDb.exec(bootstrapSql);
+    const files = await migrationFiles();
+    const liveFiles = files.filter((file) => file < firstPendingMigrationFile);
+    assert.equal(liveFiles.at(-1), liveReconciledMigrationFile);
+    assert.equal(liveFiles.length, 11, 'remote schema_migrations lists 11 versions');
+    await applyMigrations(liveDb, liveFiles);
+    for (const [id, role] of [[liveAdmin, 'admin'], [liveClient, 'client']]) {
+      await liveDb.query(
+        `INSERT INTO auth.users (id, email, email_confirmed_at) VALUES ($1, $2, now())`,
+        [id, `${role}-live@example.test`],
+      );
+      await liveDb.query(
+        `INSERT INTO public.users (id, uid, auth_user_id, name, email, role)
+         VALUES ($1, $1, $2::uuid, $3, $4, $5)`,
+        [id, id, `Live ${role}`, `${role}-live@example.test`, role],
+      );
+    }
+  });
+
+  after(async () => {
+    await liveDb?.close();
+  });
+
+  it('reproduces the observed failures on the live-equivalent schema', async () => {
+    // Error 3 (PGRST205): the relation the admin panel reads does not exist.
+    assert.equal(
+      (await liveDb.query("SELECT to_regclass('public.public_reviews') AS rel")).rows[0].rel,
+      null,
+    );
+    // Error 1 (PGRST202): the RPC the admin panel calls does not exist.
+    assert.equal(
+      (await liveDb.query(
+        "SELECT to_regprocedure('public.rpc_admin_lawyers_page(integer,integer,text,text,boolean,boolean)') AS fn",
+      )).rows[0].fn,
+      null,
+    );
+    // Error 2 candidate: without the 1400xx slug trigger, a name-only insert by
+    // an administrator is a NOT NULL violation (PostgREST maps 23502 to 400);
+    // the same insert carrying a slug is accepted.
+    assert.equal(
+      await liveSqlState('authenticated', liveAdmin,
+        "INSERT INTO public.legal_categories (name) VALUES ('Estate Law')"),
+      '23502',
+    );
+    assert.equal(
+      await liveSqlState('authenticated', liveAdmin,
+        "INSERT INTO public.legal_categories (name, slug) VALUES ('Estate Law', 'estate-law')"),
+      'ok',
+    );
+    // Related live defect: the live-only users_update_self_or_admin policy
+    // self-references public.users, so every authenticated UPDATE recurses.
+    assert.equal(
+      await liveSqlState('authenticated', liveClient,
+        `UPDATE public.users SET name = 'Renamed' WHERE id = '${liveClient}'`),
+      '42P17',
+    );
+  });
+
+  it('the committed 1400xx migrations apply on top and resolve each failure', async () => {
+    const files = await migrationFiles();
+    await applyMigrations(liveDb, files.filter((file) => file >= firstPendingMigrationFile));
+
+    const viewColumns = (await liveDb.query(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'public_reviews'
+        ORDER BY ordinal_position`,
+    )).rows.map((row) => row.column_name);
+    assert.deepEqual(viewColumns, [
+      'id', 'user_name', 'lawyer_id', 'rating', 'comment', 'created_at', 'updated_at',
+    ]);
+    assert.equal(
+      await liveSqlState('anon', null,
+        'SELECT id,user_name,lawyer_id,rating,comment,created_at,updated_at FROM public.public_reviews ORDER BY created_at DESC LIMIT 100 OFFSET 0'),
+      'ok',
+    );
+    assert.equal(
+      await liveSqlState('anon', null, 'SELECT user_id FROM public.reviews'),
+      '42501',
+      'raw reviewer ids must not be readable by anon',
+    );
+
+    const page = await asLive('authenticated', liveAdmin, () => liveDb.query(
+      'SELECT public.rpc_admin_lawyers_page(1, 100, NULL, NULL, NULL, NULL) AS result',
+    ));
+    assert.deepEqual(Object.keys(page.rows[0].result).sort(), [
+      'items', 'limit', 'page', 'total', 'totalPages',
+    ]);
+    assert.equal(
+      await liveSqlState('authenticated', liveClient,
+        'SELECT public.rpc_admin_lawyers_page(1, 100, NULL, NULL, NULL, NULL)'),
+      '42501',
+    );
+
+    const inserted = await asLive('authenticated', liveAdmin, () => liveDb.query(
+      "INSERT INTO public.legal_categories (name, slug) VALUES ('قانون الأسرة', 'category-abc') RETURNING slug",
+    ));
+    assert.match(inserted.rows[0].slug, /^category-[0-9a-f]{16}$/);
+
+    assert.equal(
+      await liveSqlState('authenticated', liveClient,
+        `UPDATE public.users SET name = 'Renamed' WHERE id = '${liveClient}'`),
+      'ok',
+    );
   });
 });

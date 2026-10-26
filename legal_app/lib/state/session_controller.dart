@@ -37,6 +37,11 @@ class SessionController extends ChangeNotifier {
   final AuthService _auth;
   AppRepository? _repository;
 
+  /// The auth service this session drives (its gateway and API client share
+  /// one validated Supabase config). Exposed for wiring tests only.
+  @visibleForTesting
+  AuthService get authService => _auth;
+
   /// Read access to the backend collections, sharing this session's
   /// [ApiClient] so every request uses the same base URL and token handling.
   AppRepository get repository =>

@@ -1,12 +1,18 @@
+import 'supabase_client_config.dart';
+
 /// Compile-time Supabase configuration for the Legal Services mobile app.
 ///
-/// Pass values via `--dart-define` at build or run time:
+/// These values exist ONLY when passed to the exact `flutter run`/`flutter
+/// build` command as Dart defines. Shell environment variables are not read:
 /// ```bash
+/// flutter run --dart-define-from-file=supabase.local.json
+/// # or
 /// flutter run \
 ///   --dart-define=SUPABASE_URL=https://qqfzbecwhewswkyxgebu.supabase.co \
-///   --dart-define=SUPABASE_ANON_KEY=<your-anon-or-publishable-key> \
-///   --dart-define=API_BASE_URL=http://localhost:5000/api
+///   --dart-define=SUPABASE_ANON_KEY=<public anon/publishable key>
 /// ```
+/// Read them through the validated [SupabaseClientConfig.environment] rather
+/// than using [supabaseUrl]/[supabaseAnonKey] directly.
 ///
 /// Security invariant: NEVER pass or embed a Supabase `service_role` or
 /// `secret` key in Flutter client code. Only the public `anon` / `publishable`
@@ -63,7 +69,6 @@ class SupabaseConfig {
     defaultValue: false,
   );
 
-  /// True when a public Supabase anon key has been supplied for this build.
-  static bool get isConfigured =>
-      supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
+  /// True when the compiled Supabase URL and public key passed validation.
+  static bool get isConfigured => SupabaseClientConfig.environment.isValid;
 }

@@ -158,9 +158,8 @@ void main() {
       matching: find.text('My Cases'),
     ).first);
     await tester.pumpAndSettle();
-    final drawerContext = tester.element(find.byType(Drawer));
-    Navigator.of(drawerContext).pop();
-    await tester.pumpAndSettle();
+    // Choosing a destination closes the drawer and shows the page.
+    expect(find.byType(Drawer), findsNothing);
     expect(find.text('No cases are assigned to your profile'), findsOneWidget);
     expect(find.text('Add Case'), findsNothing);
     expect(find.byIcon(Icons.edit), findsNothing);
@@ -173,8 +172,8 @@ void main() {
       matching: find.text('My Bookings'),
     ).first);
     await tester.pumpAndSettle();
-    Navigator.of(tester.element(find.byType(Drawer))).pop();
-    await tester.pumpAndSettle();
+    // Choosing a destination closes the drawer and shows the page.
+    expect(find.byType(Drawer), findsNothing);
     expect(find.text('No appointments are assigned to your profile'), findsOneWidget);
     expect(find.byType(PopupMenuButton<String>), findsNothing);
   });

@@ -224,6 +224,11 @@ class Booking {
   final String userId;
   final String lawyerId;
 
+  /// Client display identity resolved from `users(id,name,email)` by the
+  /// adapter. Read-only; empty when the reader may not see that profile.
+  final String clientName;
+  final String clientEmail;
+
   Booking({
     required this.id,
     this.lawyerName = '',
@@ -234,6 +239,8 @@ class Booking {
     this.status = 'Pending',
     this.userId = '',
     this.lawyerId = '',
+    this.clientName = '',
+    this.clientEmail = '',
   });
 
   factory Booking.fromJson(Map<String, dynamic> json) {
@@ -242,14 +249,25 @@ class Booking {
       lawyerName: json['lawyerName']?.toString() ?? '',
       date: json['date']?.toString() ?? '',
       time: json['time']?.toString() ?? '',
-      hours: (json['hours'] ?? 1) is int
-          ? json['hours']
-          : int.tryParse('${json['hours']}') ?? 1,
+      hours: json['hours'] is int
+          ? json['hours'] as int
+          : int.tryParse('${json['hours'] ?? ''}') ?? 1,
       totalPrice: (json['totalPrice'] ?? 0).toDouble(),
       status: json['status']?.toString() ?? 'Pending',
       userId: json['userId']?.toString() ?? '',
       lawyerId: json['lawyerId']?.toString() ?? '',
+      clientName: json['userName']?.toString() ?? '',
+      clientEmail: json['userEmail']?.toString() ?? '',
     );
+  }
+
+  /// Best available client label without exposing more than name/email.
+  String get clientLabel {
+    if (clientName.isNotEmpty) {
+      return clientEmail.isEmpty ? clientName : '$clientName ($clientEmail)';
+    }
+    if (clientEmail.isNotEmpty) return clientEmail;
+    return userId.isEmpty ? 'Unknown client' : 'Client $userId';
   }
 
   Map<String, dynamic> toJson() => {
@@ -272,6 +290,9 @@ class Review {
   final String lawyerId;
   final String userId;
 
+  /// Lawyer display name resolved from `lawyers(id,name)`; read-only.
+  final String lawyerName;
+
   Review({
     required this.id,
     this.userName = '',
@@ -279,6 +300,7 @@ class Review {
     this.comment = '',
     this.lawyerId = '',
     this.userId = '',
+    this.lawyerName = '',
   });
 
   factory Review.fromJson(Map<String, dynamic> json) {
@@ -289,6 +311,7 @@ class Review {
       comment: json['comment']?.toString() ?? '',
       lawyerId: json['lawyerId']?.toString() ?? '',
       userId: json['userId']?.toString() ?? '',
+      lawyerName: json['lawyerName']?.toString() ?? '',
     );
   }
 
@@ -305,6 +328,9 @@ class Plan {
   final String id;
   final String title;
   final String price;
+
+  /// Numeric price (`plans.price_value`), used for ordering and amounts.
+  final double priceValue;
   final String color;
   final List<String> features;
   final bool isPopular;
@@ -313,6 +339,7 @@ class Plan {
     required this.id,
     required this.title,
     this.price = '',
+    this.priceValue = 0,
     this.color = '#3498DB',
     this.features = const [],
     this.isPopular = false,
@@ -323,6 +350,7 @@ class Plan {
       id: json['id']?.toString() ?? '',
       title: json['title']?.toString() ?? '',
       price: json['price']?.toString() ?? '',
+      priceValue: _planPriceValue(json['priceValue'] ?? json['price_value']),
       color: json['color']?.toString() ?? '#3498DB',
       features: (json['features'] as List?)
               ?.map((e) => e.toString())
@@ -332,9 +360,16 @@ class Plan {
     );
   }
 
+  /// PostgREST returns NUMERIC as a JSON number; tolerate a numeric string.
+  static double _planPriceValue(dynamic raw) {
+    if (raw is num) return raw.toDouble();
+    return double.tryParse(raw?.toString() ?? '') ?? 0;
+  }
+
   Map<String, dynamic> toJson() => {
         'title': title,
         'price': price,
+        'priceValue': priceValue,
         'color': color,
         'features': features,
         'isPopular': isPopular,
@@ -352,12 +387,24 @@ class Subscription {
   final String planTitle;
   final String status;
 
+  /// `start_date` / `end_date` (timestamptz) as returned by PostgREST.
+  final DateTime? startDate;
+  final DateTime? endDate;
+
+  /// Subscriber identity resolved from `users(id,name,email)`; read-only.
+  final String userName;
+  final String userEmail;
+
   const Subscription({
     required this.id,
     this.userId = '',
     this.planId = '',
     this.planTitle = '',
     this.status = 'Pending',
+    this.startDate,
+    this.endDate,
+    this.userName = '',
+    this.userEmail = '',
   });
 
   factory Subscription.fromJson(Map<String, dynamic> json) {
@@ -367,7 +414,20 @@ class Subscription {
       planId: json['planId']?.toString() ?? '',
       planTitle: json['planTitle']?.toString() ?? '',
       status: json['status']?.toString() ?? 'Pending',
+      startDate: DateTime.tryParse(json['startDate']?.toString() ?? ''),
+      endDate: DateTime.tryParse(json['endDate']?.toString() ?? ''),
+      userName: json['userName']?.toString() ?? '',
+      userEmail: json['userEmail']?.toString() ?? '',
     );
+  }
+
+  /// Subscriber label: name and email when resolvable, otherwise the id.
+  String get userLabel {
+    if (userName.isNotEmpty) {
+      return userEmail.isEmpty ? userName : '$userName ($userEmail)';
+    }
+    if (userEmail.isNotEmpty) return userEmail;
+    return userId.isEmpty ? 'Unknown user' : 'User $userId';
   }
 
   /// What to show as the record's name. Never treated as proof of a paid plan.
@@ -383,6 +443,10 @@ class NotificationItem {
   final String type;
   final bool read;
 
+  /// Recipient identity resolved from `users(id,name,email)`; read-only.
+  final String recipientName;
+  final String recipientEmail;
+
   NotificationItem({
     required this.id,
     this.userId = '',
@@ -390,6 +454,8 @@ class NotificationItem {
     this.content = '',
     this.type = '',
     this.read = false,
+    this.recipientName = '',
+    this.recipientEmail = '',
   });
 
   factory NotificationItem.fromJson(Map<String, dynamic> json) {
@@ -400,7 +466,18 @@ class NotificationItem {
       content: json['content']?.toString() ?? '',
       type: json['type']?.toString() ?? '',
       read: json['read'] == true,
+      recipientName: json['userName']?.toString() ?? '',
+      recipientEmail: json['userEmail']?.toString() ?? '',
     );
+  }
+
+  /// Recipient label: name and email when resolvable, otherwise the id.
+  String get recipientLabel {
+    if (recipientName.isNotEmpty) {
+      return recipientEmail.isEmpty ? recipientName : '$recipientName ($recipientEmail)';
+    }
+    if (recipientEmail.isNotEmpty) return recipientEmail;
+    return userId.isEmpty ? 'Unknown recipient' : 'User $userId';
   }
 
   Map<String, dynamic> toJson() => {
@@ -465,11 +542,24 @@ class Paginated<T> {
   final int limit;
   final int totalPages;
 
+  /// True when the server reports more rows after this page.
+  final bool hasMore;
+
   Paginated({
     required this.items,
     required this.total,
     required this.page,
     required this.limit,
     required this.totalPages,
-  });
+    bool? hasMore,
+  }) : hasMore = hasMore ?? page < totalPages;
+
+  bool get hasPrevious => page > 1;
+  bool get hasNext => hasMore || page < totalPages;
+
+  /// 1-based index of the first item on this page (0 when empty).
+  int get firstIndex => items.isEmpty ? 0 : (page - 1) * limit + 1;
+
+  /// 1-based index of the last item on this page (0 when empty).
+  int get lastIndex => items.isEmpty ? 0 : (page - 1) * limit + items.length;
 }

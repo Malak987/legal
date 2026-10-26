@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import '../config/theme.dart';
 import '../models/models.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_errors.dart';
 import '../services/api_service.dart';
 import '../widgets/common.dart';
+import '../widgets/pagination.dart';
 
 /// Administrator CRUD for the public legal-category catalogue.
 class CategoriesScreen extends StatefulWidget {
@@ -17,8 +19,9 @@ class CategoriesScreen extends StatefulWidget {
 }
 
 class _CategoriesScreenState extends State<CategoriesScreen> {
-  late Future<List<LegalCategory>> _future;
+  late Future<Paginated<LegalCategory>> _future;
   String _search = '';
+  int _page = 1;
   Timer? _searchDebounce;
 
   @override
@@ -27,21 +30,32 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     _future = _fetch();
   }
 
-  Future<List<LegalCategory>> _fetch() async {
-    final response = await AuthProvider.of(context).api.get('categories', query: {
-      'page': '1',
-      'limit': '$kMaxPageSize',
-      if (_search.trim().isNotEmpty) 'search': _search.trim(),
-    });
-    return itemsOf(response)
-        .map(LegalCategory.fromJson)
-        .where((category) => category.id.isNotEmpty && category.name.isNotEmpty)
-        .toList(growable: false);
+  Future<Paginated<LegalCategory>> _fetch() {
+    final api = AuthProvider.of(context).api;
+    final search = _search.trim();
+    return loadPaginated<LegalCategory>(
+      page: _page,
+      fromJson: LegalCategory.fromJson,
+      request: (page) => api.get('categories', query: {
+        'page': '$page',
+        'limit': '$kMaxPageSize',
+        if (search.isNotEmpty) 'search': search,
+      }),
+    );
   }
 
-  void _reload() {
+  /// Re-fetches; [resetPage] returns to page 1 (search/filter changes).
+  void _reload({bool resetPage = false}) {
     if (!mounted) return;
     setState(() {
+      if (resetPage) _page = 1;
+      _future = _fetch();
+    });
+  }
+
+  void _goToPage(int page) {
+    setState(() {
+      _page = page;
       _future = _fetch();
     });
   }
@@ -69,7 +83,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete', style: TextStyle(color: AppTheme.danger)),
+            style: AppTheme.destructiveButtonStyle,
+            child: const Text('Delete'),
           ),
         ],
       ),
@@ -86,7 +101,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$error')),
+        SnackBar(content: Text(reportError(error, context: 'delete category'))),
       );
     }
   }
@@ -101,88 +116,64 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: SearchField(
-                  hint: 'Search categories...',
-                  onChanged: (value) {
-                    _search = value;
-                    _searchDebounce?.cancel();
-                    _searchDebounce =
-                        Timer(const Duration(milliseconds: 350), _reload);
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Refresh categories',
-                onPressed: _reload,
-                icon: const Icon(Icons.refresh),
-              ),
-              const SizedBox(width: 8),
-              ElevatedButton.icon(
-                onPressed: () => _openForm(),
-                icon: const Icon(Icons.add),
-                label: const Text('Add Category'),
-              ),
-            ],
+        ListToolbar(
+          search: SearchField(
+            hint: 'Search categories...',
+            onChanged: (v) {
+              _search = v;
+              _searchDebounce?.cancel();
+              _searchDebounce = Timer(const Duration(milliseconds: 350), () => _reload(resetPage: true));
+            },
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'Refresh categories',
+              onPressed: _reload,
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+          primary: ElevatedButton.icon(
+            onPressed: () => _openForm(),
+            icon: const Icon(Icons.add),
+            label: const Text('Add Category'),
           ),
         ),
         Expanded(
-          child: FutureBuilder<List<LegalCategory>>(
+          child: PagedFutureView<LegalCategory>(
             future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const LoadingView();
-              }
-              if (snapshot.hasError) {
-                return ErrorBanner(
-                  message: '${snapshot.error}',
-                  onRetry: _reload,
-                );
-              }
-              final categories = snapshot.data ?? const <LegalCategory>[];
-              if (categories.isEmpty) {
-                return const EmptyState(
-                  icon: Icons.category_outlined,
-                  message: 'No legal categories found',
-                );
-              }
+            onRetry: _reload,
+            onPageChanged: _goToPage,
+            errorContext: 'load categories',
+            empty: const EmptyState(
+              icon: Icons.category_outlined,
+              message: 'No legal categories found',
+            ),
+            itemsBuilder: (context, items) {
+              final categories = items
+                  .where((category) => category.id.isNotEmpty && category.name.isNotEmpty)
+                  .toList(growable: false);
               return ListView.builder(
                 padding: const EdgeInsets.only(bottom: 24),
                 itemCount: categories.length,
                 itemBuilder: (context, index) {
                   final category = categories[index];
-                  return Card(
-                    child: ListTile(
-                      leading: const CircleAvatar(
-                        backgroundColor: Color(0xFFE8EEF6),
-                        child: Icon(Icons.category, color: AppTheme.primary),
+                  return RecordTile(
+                    leading: const RecordAvatar(icon: Icons.category_outlined),
+                    title: category.name,
+                    subtitle: category.slug,
+                    actions: [
+                      RowAction(
+                        icon: Icons.edit,
+                        tooltip: 'Edit category',
+                        onPressed: () => _openForm(category: category),
                       ),
-                      title: Text(
-                        category.name,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      RowAction(
+                        icon: Icons.delete,
+                        tooltip: 'Delete category',
+                        destructive: true,
+                        onPressed: () => _delete(category),
                       ),
-                      subtitle: Text(category.slug),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            tooltip: 'Edit category',
-                            icon: const Icon(Icons.edit, color: AppTheme.secondary),
-                            onPressed: () => _openForm(category: category),
-                          ),
-                          IconButton(
-                            tooltip: 'Delete category',
-                            icon: const Icon(Icons.delete, color: AppTheme.danger),
-                            onPressed: () => _delete(category),
-                          ),
-                        ],
-                      ),
-                    ),
+                    ],
                   );
                 },
               );
@@ -242,7 +233,7 @@ class _CategoryDialogState extends State<CategoryDialog> {
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$error')),
+        SnackBar(content: Text(reportError(error, context: 'save category'))),
       );
     }
   }

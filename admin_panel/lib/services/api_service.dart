@@ -1,9 +1,10 @@
 import 'dart:async' show TimeoutException;
 import 'dart:convert';
+import 'dart:math' show Random;
 
 import 'package:http/http.dart' as http;
 
-import '../config/app_config.dart';
+import '../config/supabase_config.dart';
 
 /// Supabase-only data adapter for the admin panel.
 ///
@@ -16,19 +17,27 @@ class ApiService {
     http.Client? client,
     this.tokenProvider,
     this.forceRefreshTokenProvider,
+    SupabaseConfig? config,
     String? supabaseUrl,
     String? supabaseAnonKey,
   })  : _client = client ?? http.Client(),
         _ownsClient = client == null,
-        _supabaseUrl = (supabaseUrl ?? AppConfig.supabaseUrl).trim(),
-        _supabaseAnonKey = (supabaseAnonKey ?? AppConfig.supabaseAnonKey).trim();
+        config = SupabaseConfig.select(
+          config: config,
+          url: supabaseUrl,
+          anonKey: supabaseAnonKey,
+        );
 
   static const Duration _requestTimeout = Duration(seconds: 25);
 
   final http.Client _client;
   final bool _ownsClient;
-  final String _supabaseUrl;
-  final String _supabaseAnonKey;
+
+  /// Validated Supabase configuration shared with [AuthService].
+  final SupabaseConfig config;
+
+  String get _supabaseUrl => config.url;
+  String get _supabaseAnonKey => config.anonKey;
 
   /// Current Supabase access token, retained only in memory.
   String? token;
@@ -39,8 +48,7 @@ class ApiService {
   /// Forced token refresh used once after a 401 response.
   Future<String?> Function()? forceRefreshTokenProvider;
 
-  bool get isConfigured =>
-      _supabaseUrl.isNotEmpty && _supabaseAnonKey.isNotEmpty;
+  bool get isConfigured => config.isValid;
 
   // -------------------------------------------------------------------------
   // Admin-facing endpoint adapters. The returned envelope is retained for the
@@ -99,20 +107,29 @@ class ApiService {
         case 'cases':
           return _casePage(params);
         case 'bookings':
-          return _listEndpoint('bookings', params, order: 'created_at.desc');
+          return _withUserIdentity(
+              await _listEndpoint('bookings', params, order: 'created_at.desc'));
         case 'subscriptions':
-          return _listEndpoint('subscriptions', params, order: 'created_at.desc');
+          return _withUserIdentity(
+              await _listEndpoint('subscriptions', params, order: 'created_at.desc'));
         case 'notifications':
-          return _listEndpoint('notifications', params, order: 'created_at.desc');
+          return _withUserIdentity(
+              await _listEndpoint('notifications', params, order: 'created_at.desc'));
         case 'reviews':
-          return _listEndpoint('public_reviews', params, order: 'created_at.desc');
+          return _withLawyerNames(
+              await _listEndpoint('public_reviews', params, order: 'created_at.desc'));
         case 'chats':
-          final rows = await _rows('chats', <String, String>{
-            'select': 'id,participants,participant_names,last_message,created_at,updated_at',
-            'order': 'updated_at.desc',
-            'limit': '${_positiveInt(params['limit'], fallback: kMaxPageSize, maximum: kMaxPageSize)}',
-          });
-          return _listEnvelope(rows);
+          // Paged like every other admin list (total from Content-Range).
+          final page = await _tablePage(
+            'chats',
+            <String, String>{
+              'select': _selectColumns('chats'),
+              'order': 'updated_at.desc',
+            },
+            page: _positiveInt(params['page'], fallback: 1, maximum: 1000000),
+            limit: _positiveInt(params['limit'], fallback: kMaxPageSize, maximum: kMaxPageSize),
+          );
+          return _singleEnvelope(page);
       }
     }
 
@@ -172,9 +189,13 @@ class ApiService {
             .toLowerCase()
             .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
             .replaceAll(RegExp(r'^-+|-+$'), '');
+        // legal_categories.slug is NOT NULL + UNIQUE with no default on the
+        // live project, so the insert must always carry a slug. Names without
+        // ASCII letters/digits (e.g. Arabic) produce an empty base; a fixed
+        // 'category' fallback would collide on the second such category.
         final slug = (rawSlug != null && rawSlug.trim().isNotEmpty)
             ? rawSlug.trim()
-            : (generatedSlug.isEmpty ? 'category' : generatedSlug);
+            : (generatedSlug.isEmpty ? _fallbackCategorySlug() : generatedSlug);
         return _singleEnvelope(await _insert('legal_categories', <String, dynamic>{
           'name': categoryName,
           'slug': slug,
@@ -274,7 +295,10 @@ class ApiService {
           'p_rating': values['rating'],
           'p_comment': values['comment'],
         });
-        return _singleEnvelope(_camelizeMap(_asMap(result, 'review moderation')));
+        // The RPC returns the full row; reviewer identity stays private.
+        final review = _camelizeMap(_asMap(result, 'review moderation'))
+          ..remove('userId');
+        return _singleEnvelope(review);
       case 'notifications':
         return _singleEnvelope(_camelizeMap(_asMap(await _rpc(
           'rpc_notification_update',
@@ -331,6 +355,16 @@ class ApiService {
   // -------------------------------------------------------------------------
   // Endpoint-specific reads and writes
   // -------------------------------------------------------------------------
+
+  static final Random _slugRandom = Random.secure();
+
+  String _fallbackCategorySlug() {
+    final suffix = List<String>.generate(
+      10,
+      (_) => _slugRandom.nextInt(36).toRadixString(36),
+    ).join();
+    return 'category-$suffix';
+  }
 
   Future<dynamic> _lawyerPage(Map<String, String> query) async {
     final result = await _rpc('rpc_admin_lawyers_page', <String, dynamic>{
@@ -455,6 +489,73 @@ class ApiService {
     return _camelizeMap(_asMap(result, 'lawyer save'));
   }
 
+  static final RegExp _lookupId = RegExp(r'^[A-Za-z0-9_-]{1,200}$');
+
+  /// Best-effort `id -> row` lookup of display columns for [ids].
+  ///
+  /// Only safe ids are sent in the `in.(...)` filter. A failed lookup (for
+  /// example a lawyer session that may read only its own profile) leaves the
+  /// rows unresolved instead of failing the whole list.
+  Future<Map<String, Map<String, dynamic>>> _lookupById(
+    String table,
+    String select,
+    Iterable<String> ids,
+  ) async {
+    final clean = ids.where(_lookupId.hasMatch).toSet();
+    if (clean.isEmpty) return const <String, Map<String, dynamic>>{};
+    try {
+      final rows = await _rows(table, <String, String>{
+        'select': select,
+        'id': 'in.(${clean.join(',')})',
+      });
+      return <String, Map<String, dynamic>>{
+        for (final row in rows) row['id'].toString(): row,
+      };
+    } on ApiException {
+      return const <String, Map<String, dynamic>>{};
+    }
+  }
+
+  /// Adds `userName`/`userEmail` from `users(id,name,email)` to each item.
+  Future<dynamic> _withUserIdentity(dynamic envelope) async {
+    final page = listPageOf(envelope);
+    final items = _itemsFromPage(page);
+    final users = await _lookupById(
+      'users',
+      'id,name,email',
+      items.map((row) => row['userId']?.toString() ?? ''),
+    );
+    return _singleEnvelope(<String, dynamic>{
+      ...page,
+      'items': items.map((row) {
+        final user = users[row['userId']?.toString()];
+        return <String, dynamic>{
+          ...row,
+          'userName': user?['name']?.toString() ?? '',
+          'userEmail': user?['email']?.toString() ?? '',
+        };
+      }).toList(growable: false),
+    });
+  }
+
+  /// Adds `lawyerName` from the public `lawyers(id,name)` columns.
+  Future<dynamic> _withLawyerNames(dynamic envelope) async {
+    final page = listPageOf(envelope);
+    final items = _itemsFromPage(page);
+    final lawyers = await _lookupById(
+      'lawyers',
+      'id,name',
+      items.map((row) => row['lawyerId']?.toString() ?? ''),
+    );
+    return _singleEnvelope(<String, dynamic>{
+      ...page,
+      'items': items.map((row) => <String, dynamic>{
+            ...row,
+            'lawyerName': lawyers[row['lawyerId']?.toString()]?['name']?.toString() ?? '',
+          }).toList(growable: false),
+    });
+  }
+
   Future<List<Map<String, dynamic>>> _enrichCases(List<Map<String, dynamic>> cases) async {
     if (cases.isEmpty) return cases;
     final categoryIds = cases
@@ -514,7 +615,8 @@ class ApiService {
     final data = _decode(response);
     if (data is! List) throw ApiException('Supabase returned an invalid $table page.', 502);
     final rows = _asRows(data, table);
-    final total = _contentRangeTotal(response) ?? (page - 1) * limit + rows.length;
+    final exactTotal = _contentRangeTotal(response);
+    final total = exactTotal ?? (page - 1) * limit + rows.length;
     final totalPages = total == 0 ? 1 : (total + limit - 1) ~/ limit;
     return <String, dynamic>{
       'items': rows,
@@ -522,7 +624,8 @@ class ApiService {
       'limit': limit,
       'total': total,
       'totalPages': totalPages,
-      'hasMore': page < totalPages,
+      // Without an exact count a full page may have more rows behind it.
+      'hasMore': page < totalPages || (exactTotal == null && rows.length >= limit),
     };
   }
 
@@ -537,7 +640,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> _one(String table, String id) async {
     final rows = await _rows(table, <String, String>{
-      'select': '*',
+      // bookings is readable only column-by-column (idempotency_key_hash is
+      // never granted), so `*` would be denied once the grants are applied.
+      'select': table == 'bookings' ? _selectColumns(table) : '*',
       'id': 'eq.$id',
       'limit': '2',
     });
@@ -599,7 +704,7 @@ class ApiService {
     Map<String, String> extraHeaders = const <String, String>{},
   }) async {
     if (!isConfigured) {
-      throw ApiException('Supabase is not configured for this admin build.', 503);
+      throw ApiException(config.errorMessage, 503);
     }
     for (var attempt = 0; attempt < 2; attempt++) {
       final effectiveToken = await _freshToken(force: attempt == 1);
@@ -690,9 +795,16 @@ class ApiService {
     final message = body is Map
         ? (body['message'] ?? body['msg'] ?? body['error_description'] ?? body['error'])?.toString()
         : null;
+    String? field(String key) {
+      final value = body is Map ? body[key] : null;
+      return value?.toString();
+    }
     throw ApiException(
       message?.isNotEmpty == true ? message! : 'Supabase request failed (${response.statusCode}).',
       response.statusCode,
+      code: field('code'),
+      details: field('details'),
+      hint: field('hint'),
     );
   }
 
@@ -723,7 +835,7 @@ class ApiService {
 
   List<Map<String, dynamic>> _itemsFromPage(Map<String, dynamic> page) {
     final items = page['items'];
-    if (items is! List) throw ApiException('Supabase returned an invalid case page.', 502);
+    if (items is! List) throw ApiException('Supabase returned an invalid page.', 502);
     return items.whereType<Map>().map(_camelizeMap).toList(growable: false);
   }
 
@@ -820,25 +932,26 @@ class ApiService {
       );
 
   ApiException _domainError(String code) {
+    // The domain code is kept on `code`, so api_errors.dart can map it.
     switch (code) {
       case 'SLOT_TAKEN':
       case 'BOOKING_OVERLAP':
-        return ApiException('That appointment time is no longer available.', 409);
+        return ApiException('That appointment time is no longer available.', 409, code: code);
       case 'NO_AVAILABILITY':
       case 'TIME_NOT_AVAILABLE':
-        return ApiException('The lawyer is not available at the selected time.', 409);
+        return ApiException('The lawyer is not available at the selected time.', 409, code: code);
       case 'BOOKING_STATUS_IS_TERMINAL':
       case 'TERMINAL_BOOKING_CANNOT_BE_RESCHEDULED':
-        return ApiException('This booking can no longer be changed.', 409);
+        return ApiException('This booking can no longer be changed.', 409, code: code);
       case 'LAWYER_ACCOUNT_ALREADY_LINKED':
-        return ApiException('That lawyer account is already linked to another profile.', 409);
+        return ApiException('That lawyer account is already linked to another profile.', 409, code: code);
       case 'CATEGORY_REQUIRED':
       case 'CATEGORY_NOT_FOUND':
       case 'LAWYER_ACCOUNT_REQUIRED':
       case 'INVALID_LAWYER_PROFILE':
-        return ApiException('Check the lawyer name, category, account, and hourly rate.', 400);
+        return ApiException('Check the lawyer name, category, account, and hourly rate.', 400, code: code);
       default:
-        return ApiException('Supabase could not complete the request ($code).', 400);
+        return ApiException('Supabase could not complete the request ($code).', 400, code: code);
     }
   }
 
@@ -847,10 +960,6 @@ class ApiService {
         'data': data,
       };
 
-  dynamic _listEnvelope(List<Map<String, dynamic>> data) => <String, dynamic>{
-        'success': true,
-        'data': data,
-      };
 
   void dispose() {
     if (_ownsClient) _client.close();
@@ -862,7 +971,15 @@ class ApiException implements Exception {
   final String message;
   final int statusCode;
 
-  ApiException(this.message, this.statusCode);
+  /// PostgREST / PostgreSQL error code (for example `PGRST202`, `PGRST205`,
+  /// `23502`), retained so failed requests can be diagnosed precisely.
+  final String? code;
+
+  /// PostgREST `details` and `hint` fields, when the server supplied them.
+  final String? details;
+  final String? hint;
+
+  ApiException(this.message, this.statusCode, {this.code, this.details, this.hint});
 
   bool get isUnauthorized => statusCode == 401;
   bool get isForbidden => statusCode == 403;

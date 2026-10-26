@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/app_config.dart';
+import '../config/supabase_config.dart';
 import 'api_service.dart';
 
 /// Holds the signed-in internal-panel user's server-verified session.
@@ -106,19 +107,43 @@ class SupabaseAuthException implements Exception {
 /// The app uses the public anon/publishable key and a caller JWT for profile
 /// reads. The service-role key is never accepted or embedded in this client.
 class AuthService {
-  AuthService({
+  /// Builds the auth service around ONE validated [SupabaseConfig].
+  ///
+  /// `main()` passes the startup-validated [config]; the same instance is
+  /// handed to the [ApiService] created here so sign-in, session restoration
+  /// and data requests always use identical project credentials. The
+  /// [supabaseUrl]/[supabaseAnonKey] overrides remain for tests.
+  factory AuthService({
+    SupabaseConfig? config,
     ApiService? api,
     http.Client? supabaseHttpClient,
     String? supabaseUrl,
     String? supabaseAnonKey,
     String? authRedirectUrl,
     AdminSessionStore? sessionStore,
-  })  : _api = api ?? ApiService(),
-        _client = supabaseHttpClient ?? http.Client(),
+  }) {
+    final resolved = SupabaseConfig.select(
+      config: config,
+      url: supabaseUrl,
+      anonKey: supabaseAnonKey,
+    );
+    return AuthService._(
+      resolved,
+      api ?? ApiService(config: resolved),
+      supabaseHttpClient: supabaseHttpClient,
+      authRedirectUrl: authRedirectUrl,
+      sessionStore: sessionStore,
+    );
+  }
+
+  AuthService._(
+    this._config,
+    this._api, {
+    http.Client? supabaseHttpClient,
+    String? authRedirectUrl,
+    AdminSessionStore? sessionStore,
+  })  : _client = supabaseHttpClient ?? http.Client(),
         _ownsClient = supabaseHttpClient == null,
-        _supabaseUrl = (supabaseUrl ?? AppConfig.supabaseUrl).trim(),
-        _supabaseAnonKey =
-            (supabaseAnonKey ?? AppConfig.supabaseAnonKey).trim(),
         _authRedirectUrl =
             (authRedirectUrl ?? AppConfig.authRedirectUrl).trim(),
         _sessionStore = sessionStore ?? SecureAdminSessionStore() {
@@ -132,8 +157,7 @@ class AuthService {
   final ApiService _api;
   final http.Client _client;
   final bool _ownsClient;
-  final String _supabaseUrl;
-  final String _supabaseAnonKey;
+  final SupabaseConfig _config;
   final String _authRedirectUrl;
   final AdminSessionStore _sessionStore;
   final StreamController<AdminAuthUser?> _authController =
@@ -150,7 +174,10 @@ class AuthService {
 
   Stream<AdminAuthUser?> get authStateChanges => _authController.stream;
 
-  bool get isConfigured => _supabaseUrl.isNotEmpty && _supabaseAnonKey.isNotEmpty;
+  String get _supabaseUrl => _config.url;
+  String get _supabaseAnonKey => _config.anonKey;
+
+  bool get isConfigured => _config.isValid;
 
   /// Returns a valid Supabase bearer token, refreshing before expiry.
   Future<String?> freshToken({bool forceRefresh = false}) async {
@@ -470,7 +497,7 @@ class AuthService {
   void _ensureConfigured() {
     if (!isConfigured) {
       throw SupabaseAuthException(
-        'Supabase authentication is not configured. Provide the project URL and public anon/publishable key.',
+        _config.errorMessage,
         code: 'auth-not-configured',
       );
     }
