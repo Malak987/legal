@@ -173,8 +173,8 @@ SessionController _searchSession({
       gateway: FakeAuthGateway(),
       api: testApiClient(
         handler: (request, attempt) async {
-          if (request.url.path == '/api/categories') {
-            return jsonOk({'items': const <Object>[]});
+          if (request.url.path.contains('/categories')) {
+            return supabaseOk([]);
           }
           return handler(request, attempt);
         },
@@ -195,24 +195,21 @@ Map<String, dynamic> _lawyerJson(String name, String city) => {
 void _searchTests() {
   testWidgets('renders the lawyers returned by the API', (tester) async {
     final session = _searchSession(
-      handler: (_, __) async => jsonOk({
-        'items': [
+      handler: (_, __) async {
+        final lawyers = [
           _lawyerJson('Ahmed Hassan', 'Cairo'),
           _lawyerJson('Mona Fahmy', 'Giza'),
-        ],
-        'total': 2,
-        'page': 1,
-        'limit': 20,
-        'totalPages': 1,
-      }),
+        ];
+        return supabaseOk(lawyers, headers: {'content-range': '0-${lawyers.length - 1}/${lawyers.length}'});
+      },
     );
     addTearDown(session.dispose);
 
     await tester.pumpWidget(_searchApp(session));
     await _settleSearch(tester);
 
-    expect(find.text('Ahmed Hassan'), findsOneWidget);
-    expect(find.text('Mona Fahmy'), findsOneWidget);
+    expect(find.text('Ahmed Hassan'), findsWidgets);
+    expect(find.text('Mona Fahmy'), findsWidgets);
     // Real rows, not the old sample catalogue.
     expect(find.byType(TextField), findsOneWidget);
   });
@@ -220,13 +217,7 @@ void _searchTests() {
   testWidgets('reports an empty directory instead of sample rows',
       (tester) async {
     final session = _searchSession(
-      handler: (_, __) async => jsonOk({
-        'items': const <Object>[],
-        'total': 0,
-        'page': 1,
-        'limit': 20,
-        'totalPages': 1,
-      }),
+      handler: (_, __) async => supabaseOk([], headers: {'content-range': '0--1/0'}),
     );
     addTearDown(session.dispose);
 

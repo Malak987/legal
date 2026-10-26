@@ -217,11 +217,27 @@ ApiClient testApiClient({
     final attempt = (counts[key] ?? 0) + 1;
     counts[key] = attempt;
     final response = await handler(request, attempt);
-    if (request.url.path.contains('/rest/v1/users') && response.statusCode >= 200 && response.statusCode < 300) {
+    if (response.statusCode >= 200 && response.statusCode < 300) {
       try {
         final decoded = jsonDecode(response.body);
         if (decoded is Map) {
-          return supabaseOk([decoded], status: response.statusCode, headers: response.headers);
+          if (decoded.containsKey('items') && decoded['items'] is List) {
+            final items = decoded['items'] as List;
+            final total = (decoded['total'] as num?)?.toInt() ?? items.length;
+            final start = 0;
+            final end = (items.length - 1).clamp(0, total > 0 ? total - 1 : 0);
+            return http.Response(
+              jsonEncode(items),
+              response.statusCode,
+              headers: {
+                'content-type': 'application/json',
+                'content-range': '$start-$end/$total',
+                ...response.headers,
+              },
+            );
+          } else if (!decoded.containsKey('success') && !decoded.containsKey('message') && request.method == 'GET' && request.url.path.contains('/rest/v1/')) {
+            return supabaseOk([decoded], status: response.statusCode, headers: response.headers);
+          }
         }
       } catch (_) {}
     }

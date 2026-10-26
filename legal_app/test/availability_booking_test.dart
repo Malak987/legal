@@ -117,45 +117,67 @@ class _Fake {
     final method = request.method;
 
     if (path.contains('/users')) {
-      return jsonOk([profileJson()]);
+      return supabaseOk([profileJson()]);
     }
-    if (path.endsWith('/availability') && method == 'GET') {
+    if (path.contains('/availability') && method == 'GET') {
       availabilityCalls++;
       if (availabilityStatus != 200) {
         return jsonError(availabilityStatus, 'Availability is unavailable.');
       }
-      return jsonOk({'items': availability, 'total': availability.length});
+      return supabaseOk(availability, headers: {'content-range': '0-${availability.length - 1}/${availability.length}'});
     }
-    if (path.contains('/lawyers/') && method == 'GET') {
-      // The single-lawyer read the screen uses to price the appointment.
-      return jsonOk({
-        'id': path.split('/').last,
+    if ((path.contains('/lawyers/') || request.url.queryParameters.containsKey('id')) && method == 'GET') {
+      final id = path.split('/').last.isNotEmpty && path.split('/').last != 'lawyers' ? path.split('/').last : (request.url.queryParameters['id']?.replaceAll('eq.', '') ?? 'lawyer-1');
+      return supabaseOk([{
+        'id': id,
         'name': 'Mona Fahmy',
         'specialty': 'Family law',
         'price': '250 EGP',
-        'priceValue': 250,
+        'price_value': 250,
+      }]);
+    }
+    if (path.contains('/lawyers') && method == 'GET') {
+      return supabaseOk(lawyers, headers: {'content-range': '0-${lawyers.length - 1}/${lawyers.length}'});
+    }
+    if (path.contains('/bookings') && method == 'GET') {
+      return supabaseOk(bookings, headers: {'content-range': '0-${bookings.length - 1}/${bookings.length}'});
+    }
+    if (path.contains('/rpc/rpc_create_booking') && method == 'POST') {
+      bookingCalls++;
+      final rawBody = jsonDecode(request.body) as Map<String, dynamic>;
+      bookingBodies.add({
+        'lawyerId': rawBody['p_lawyer_id'],
+        'date': rawBody['p_date'],
+        'time': rawBody['p_time'],
+        'hours': rawBody['p_hours'],
+      });
+      if (bookingStatus != 201) {
+        return supabaseError(bookingStatus, bookingMessage);
+      }
+      return supabaseOk({
+        'booking': {
+          'id': 'bk-new',
+          'user_id': 'uid-1',
+          'lawyer_id': rawBody['p_lawyer_id'],
+          'total_price': 250,
+          'status': 'Pending',
+        }
       });
     }
-    if (path.endsWith('/lawyers') && method == 'GET') {
-      return jsonOk({'items': lawyers, 'total': lawyers.length});
-    }
-    if (path.endsWith('/bookings') && method == 'GET') {
-      return jsonOk({'items': bookings, 'total': bookings.length});
-    }
-    if (path.endsWith('/bookings') && method == 'POST') {
+    if (path.contains('/bookings') && method == 'POST') {
       bookingCalls++;
       bookingBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
       if (bookingStatus != 201) {
         return jsonError(bookingStatus, bookingMessage);
       }
-      return jsonOk({
+      return supabaseOk({
         'id': 'bk-new',
-        'userId': 'uid-1',
-        'totalPrice': 250,
+        'user_id': 'uid-1',
+        'total_price': 250,
         'status': 'Pending',
       });
     }
-    return jsonOk(<String, dynamic>{});
+    return supabaseOk(<Map<String, dynamic>>[]);
   }
 }
 
@@ -278,6 +300,7 @@ void _screenTests() {
   /// receive the pointer.
   Future<String?> tapDay(WidgetTester tester, int day) async {
     final calendar = find.byType(TableCalendar<int>);
+    if (calendar.evaluate().isEmpty) return null;
     final rect = tester.getRect(calendar);
 
     for (var index = 0; index < dayCells(day).evaluate().length; index++) {

@@ -1,6 +1,6 @@
 import 'package:legalserviceapp/constants/colors.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart'; // Import Google Fonts
+// Platform fonts used for offline compatibility
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key}); // Added Key? key
@@ -31,7 +31,7 @@ class HistoryScreenState extends State<HistoryScreen>
       appBar: AppBar(
         title: Text(
           'History',
-          style: GoogleFonts.poppins( // Apply Google Font
+          style: TextStyle( // Apply Google Font
             color: Colors.black,
             fontSize: 24, // Slightly larger font size
             fontWeight: FontWeight.w600,
@@ -59,7 +59,7 @@ class HistoryScreenState extends State<HistoryScreen>
               isScrollable: false, // Make tabs non-scrollable
               labelColor: Colors.white,
               unselectedLabelColor: Colors.black,
-              labelStyle: GoogleFonts.roboto(fontWeight: FontWeight.w500), //Tab label styling
+              labelStyle: TextStyle(fontWeight: FontWeight.w500), //Tab label styling
               indicator: BoxDecoration(
                 color: AppColors.buttonColor,  // A bit lighter teal
                 borderRadius: BorderRadius.circular(25), //More Rounded corners
@@ -128,7 +128,7 @@ class LastPlacesTab extends StatelessWidget {
                     children: [
                       Text(
                         places[index]['name']!,
-                        style: GoogleFonts.roboto(
+                        style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 17,
                           color: Colors.black87,
@@ -283,7 +283,7 @@ class LastCaregiversTab extends StatelessWidget {
                         children: [
                           Text(
                             caregiver['name']!,
-                            style: GoogleFonts.roboto(
+                            style: TextStyle(
                                 fontWeight: FontWeight.w600, fontSize: 18),
                           ),
                           const SizedBox(height: 5),

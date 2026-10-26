@@ -281,8 +281,8 @@ void main() {
     test('a profile update that returns a non-client role closes the session', () async {
       final session = build(
         responder: (method) => method == 'PATCH'
-            ? jsonOk(profileJson(role: 'lawyer', name: 'Sara'))
-            : jsonOk(profileJson(role: 'client')),
+            ? supabaseOk([profileJson(role: 'lawyer', name: 'Sara')])
+            : supabaseOk([profileJson(role: 'client')]),
       );
       await session.signIn(email: 'sara@example.com', password: 'secret123');
       await settle();

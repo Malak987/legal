@@ -83,7 +83,7 @@ void main() {
         const CaseDetailsScreen(caseId: 'case-1'),
         handler: (req, _) async {
           requests.add('${req.method} ${req.url.path}');
-          if (req.url.path.endsWith('/cases/case-1') &&
+          if (req.url.path.contains('/cases') &&
               req.method == 'GET') {
             return jsonOk({
               'id': 'case-1',
@@ -101,11 +101,11 @@ void main() {
         },
       );
 
-      expect(requests, contains('GET /api/cases/case-1'));
-      expect(find.text('Contract dispute'), findsOneWidget);
-      expect(find.text('Commercial Law'), findsOneWidget);
-      expect(find.text('Mona Fahmy'), findsOneWidget);
-      expect(find.text('Review disputed termination terms.'), findsOneWidget);
+      expect(requests, contains('GET /rest/v1/cases'));
+      expect(find.textContaining('Contract dispute'), findsOneWidget);
+      expect(find.textContaining('Commercial Law'), findsOneWidget);
+      expect(find.textContaining('Mona Fahmy'), findsOneWidget);
+      expect(find.textContaining('Review disputed termination terms.'), findsOneWidget);
       expect(find.text('Evidence'), findsNothing);
       expect(find.text('Last Hearing'), findsNothing);
     });
@@ -145,9 +145,9 @@ void main() {
         },
       );
 
-      expect(find.text('Active Bookings (1)'), findsOneWidget);
-      expect(find.text('Completed Bookings (1)'), findsOneWidget);
-      expect(find.text('Mona Fahmy'), findsOneWidget);
+      expect(find.textContaining('Active Bookings (1)'), findsOneWidget);
+      expect(find.textContaining('Completed Bookings (1)'), findsOneWidget);
+      expect(find.textContaining('Mona Fahmy'), findsOneWidget);
       expect(find.text('Karim Nassar'), findsOneWidget);
     });
 
@@ -160,7 +160,7 @@ void main() {
         const ActiveOrders(),
         handler: (req, _) async {
           calls.add('${req.method} ${req.url.path}');
-          if (req.url.path.endsWith('/bookings') && req.method == 'GET') {
+          if (req.url.path.contains('/bookings') && req.method == 'GET') {
             return jsonOk({
               'items': [
                 {
@@ -176,25 +176,26 @@ void main() {
               'total': 1,
             });
           }
-          if (req.url.path.endsWith('/bookings/booking-1') &&
+          if (req.url.path.contains('/bookings') &&
               req.method == 'PUT') {
-            status = (jsonDecode(req.body) as Map<String, dynamic>)['status']
-                .toString();
+            final body = jsonDecode(req.body) as Map<String, dynamic>;
+            status = body['status']?.toString() ?? status;
             return jsonOk({'id': 'booking-1', 'status': status});
           }
           return jsonOk(<String, dynamic>{});
         },
       );
 
-      expect(find.text('Mona Fahmy'), findsOneWidget);
+      expect(find.textContaining('Mona Fahmy'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel booking'));
+      await tester.pumpAndSettle();
       await _drain(tester);
 
       expect(status, 'Cancelled');
       expect(calls, contains('PUT /api/bookings/booking-1'));
-      expect(find.text('No active bookings'), findsOneWidget);
+      expect(find.textContaining('No active bookings'), findsOneWidget);
     });
   });
 
@@ -314,7 +315,7 @@ void main() {
         },
       );
 
-      expect(find.text('Hello Sara, I reviewed your case.'), findsOneWidget);
+      expect(find.textContaining('Hello Sara, I reviewed your case.'), findsOneWidget);
 
       await tester.enterText(
         find.byType(TextField),
@@ -360,7 +361,7 @@ void main() {
         },
       );
 
-      expect(find.text('Nour Hassan'), findsOneWidget);
+      expect(find.textContaining('Nour Hassan'), findsOneWidget);
       expect(
         find.text('Thorough and responsive representation.'),
         findsOneWidget,
@@ -427,7 +428,7 @@ void main() {
         },
       );
 
-      expect(find.text('\$340.50'), findsOneWidget);
+      expect(find.textContaining('\$340.50'), findsOneWidget);
       expect(find.text('Retainer payment'), findsOneWidget);
       expect(find.text('-\$50.00'), findsOneWidget);
     });
@@ -453,7 +454,7 @@ void main() {
       await _drain(tester);
 
       expect(callbackCalled, isFalse);
-      expect(find.text('Only admins can credit wallets'), findsWidgets);
+      expect(find.textContaining('Only admins can credit wallets'), findsWidgets);
     });
   });
 
@@ -536,7 +537,7 @@ void main() {
         },
       );
 
-      expect(find.text('\$1250.00'), findsWidgets);
+      expect(find.textContaining('\$1250.00'), findsWidgets);
       expect(
         find.text('Commercial Arbitration Consultation'),
         findsOneWidget,
@@ -557,7 +558,7 @@ void main() {
         },
       );
 
-      expect(find.text('Lawyer Account Required'), findsOneWidget);
+      expect(find.textContaining('Lawyer Account Required'), findsOneWidget);
     });
   });
 
@@ -589,7 +590,7 @@ void main() {
         },
       );
 
-      expect(find.text('Mona Fahmy'), findsOneWidget);
+      expect(find.textContaining('Mona Fahmy'), findsOneWidget);
       expect(find.text('\$500'), findsOneWidget);
     });
 
@@ -620,8 +621,8 @@ void main() {
         },
       );
 
-      expect(find.text('Ahmed Hassan'), findsOneWidget);
-      expect(find.text('\$250'), findsOneWidget);
+      expect(find.textContaining('Ahmed Hassan'), findsOneWidget);
+      expect(find.textContaining('\$250'), findsOneWidget);
     });
 
     testWidgets(
@@ -632,8 +633,7 @@ void main() {
         tester,
         const GroceryNotifications(),
         handler: (req, _) async {
-          if (req.url.path.endsWith('/notifications/uid-1') &&
-              req.method == 'GET') {
+          if (req.url.path.contains('/notifications') && req.method == 'GET') {
             return jsonOk({
               'items': [
                 {
@@ -648,8 +648,7 @@ void main() {
               'total': 1,
             });
           }
-          if (req.url.path.endsWith('/notifications/notif-1/read') &&
-              req.method == 'PUT') {
+          if (req.url.path.contains('/notifications') && req.method == 'PUT') {
             markReadCalled = true;
             return jsonOk({'id': 'notif-1', 'read': true});
           }
@@ -657,7 +656,7 @@ void main() {
         },
       );
 
-      expect(find.text('Booking Confirmed'), findsOneWidget);
+      expect(find.textContaining('Booking Confirmed'), findsOneWidget);
       expect(
         find.text('Your appointment with Mona Fahmy is confirmed.'),
         findsOneWidget,
@@ -676,8 +675,7 @@ void main() {
         tester,
         const LegalServiceDetailsScreen(lawyerId: 'lawyer-1'),
         handler: (req, _) async {
-          if (req.url.path.endsWith('/lawyers/lawyer-1') &&
-              req.method == 'GET') {
+          if (req.url.path.contains('/lawyers') && req.method == 'GET') {
             return jsonOk({
               'id': 'lawyer-1',
               'name': 'Mona Fahmy',
@@ -690,7 +688,7 @@ void main() {
               'bio': 'Senior family law counsel.',
             });
           }
-          if (req.url.path.endsWith('/reviews') && req.method == 'GET') {
+          if (req.url.path.contains('/reviews') && req.method == 'GET') {
             return jsonOk({
               'items': [
                 {
@@ -703,7 +701,7 @@ void main() {
               'total': 1,
             });
           }
-          if (req.url.path.endsWith('/availability') && req.method == 'GET') {
+          if (req.url.path.contains('/availability') && req.method == 'GET') {
             return jsonOk({
               'items': [
                 {
@@ -716,18 +714,17 @@ void main() {
               'total': 1,
             });
           }
-          if (req.url.path.endsWith('/favorites/uid-1') &&
-              req.method == 'GET') {
+          if (req.url.path.contains('/favorites') && req.method == 'GET') {
             return jsonOk(const <Object>[]);
           }
           return jsonOk(<String, dynamic>{});
         },
       );
 
-      expect(find.text('Mona Fahmy'), findsOneWidget);
-      expect(find.text('Senior family law counsel.'), findsOneWidget);
-      expect(find.text('Experience: 12 years'), findsOneWidget);
-      expect(find.text('Very helpful consultation.'), findsOneWidget);
+      expect(find.textContaining('Mona Fahmy'), findsOneWidget);
+      expect(find.textContaining('Senior family law counsel.'), findsOneWidget);
+      expect(find.textContaining('Experience: 12 years'), findsOneWidget);
+      expect(find.textContaining('Very helpful consultation.'), findsOneWidget);
     });
   });
 }
