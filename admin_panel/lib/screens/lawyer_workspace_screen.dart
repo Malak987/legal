@@ -409,7 +409,7 @@ class _LawyerBookingsScreenState extends State<LawyerBookingsScreen> {
 }
 
 /// The lawyer's own availability schedule, loaded via the authenticated
-/// `/api/availability/mine` endpoint. No schedule editing is exposed here.
+/// `rpc_lawyer_my_availability`. No schedule editing is exposed here.
 class LawyerAvailabilityScreen extends StatefulWidget {
   const LawyerAvailabilityScreen({super.key});
 

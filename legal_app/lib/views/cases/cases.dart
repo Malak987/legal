@@ -12,11 +12,11 @@ const Color searchBgGrey = Color(0xFFF0F0F0); // Light grey for search backgroun
 const Color hintGrey = Colors.grey;
 const Color cardTextWhite = Colors.white;
 
-/// The signed-in user's cases, read from `GET /api/cases`.
+/// The signed-in user's cases, read from the Supabase cases table under RLS.
 ///
-/// The backend scopes the query to the caller's uid for non-admins, so the
-/// app never sends an owner id. Tapping a row opens the case detail endpoint
-/// by its stable ID; unbacked hearing/document/history content is not shown.
+/// PostgreSQL RLS scopes the query to the signed-in caller, so the app never
+/// sends an owner ID. Tapping a row opens the case detail view by its stable
+/// ID; unbacked hearing/document/history content is not shown.
 class MyCasesScreen extends StatefulWidget {
   const MyCasesScreen({super.key});
 
@@ -152,7 +152,7 @@ class _MyCasesScreenState extends State<MyCasesScreen> {
 
   static String _text(dynamic value) => value?.toString().trim() ?? '';
 
-  /// Formats `createdAt` (an ISO string, or a Firestore timestamp serialized
+  /// Formats `createdAt`, which can be an ISO string or a serialized timestamp
   /// as `{_seconds: n}`). Unknown shapes are shown as-is rather than hidden.
   static String _createdLabel(dynamic value) {
     if (value == null) return '';

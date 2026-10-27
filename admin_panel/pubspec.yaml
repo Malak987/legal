@@ -37,6 +37,7 @@ dependencies:
 
   # --- Supabase session security ---
   flutter_secure_storage: ^9.2.4
+  web: ^1.1.1
 
   # --- State management & networking ---
   provider: ^6.1.2

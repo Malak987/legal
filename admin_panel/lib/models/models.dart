@@ -488,7 +488,7 @@ class NotificationItem {
       };
 }
 
-/// Dashboard statistics returned by GET /api/dashboard/stats
+/// Dashboard statistics returned by the admin-checked Supabase RPC
 class DashboardStats {
   final int users;
   final int lawyers;

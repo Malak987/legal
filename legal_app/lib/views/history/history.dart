@@ -1,3 +1,6 @@
+/// Legacy disconnected sample screen with non-legal demo data. It is not routed
+/// from the active app navigation; do not surface it as user history until it
+/// reads the signed-in user's real cases/bookings from the repository.
 import 'package:legalserviceapp/constants/colors.dart';
 import 'package:flutter/material.dart';
 // Platform fonts used for offline compatibility

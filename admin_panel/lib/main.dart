@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -9,6 +10,7 @@ import 'providers/auth_provider.dart';
 import 'screens/config_error_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
+import 'screens/password_recovery_screen.dart';
 import 'services/auth_service.dart';
 
 Future<void> main() async {
@@ -25,6 +27,7 @@ Future<void> main() async {
 Widget bootstrapAdminApp({
   SupabaseConfig? config,
   AuthService Function(SupabaseConfig config)? createAuthService,
+  Uri? callbackUri,
 }) {
   final resolved = config ?? SupabaseConfig.environment;
   if (!resolved.isValid) {
@@ -37,7 +40,8 @@ Widget bootstrapAdminApp({
       : AuthService(config: resolved);
   // One Supabase-backed provider owns refresh-token restoration for the panel.
   final authProvider = AuthProvider(authService)..bindAuthState();
-  unawaited(authProvider.restore());
+  final initialCallbackUri = callbackUri ?? (kIsWeb ? Uri.base : null);
+  unawaited(authProvider.restore(callbackUri: initialCallbackUri));
   return AdminApp(authProvider: authProvider);
 }
 
@@ -51,7 +55,8 @@ class AdminApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => authProvider ?? (AuthProvider(AuthService())..bindAuthState()),
+      create: (_) =>
+          authProvider ?? (AuthProvider(AuthService())..bindAuthState()),
       child: MaterialApp(
         title: 'Legal Services Admin',
         debugShowCheckedModeBanner: false,
@@ -82,6 +87,9 @@ class AuthGate extends StatelessWidget {
         return const LoginScreen();
       case AuthStatus.authenticated:
         return const HomeShell();
+      case AuthStatus.recovery:
+      case AuthStatus.recoveryComplete:
+        return const PasswordRecoveryScreen();
     }
   }
 }

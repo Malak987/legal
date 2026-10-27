@@ -6,7 +6,14 @@ import 'package:provider/provider.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 
-enum AuthStatus { unknown, unauthenticated, authenticating, authenticated }
+enum AuthStatus {
+  unknown,
+  unauthenticated,
+  authenticating,
+  authenticated,
+  recovery,
+  recoveryComplete,
+}
 
 /// Exposes authentication state to the UI.
 class AuthProvider extends ChangeNotifier {
@@ -18,6 +25,8 @@ class AuthProvider extends ChangeNotifier {
   AdminSession? _session;
   String? _error;
   bool _loading = false;
+  bool _recoveryReady = false;
+  String? _recoveryError;
 
   /// Monotonic counter guarding every async state write.
   ///
@@ -37,6 +46,9 @@ class AuthProvider extends ChangeNotifier {
   String? get error => _error;
   bool get isLoading => _loading;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
+  bool get recoveryReady => _recoveryReady;
+  bool get recoveryComplete => _status == AuthStatus.recoveryComplete;
+  String? get recoveryError => _recoveryError;
 
   ApiService get api => _authService.api;
 
@@ -46,8 +58,7 @@ class AuthProvider extends ChangeNotifier {
   /// `_fetch`-style async methods, and anywhere else that is **not** the
   /// `build()` method. It does not register a rebuild dependency, so it is
   /// safe outside the widget tree (e.g. from a button callback).
-  static AuthProvider of(BuildContext context) =>
-      context.read<AuthProvider>();
+  static AuthProvider of(BuildContext context) => context.read<AuthProvider>();
 
   /// Listening accessor for the nearest [AuthProvider] in the tree.
   ///
@@ -88,8 +99,12 @@ class AuthProvider extends ChangeNotifier {
   ///
   /// Safe to call more than once: it returns immediately when a verified
   /// admin session is already held.
-  Future<void> restore() async {
-    if (_status == AuthStatus.authenticated && _session != null) return;
+  Future<void> restore({Uri? callbackUri}) async {
+    if (callbackUri == null &&
+        _status == AuthStatus.authenticated &&
+        _session != null) {
+      return;
+    }
 
     final generation = ++_generation;
 
@@ -98,6 +113,19 @@ class AuthProvider extends ChangeNotifier {
     // double-submit guard in signIn() reject a legitimate sign-in that
     // happens while restoration is still in flight.
     try {
+      final recovery = await _authService.restoreRecoveryCallback(callbackUri);
+      if (!_isCurrent(generation)) return;
+      if (recovery.handled) {
+        _session = null;
+        _status = AuthStatus.recovery;
+        _recoveryReady = recovery.status == RecoveryCallbackStatus.ready;
+        _recoveryError = recovery.message;
+        _error = null;
+        _loading = false;
+        notifyListeners();
+        return;
+      }
+
       final session = await _authService.currentUser();
       if (!_isCurrent(generation)) return; // superseded by signIn/signOut
 
@@ -106,6 +134,8 @@ class AuthProvider extends ChangeNotifier {
           ? AuthStatus.authenticated
           : AuthStatus.unauthenticated;
       _error = null;
+      _recoveryReady = false;
+      _recoveryError = null;
     } on ProfileReadException catch (e) {
       if (!_isCurrent(generation)) return;
 
@@ -172,6 +202,52 @@ class AuthProvider extends ChangeNotifier {
   Future<void> requestPasswordReset(String email) =>
       _authService.requestPasswordReset(email);
 
+  Future<void> updatePasswordFromRecovery(String password) async {
+    if (!_recoveryReady || _status != AuthStatus.recovery) {
+      throw SupabaseAuthException(
+        'Open a valid password-reset link before choosing a new password.',
+        code: 'recovery-link-invalid',
+      );
+    }
+    final generation = ++_generation;
+    _loading = true;
+    _recoveryError = null;
+    notifyListeners();
+    try {
+      await _authService.updatePasswordFromRecovery(password);
+      if (!_isCurrent(generation)) return;
+      _recoveryReady = false;
+      _status = AuthStatus.recoveryComplete;
+      _recoveryError = null;
+      _session = null;
+      _error = null;
+    } catch (error) {
+      if (!_isCurrent(generation)) return;
+      if (error is SupabaseAuthException &&
+          error.code == 'recovery-link-invalid') {
+        _recoveryReady = false;
+      }
+      _recoveryError = _humanize(error);
+    } finally {
+      if (_isCurrent(generation)) {
+        _loading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  void finishRecovery() {
+    ++_generation;
+    _authService.clearRecoveryState();
+    _recoveryReady = false;
+    _recoveryError = null;
+    _session = null;
+    _status = AuthStatus.unauthenticated;
+    _loading = false;
+    _error = null;
+    notifyListeners();
+  }
+
   Future<void> signOut() async {
     _generation++; // discard any in-flight restore/signIn
     try {
@@ -195,8 +271,12 @@ class AuthProvider extends ChangeNotifier {
     if (msg.contains('wrong-password') || msg.contains('invalid-credential')) {
       return 'Incorrect email or password.';
     }
-    if (msg.contains('user-not-found')) return 'No account found with this email.';
-    if (msg.contains('invalid-email')) return 'Please enter a valid email address.';
+    if (msg.contains('user-not-found')) {
+      return 'No account found with this email.';
+    }
+    if (msg.contains('invalid-email')) {
+      return 'Please enter a valid email address.';
+    }
     if (msg.contains('too-many-requests')) {
       return 'Too many attempts. Please try again later.';
     }

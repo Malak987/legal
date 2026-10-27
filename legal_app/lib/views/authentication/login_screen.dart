@@ -28,8 +28,8 @@ class _LoginScreenState extends State<LoginScreen>
   late Animation<Offset> _slideAnimation;
 
   // Authentication goes through the app-wide session controller, which signs
-  // in with Firebase and loads the Firestore profile before any protected
-  // screen is shown.
+  // in with Supabase Auth and loads the linked application profile before any
+  // protected screen is shown.
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
@@ -66,9 +66,9 @@ class _LoginScreenState extends State<LoginScreen>
 
   /// Signs in and routes to the home screen only once the app is ready.
   ///
-  /// "Ready" means Firebase accepted the credential **and** the Firestore
-  /// profile loaded (or was safely provisioned for a legacy account). A user
-  /// whose profile cannot be loaded is not sent into protected screens.
+  /// "Ready" means Supabase Auth accepted the credential and the linked
+  /// application profile loaded. A user whose profile cannot be loaded is not
+  /// sent into protected screens.
   Future<void> _handleLogin() async {
     final email = _emailController.text.trim();
     final password = _passwordController.text;

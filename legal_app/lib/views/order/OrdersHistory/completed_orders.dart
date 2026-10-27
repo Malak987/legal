@@ -11,7 +11,7 @@ import '../../../widgets/detailstext2.dart';
 import '../../availablitycalendar/avaialblity_calendar.dart';
 import '../../reviews/writereview.dart';
 
-/// Completed bookings backed by `GET /api/bookings?status=Completed`.
+/// Completed bookings derived from the signed-in user's Supabase bookings.
 class CompletedOrders extends StatefulWidget {
   const CompletedOrders({super.key});
 

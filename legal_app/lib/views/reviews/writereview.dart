@@ -9,7 +9,7 @@ import '../../widgets/custombtn.dart';
 import '../../widgets/detailstext1.dart';
 import '../../widgets/detailstext2.dart';
 
-/// Submits a review to `POST /api/reviews`.
+/// Submits a review through the authenticated Supabase review RPC.
 class WriteReviewScreen extends StatefulWidget {
   final String? initialLawyerId;
   final String? initialLawyerName;

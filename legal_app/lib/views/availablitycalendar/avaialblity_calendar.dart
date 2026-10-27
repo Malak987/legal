@@ -20,13 +20,13 @@ import '../../widgets/detailstext1.dart';
 ///
 /// WHAT IT IS NOW
 /// --------------
-/// * Availability comes from `GET /api/availability?lawyerId=` — the lawyer's
+/// * Availability comes from the public Supabase `availability` query — the lawyer's
 ///   real published schedule, in whatever time notation was stored.
 /// * The calendar starts today and runs twelve months forward, so it no longer
 ///   expires.
 /// * Days without availability cannot be selected; slots the signed-in user has
 ///   already booked are shown as taken.
-/// * "Confirm Booking" calls `POST /api/bookings` through `AppRepository`, which
+/// * "Confirm Booking" calls the authenticated `rpc_create_booking` workflow through `AppRepository`, which
 ///   is the only path that may create a booking: the server re-checks the slot,
 ///   derives the price from the lawyer's rate and reserves the slot atomically.
 ///

@@ -8,7 +8,7 @@ import 'active_orders.dart';
 import 'cancelled_orders.dart';
 import 'completed_orders.dart';
 
-/// Booking overview backed by the signed-in user's `/api/bookings` list.
+/// Booking overview backed by the signed-in user's Supabase booking query.
 class OrdersHistory extends StatefulWidget {
   const OrdersHistory({super.key});
 

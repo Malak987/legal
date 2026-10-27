@@ -4,12 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:legalserviceapp/app_bootstrap.dart';
 import 'package:legalserviceapp/config/supabase_client_config.dart';
-import 'package:legalserviceapp/main.dart';
 import 'package:legalserviceapp/services/api_client.dart';
 import 'package:legalserviceapp/services/auth_service.dart';
 import 'package:legalserviceapp/state/session_controller.dart';
-import 'package:legalserviceapp/views/splash/splashscreen.dart';
 
 import 'support/fakes.dart';
 
@@ -74,7 +73,12 @@ void main() {
       'invalid config: no session is created, actionable screen shown',
       (tester) async {
         var created = 0;
+        var built = 0;
         final app = bootstrapApp(
+          buildApp: (_) {
+            built++;
+            return const SizedBox();
+          },
           config: SupabaseClientConfig.resolve(url: _url, anonKey: ''),
           createSession: (_) {
             created++;
@@ -91,6 +95,7 @@ void main() {
         await tester.pumpWidget(app);
 
         expect(created, 0);
+        expect(built, 0);
         expect(find.byKey(const Key('supabase-config-error')), findsOneWidget);
         expect(
           find.textContaining('SUPABASE_ANON_KEY is empty'),
@@ -100,7 +105,6 @@ void main() {
           find.textContaining('--dart-define-from-file=supabase.local.json'),
           findsOneWidget,
         );
-        expect(find.byType(SplashScreen), findsNothing);
       },
     );
 
@@ -111,6 +115,7 @@ void main() {
       final events = <String>[];
       SupabaseClientConfig? received;
       final app = bootstrapApp(
+        buildApp: (_) => const SizedBox(key: Key('bootstrap-test-app')),
         config: config,
         createSession: (c) {
           events.add('create');
@@ -133,7 +138,7 @@ void main() {
       expect(identical(received, config), isTrue);
 
       await tester.pumpWidget(app);
-      expect(find.byType(SplashScreen), findsOneWidget);
+      expect(find.byKey(const Key('bootstrap-test-app')), findsOneWidget);
       expect(find.byKey(const Key('supabase-config-error')), findsNothing);
       expect(find.textContaining('not configured'), findsNothing);
       // Let the splash animation/timers finish so the test ends cleanly.

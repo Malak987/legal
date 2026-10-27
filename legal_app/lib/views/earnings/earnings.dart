@@ -8,7 +8,7 @@ import '../../widgets/detailstext1.dart';
 import '../../widgets/detailstext2.dart';
 import 'earningdetails.dart';
 
-/// Lawyer and administrator earnings summary backed by `GET /api/earnings/:userId`.
+/// Lawyer and administrator earnings summary backed by the Supabase earnings query.
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
 

@@ -17,6 +17,86 @@ import 'package:legal_admin/services/auth_service.dart';
 import 'fakes.dart';
 
 void main() {
+  group('AuthProvider recovery flow', () {
+    test(
+      'a validated recovery callback bypasses normal session restoration',
+      () async {
+        final service = FakeAuthService(api: FakeApiService())
+          ..recoveryResult = const RecoveryCallbackResult.ready();
+        final provider = AuthProvider(service);
+
+        await provider.restore(callbackUri: Uri.parse('test://unit/callback'));
+
+        expect(provider.status, AuthStatus.recovery);
+        expect(provider.recoveryReady, isTrue);
+        expect(service.currentUserCalls, 0);
+        expect(service.recoveryCallbackCalls, 1);
+      },
+    );
+
+    test(
+      'an invalid or expired callback shows the recovery error state',
+      () async {
+        final service = FakeAuthService(api: FakeApiService())
+          ..recoveryResult = const RecoveryCallbackResult(
+            RecoveryCallbackStatus.invalid,
+            message: 'This password-reset link is invalid or expired. Request a new link.',
+          );
+        final provider = AuthProvider(service);
+
+        await provider.restore(callbackUri: Uri.parse('test://unit/callback'));
+
+        expect(provider.status, AuthStatus.recovery);
+        expect(provider.recoveryReady, isFalse);
+        expect(provider.recoveryError, contains('invalid or expired'));
+        expect(service.currentUserCalls, 0);
+      },
+    );
+
+    test(
+      'successful password update enters a sign-in confirmation state',
+      () async {
+        final service = FakeAuthService(api: FakeApiService())
+          ..recoveryResult = const RecoveryCallbackResult.ready();
+        final provider = AuthProvider(service);
+        await provider.restore(callbackUri: Uri.parse('test://unit/callback'));
+
+        await provider.updatePasswordFromRecovery('new-password-123');
+
+        expect(provider.status, AuthStatus.recoveryComplete);
+        expect(provider.recoveryComplete, isTrue);
+        expect(provider.recoveryReady, isFalse);
+        expect(service.lastRecoveryPassword, 'new-password-123');
+        provider.finishRecovery();
+        expect(provider.status, AuthStatus.unauthenticated);
+        expect(service.clearRecoveryCalls, 1);
+      },
+    );
+
+    test(
+      'a temporary update failure keeps the in-memory recovery flow retryable',
+      () async {
+        final service = FakeAuthService(api: FakeApiService())
+          ..recoveryResult = const RecoveryCallbackResult.ready()
+          ..recoveryUpdateError = SupabaseAuthException(
+            'Could not update the password. Try again.',
+            code: 'recovery-update-failed',
+          );
+        final provider = AuthProvider(service);
+        await provider.restore(callbackUri: Uri.parse('test://unit/callback'));
+
+        await provider.updatePasswordFromRecovery('new-password-123');
+
+        expect(provider.status, AuthStatus.recovery);
+        expect(provider.recoveryReady, isTrue);
+        expect(
+          provider.recoveryError,
+          contains('Could not update the password'),
+        );
+      },
+    );
+  });
+
   group('AuthProvider.signIn', () {
     test('successful admin sign-in authenticates and clears loading', () async {
       final api = FakeApiService();
@@ -34,8 +114,7 @@ void main() {
       expect(service.lastEmail, 'admin@legalapp.com');
     });
 
-    test('password recovery delegates to Supabase without disclosing account existence',
-        () async {
+    test('password recovery delegates to Supabase without disclosing account existence', () async {
       final service = FakeAuthService(api: FakeApiService());
       final provider = AuthProvider(service);
 
@@ -45,24 +124,26 @@ void main() {
       expect(service.lastResetEmail, 'admin@example.com');
     });
 
-    test('invalid credentials surface a readable error and leave loading',
-        () async {
-      final api = FakeApiService();
-      final service = FakeAuthService(
-        api: api,
-        signInError: Exception('invalid-credential'),
-      );
-      final provider = AuthProvider(service);
+    test(
+      'invalid credentials surface a readable error and leave loading',
+      () async {
+        final api = FakeApiService();
+        final service = FakeAuthService(
+          api: api,
+          signInError: Exception('invalid-credential'),
+        );
+        final provider = AuthProvider(service);
 
-      final ok = await provider.signIn('admin@legalapp.com', 'wrong');
+        final ok = await provider.signIn('admin@legalapp.com', 'wrong');
 
-      expect(ok, isFalse);
-      expect(provider.status, AuthStatus.unauthenticated);
-      expect(provider.session, isNull);
-      expect(provider.error, 'Incorrect email or password.');
-      // Must not remain stuck in a loading state after a failure.
-      expect(provider.isLoading, isFalse);
-    });
+        expect(ok, isFalse);
+        expect(provider.status, AuthStatus.unauthenticated);
+        expect(provider.session, isNull);
+        expect(provider.error, 'Incorrect email or password.');
+        // Must not remain stuck in a loading state after a failure.
+        expect(provider.isLoading, isFalse);
+      },
+    );
 
     test('a rejected non-admin account never becomes authenticated', () async {
       final api = FakeApiService();
@@ -101,38 +182,40 @@ void main() {
   // ------------------------------------------------------------------
 
   group('AuthProvider state guards', () {
-    test('a late restore() cannot overwrite a newer successful signIn()',
-        () async {
-      // The exact race behind the redirect loop: restore() starts a slow
-      // Supabase profile read, the user signs in, then the stale restore lands and
-      // must NOT reset the status back to unauthenticated.
-      final gate = Completer<AdminSession?>();
-      final service = FakeAuthService(
-        api: FakeApiService(),
-        restoredSession: null,
-        currentUserGate: gate,
-        session: adminSession(),
-      );
-      final provider = AuthProvider(service);
+    test(
+      'a late restore() cannot overwrite a newer successful signIn()',
+      () async {
+        // The exact race behind the redirect loop: restore() starts a slow
+        // Supabase profile read, the user signs in, then the stale restore lands and
+        // must NOT reset the status back to unauthenticated.
+        final gate = Completer<AdminSession?>();
+        final service = FakeAuthService(
+          api: FakeApiService(),
+          restoredSession: null,
+          currentUserGate: gate,
+          session: adminSession(),
+        );
+        final provider = AuthProvider(service);
 
-      final restoreFuture = provider.restore();
-      await Future<void>.delayed(Duration.zero);
+        final restoreFuture = provider.restore();
+        await Future<void>.delayed(Duration.zero);
 
-      final ok = await provider.signIn('admin@legalapp.com', 'pw');
-      expect(ok, isTrue, reason: 'signIn must not be blocked by restore()');
-      expect(provider.status, AuthStatus.authenticated);
+        final ok = await provider.signIn('admin@legalapp.com', 'pw');
+        expect(ok, isTrue, reason: 'signIn must not be blocked by restore()');
+        expect(provider.status, AuthStatus.authenticated);
 
-      gate.complete(null); // the stale restore finally resolves
-      await restoreFuture;
-      await Future<void>.delayed(Duration.zero);
+        gate.complete(null); // the stale restore finally resolves
+        await restoreFuture;
+        await Future<void>.delayed(Duration.zero);
 
-      expect(
-        provider.status,
-        AuthStatus.authenticated,
-        reason: 'a stale restore must never clobber a newer sign-in',
-      );
-      expect(provider.session?.role, 'admin');
-    });
+        expect(
+          provider.status,
+          AuthStatus.authenticated,
+          reason: 'a stale restore must never clobber a newer sign-in',
+        );
+        expect(provider.session?.role, 'admin');
+      },
+    );
 
     test('a transient profile read failure never signs the user out', () async {
       final service = FakeAuthService(
@@ -296,7 +379,10 @@ void main() {
         contains('No application profile is linked to this Auth account'),
       );
       expect(provider.error, contains('admin-uid'));
-      expect(provider.error, contains('Ask an administrator to provision the account'));
+      expect(
+        provider.error,
+        contains('Ask an administrator to provision the account'),
+      );
     });
 
     test('a restored non-admin is rejected', () async {
@@ -439,7 +525,9 @@ void main() {
       };
       final client = MockClient((request) async {
         if (request.url.path.endsWith('/auth/v1/token')) {
-          final email = (jsonDecode(request.body) as Map<String, dynamic>)['email'] as String;
+          final email =
+              (jsonDecode(request.body) as Map<String, dynamic>)['email']
+                  as String;
           final isOwner = email.startsWith('owner@');
           final id = isOwner ? ownerAuthId : lawyerAuthId;
           return http.Response(
@@ -455,7 +543,10 @@ void main() {
           final filter = request.url.queryParameters['auth_user_id'];
           expect(filter, startsWith('eq.'));
           final profile = profiles[filter!.substring(3)];
-          return http.Response(jsonEncode(<Map<String, dynamic>>[profile!]), 200);
+          return http.Response(
+            jsonEncode(<Map<String, dynamic>>[profile!]),
+            200,
+          );
         }
         return http.Response('{}', 404);
       });
@@ -484,14 +575,19 @@ void main() {
             jsonEncode(<String, dynamic>{
               'access_token': 'native-admin-jwt',
               'refresh_token': 'native-admin-refresh',
-              'user': <String, dynamic>{'id': authUid, 'email': 'native@legalapp.com'},
+              'user': <String, dynamic>{
+                'id': authUid,
+                'email': 'native@legalapp.com',
+              },
             }),
             200,
           );
         }
         if (request.url.path.endsWith('/rest/v1/users')) {
           final query = request.url.queryParameters;
-          userLookups.add(query.containsKey('auth_user_id') ? 'auth_user_id' : 'id');
+          userLookups.add(
+            query.containsKey('auth_user_id') ? 'auth_user_id' : 'id',
+          );
           if (query.containsKey('auth_user_id')) {
             return http.Response('[]', 200);
           }
@@ -523,56 +619,59 @@ void main() {
       expect(userLookups, ['auth_user_id', 'id']);
     });
 
-    test('rejects a non-admin account in Supabase mode and clears the token', () async {
-      final client = MockClient((request) async {
-        if (request.url.path.endsWith('/auth/v1/token')) {
-          return http.Response(
-            jsonEncode(<String, dynamic>{
-              'access_token': 'supa-client-jwt',
-              'refresh_token': 'supa-client-refresh',
-              'user': <String, dynamic>{
-                'id': '00000000-0000-4000-8000-000000000002',
-                'email': 'client@legalapp.com',
-              },
-            }),
-            200,
-          );
-        }
-        if (request.url.path.endsWith('/rest/v1/users')) {
-          return http.Response(
-            jsonEncode(<Map<String, dynamic>>[
-              <String, dynamic>{
-                'id': 'client-001',
-                'uid': 'client-001',
-                'name': 'James Powell',
-                'email': 'client@legalapp.com',
-                'role': 'client',
-              },
-            ]),
-            200,
-          );
-        }
-        if (request.url.path.endsWith('/auth/v1/logout')) {
-          return http.Response('', 204);
-        }
-        return http.Response('{}', 404);
-      });
+    test(
+      'rejects a non-admin account in Supabase mode and clears the token',
+      () async {
+        final client = MockClient((request) async {
+          if (request.url.path.endsWith('/auth/v1/token')) {
+            return http.Response(
+              jsonEncode(<String, dynamic>{
+                'access_token': 'supa-client-jwt',
+                'refresh_token': 'supa-client-refresh',
+                'user': <String, dynamic>{
+                  'id': '00000000-0000-4000-8000-000000000002',
+                  'email': 'client@legalapp.com',
+                },
+              }),
+              200,
+            );
+          }
+          if (request.url.path.endsWith('/rest/v1/users')) {
+            return http.Response(
+              jsonEncode(<Map<String, dynamic>>[
+                <String, dynamic>{
+                  'id': 'client-001',
+                  'uid': 'client-001',
+                  'name': 'James Powell',
+                  'email': 'client@legalapp.com',
+                  'role': 'client',
+                },
+              ]),
+              200,
+            );
+          }
+          if (request.url.path.endsWith('/auth/v1/logout')) {
+            return http.Response('', 204);
+          }
+          return http.Response('{}', 404);
+        });
 
-      final api = FakeApiService();
-      final authService = AuthService(
-        api: api,
-        supabaseHttpClient: client,
-        supabaseUrl: 'https://qqfzbecwhewswkyxgebu.supabase.co',
-        supabaseAnonKey: 'public-anon-key',
-        sessionStore: MemoryAdminSessionStore(),
-      );
+        final api = FakeApiService();
+        final authService = AuthService(
+          api: api,
+          supabaseHttpClient: client,
+          supabaseUrl: 'https://qqfzbecwhewswkyxgebu.supabase.co',
+          supabaseAnonKey: 'public-anon-key',
+          sessionStore: MemoryAdminSessionStore(),
+        );
 
-      await expectLater(
-        authService.signIn('client@legalapp.com', 'secret'),
-        throwsA(isA<NotAdminException>()),
-      );
-      expect(await authService.freshToken(), isNull);
-    });
+        await expectLater(
+          authService.signIn('client@legalapp.com', 'secret'),
+          throwsA(isA<NotAdminException>()),
+        );
+        expect(await authService.freshToken(), isNull);
+      },
+    );
   });
 }
 
@@ -604,6 +703,16 @@ class _GatedSignInService implements AuthService {
 
   @override
   Future<void> requestPasswordReset(String email) async {}
+
+  @override
+  Future<RecoveryCallbackResult> restoreRecoveryCallback(Uri? uri) async =>
+      const RecoveryCallbackResult.none();
+
+  @override
+  Future<void> updatePasswordFromRecovery(String password) async {}
+
+  @override
+  void clearRecoveryState() {}
 
   @override
   void dispose() {}

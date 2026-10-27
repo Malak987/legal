@@ -1,6 +1,6 @@
 # Legal Services — Mobile App (`legal_app`)
 
-Flutter client for the Legal Services platform. It uses **Supabase** directly: Supabase Auth (password sign-in, refresh-token sessions, password recovery), PostgREST/RPC under RLS, Storage, and the authenticated `ai-assistant` Edge Function. It does not call the legacy Express/Cloud Functions API. Firebase packages stay registered for plugin compatibility only and are not initialized.
+Flutter client for the Legal Services platform. It uses **Supabase** directly: Supabase Auth (password sign-in, refresh-token sessions, password recovery), PostgREST/RPC under RLS, and private Storage. AI/document-upload Edge Function source exists, but no Edge Functions are deployed to the connected project yet; those screens are not live. The client does not call the Express/Cloud Functions API and has no Firebase client SDK/configuration dependency.
 
 ## Supabase configuration (required)
 
@@ -16,53 +16,54 @@ The app needs two **public** values, compiled in as Dart defines:
 
 **Never** use a `service_role` or `sb_secret_…` key in this app. The app and the helper both refuse it.
 
-### Local defines file (recommended)
+### Local config and normal development workflow
+
+Use the ignored `legal_app/supabase.local.json`. Create it only when it is absent, so an existing local configuration is never overwritten:
 
 ```bash
 cd legal_app
-cp supabase.local.example.json supabase.local.json   # git-ignored
-# edit supabase.local.json and paste the PUBLIC key
+[ -e supabase.local.json ] || cp supabase.local.example.json supabase.local.json
 ```
 
-Flutter reads this file natively with `--dart-define-from-file=supabase.local.json`. The helper `tool/supabase_flutter.dart` reads the same file, or the `SUPABASE_*` environment variables, validates the values with the app's own rules, then runs the exact `flutter` command with the defines. It prints the key only in redacted form.
+Replace the example placeholder with the project's public anon/publishable key. The configured URL may use this project's documented default. Set `SUPABASE_AUTH_REDIRECT_URL` only when the mobile callback for this platform has been approved and allow-listed; do not copy the Admin callback blindly. Never put a service-role/secret key in this file; the helper rejects those field names without reading or printing their values because Flutter's `--dart-define-from-file` passes every field to the app.
 
-### Why "configured" values can still be missing
+The app's normal startup validates the compiled defines before creating Supabase clients. The validating helper additionally checks the local file before invoking Flutter, prints only a redacted key description, and removes `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY` from Flutter's process environment.
 
-- `String.fromEnvironment` sees **only** Dart defines given to the exact `flutter run`/`flutter build` command. Running `export SUPABASE_ANON_KEY=…` alone has no effect, unless you use the helper or pass `--dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"`.
-- Defines are compiled in. After you change them, stop the app and run it again. Hot reload and hot restart do not apply them.
-- IDE runs need the flag too. In VS Code, add `"toolArgs": ["--dart-define-from-file=supabase.local.json"]` to the launch configuration (`.vscode/` is git-ignored). In Android Studio, add it under *Run configuration → Additional run args*.
-- Native builds started outside `flutter` do not receive new defines. `./gradlew assemble…` and archiving in Xcode reuse whatever the last `flutter` command wrote, so always build through `flutter build …` (see below).
+**VS Code:** open the repository root, choose an Android device in the device selector, and press Run on **Legal App Android (local Supabase)**. The checked-in launch configuration passes `--dart-define-from-file=supabase.local.json`; its pre-launch task validates that exact file first. A second iOS profile is available on macOS/Xcode hosts.
 
-## Run and build, per platform
+**Android Studio/IntelliJ:** set the Flutter run configuration's working directory to `legal_app`, entry point to `lib/main.dart`, and Additional run args to `--dart-define-from-file=supabase.local.json`. Add a Before Launch External Tool running `dart run tool/supabase_flutter.dart validate --file-only` with working directory `legal_app`. Set `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_SECRET_KEY` to empty values in the Flutter Run configuration's environment so parent-process secrets cannot be inherited. The preflight must complete before Flutter Run starts.
 
-| Target | Run (debug) | Release build |
-|--------|-------------|---------------|
-| Android (device/emulator) | `flutter run -d <device> --dart-define-from-file=supabase.local.json` | `flutter build apk --release --dart-define-from-file=supabase.local.json` or `flutter build appbundle --release --dart-define-from-file=supabase.local.json` |
-| iOS (device/simulator, macOS host) | `flutter run -d <device> --dart-define-from-file=supabase.local.json` | `flutter build ipa --release --dart-define-from-file=supabase.local.json`. To archive in Xcode, first run `flutter build ios --release --config-only --dart-define-from-file=supabase.local.json` so `ios/Flutter/Generated.xcconfig` carries the defines. |
-| Web | `flutter run -d chrome --dart-define-from-file=supabase.local.json` | `flutter build web --release --dart-define-from-file=supabase.local.json`. Hosting environment variables are not read; the values must be in the build. |
-
-The same commands through the validating helper:
+For terminal development, use the validated wrapper (replace the device ID with one shown by `flutter devices`):
 
 ```bash
-dart run tool/supabase_flutter.dart run -d <device>
+cd legal_app
+dart run tool/supabase_flutter.dart run -d <android-device-id>
+```
+
+A bare `flutter run` does **not** read `supabase.local.json`. Use the validated wrapper or preflighted IDE profiles rather than bypassing validation with raw Flutter commands. Defines are fixed at compile time; stop and relaunch after changing them because hot restart does not update them.
+
+### Release builds
+
+Run the same validating wrapper from `legal_app`:
+
+```bash
+# Android release APK
 dart run tool/supabase_flutter.dart build apk --release
+
+# Android Play Store bundle
 dart run tool/supabase_flutter.dart build appbundle --release
+
+# iOS IPA (macOS + Xcode only)
 dart run tool/supabase_flutter.dart build ipa --release
-dart run tool/supabase_flutter.dart build web --release
 ```
 
-Or pass the values explicitly:
+The wrapper validates URL/key and project mismatch where detectable, injects the resolved values into that exact build, and fails before Flutter if the public key is missing, a placeholder, malformed, or secret/service-role. For an Xcode archive, first run `dart run tool/supabase_flutter.dart build ios --release --config-only`, then archive using the generated Flutter configuration. Never build release artifacts by invoking Gradle/Xcode directly without passing the validated Flutter defines.
 
-```bash
-flutter run \
-  --dart-define=SUPABASE_URL=https://qqfzbecwhewswkyxgebu.supabase.co \
-  --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
-```
+The same local file may be used by Android and iOS for `SUPABASE_URL` and `SUPABASE_ANON_KEY`; platform-specific redirect URLs remain separate operator-approved values. The project URL and public key are compile-time client configuration, not secrets.
 
-Notes:
+## Deliberately unavailable legacy screens
 
-- **Local Supabase stack (debug only):** use `http://10.0.2.2:54321` from the Android emulator, or `http://127.0.0.1:54321` on the iOS simulator/web, with the local stack's anon key. Release Android builds block cleartext HTTP.
-- **Desktop folders** (`linux/`, `macos/`, `windows/`) are Flutter template scaffolding and not supported targets. For example, the macOS sandbox entitlements do not grant outgoing network access.
+The active booking-history route is backed by the signed-in user's Supabase bookings. The separate `HistoryScreen` still contains unrelated sample places/caregivers and is not routed from active navigation. The old retail cart/checkout files are likewise disconnected from the app's primary routes. Both duplicate payment-screen implementations now show an explicit unavailable message, collect no card details, and cannot navigate to an order-success screen. No payment-provider/webhook reconciliation or paid booking creation is deployed; do not enable checkout until that server-verified flow exists.
 
 ## Checks
 

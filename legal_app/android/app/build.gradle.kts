@@ -1,14 +1,38 @@
 plugins {
     id("com.android.application")
-    // START: FlutterFire Configuration
-    id("com.google.gms.google-services")
-    // END: FlutterFire Configuration
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val legalAndroidApplicationId =
+    providers.gradleProperty("legalAndroidApplicationId").orNull?.trim()
+        ?.takeIf { it.isNotEmpty() } ?: "com.example.legal_app"
+val authCallbackScheme =
+    providers.gradleProperty("authCallbackScheme").orNull?.trim()
+        ?.takeIf { it.isNotEmpty() } ?: "unconfigured"
+val authCallbackHost =
+    providers.gradleProperty("authCallbackHost").orNull?.trim()
+        ?.takeIf { it.isNotEmpty() } ?: "unconfigured"
+val authCallbackPath =
+    providers.gradleProperty("authCallbackPath").orNull?.trim()
+        ?.takeIf { it.isNotEmpty() } ?: "/unconfigured"
+
+val isReleaseTask = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+if (isReleaseTask) {
+    check(legalAndroidApplicationId != "com.example.legal_app") {
+        "Set -PlegalAndroidApplicationId to the operator-approved Android application ID."
+    }
+    check(authCallbackScheme != "unconfigured" && authCallbackHost != "unconfigured" &&
+        authCallbackPath != "/unconfigured") {
+        "Set -PauthCallbackScheme, -PauthCallbackHost, and -PauthCallbackPath to the approved callback URI components."
+    }
+}
+
+
 android {
-    namespace = "com.example.legal_app"
+    namespace = legalAndroidApplicationId
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
@@ -18,8 +42,11 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.legal_app"
+        // Keep the placeholder out of release by requiring the approved ID above.
+        applicationId = legalAndroidApplicationId
+        manifestPlaceholders["authCallbackScheme"] = authCallbackScheme
+        manifestPlaceholders["authCallbackHost"] = authCallbackHost
+        manifestPlaceholders["authCallbackPath"] = authCallbackPath
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

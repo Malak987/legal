@@ -1,5 +1,5 @@
-/// An application profile stored in the Supabase `public.users` table (or the
-/// legacy Firebase-backed API during migration).
+/// An application profile stored in the Supabase `public.users` table and
+/// linked to its corresponding Supabase Auth identity.
 ///
 /// Auth owns credentials and its UUID; this profile owns contact details and
 /// the database-authoritative role. For migrated accounts, `auth_user_id`

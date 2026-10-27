@@ -1,4 +1,6 @@
-import admin from 'firebase-admin';
+import { cert, getApp, getApps, initializeApp } from 'firebase-admin/app';
+import { getAuth as getFirebaseAuth } from 'firebase-admin/auth';
+import { getFirestore as getFirebaseFirestore } from 'firebase-admin/firestore';
 import fs from 'node:fs';
 import env, { resolveFirebaseProjectId } from './env.js';
 import { isSupabaseConfigured, initializeSupabase } from './supabase.js';
@@ -31,7 +33,7 @@ export function canUseManagedCredentials(envVars = process.env) {
  * Firebase Emulator Suite, and local standalone development:
  *   1. Reuse existing initialized app instance if already initialized.
  *   2. In Cloud Functions / Cloud Run / Emulators / ADC environments, call
- *      `admin.initializeApp()` so Google Cloud managed runtime credentials are
+ *      `initializeApp()` so Google Cloud managed runtime credentials are
  *      used automatically without requiring any private-key JSON file.
  *   3. In standalone local development outside Cloud Functions, fall back to
  *      an untracked local `serviceAccount.json` if present.
@@ -50,10 +52,10 @@ export function initializeFirebase() {
     return { app, firestore, auth };
   }
 
-  if (admin.apps.length > 0) {
-    app = admin.app();
-    firestore = admin.firestore();
-    auth = admin.auth();
+  if (getApps().length > 0) {
+    app = getApp();
+    firestore = getFirebaseFirestore(app);
+    auth = getFirebaseAuth(app);
     return { app, firestore, auth };
   }
 
@@ -61,9 +63,9 @@ export function initializeFirebase() {
     resolveFirebaseProjectId() || env.firebaseProjectId || undefined;
 
   if (canUseManagedCredentials()) {
-    app = projectId ? admin.initializeApp({ projectId }) : admin.initializeApp();
-    firestore = admin.firestore();
-    auth = admin.auth();
+    app = projectId ? initializeApp({ projectId }) : initializeApp();
+    firestore = getFirebaseFirestore(app);
+    auth = getFirebaseAuth(app);
     console.log(
       `[Firebase] Initialized with managed runtime credentials (project: ${projectId || 'default'})`,
     );
@@ -87,13 +89,13 @@ export function initializeFirebase() {
 
   const resolvedProjectId = projectId || serviceAccount.project_id || undefined;
 
-  app = admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+  app = initializeApp({
+    credential: cert(serviceAccount),
     projectId: resolvedProjectId,
   });
 
-  firestore = admin.firestore();
-  auth = admin.auth();
+  firestore = getFirebaseFirestore(app);
+  auth = getFirebaseAuth(app);
 
   console.log(`[Firebase] Initialized (project: ${resolvedProjectId})`);
   return { app, firestore, auth };
@@ -116,6 +118,3 @@ export function getAuth() {
   if (!auth) initializeFirebase();
   return auth;
 }
-
-export { admin };
-export default admin;

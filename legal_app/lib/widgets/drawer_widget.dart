@@ -33,7 +33,7 @@ class DrawerWidget extends StatefulWidget {
 class _DrawerWidgetState extends State<DrawerWidget> {
   String selectedMenuItem = 'Homepage'; // Track the selected menu item, default to Homepage
 
-  /// Signs out of Firebase and returns to the login screen.
+  /// Signs out of Supabase Auth and returns to the login screen.
   ///
   /// The session is cleared by the controller even if the network call fails,
   /// so the UI can never stay "signed in" by accident. The stack is replaced

@@ -1,4 +1,4 @@
-import { admin } from '../config/firebase.js';
+import { FieldValue } from 'firebase-admin/firestore';
 
 /**
  * Generic Firestore helpers used by all routes.
@@ -8,7 +8,7 @@ import { admin } from '../config/firebase.js';
  * datasets you can swap these for native Firestore queries (where/orderBy/startAfter).
  */
 
-const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
+const serverTimestamp = () => FieldValue.serverTimestamp();
 
 /**
  * Normalises a Firestore Timestamp, `Date`, ISO string or epoch-millis value

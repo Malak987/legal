@@ -414,7 +414,7 @@ class ApiService {
   }) async {
     final filters = <String, String>{
       'select': _selectColumns(table),
-      if (order != null) 'order': order,
+      'order': ?order,
     };
     final status = _emptyToNull(query['status']);
     if (status != null && table == 'bookings') {

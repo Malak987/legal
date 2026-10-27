@@ -21,6 +21,7 @@ import {
   flutterEnv,
   loadSupabaseDefines,
   printableCommand,
+  rejectUnsafeFlutterConfigArgs,
   reportIssues,
   validateSupabaseDefines,
 } from './supabase_env.mjs';
@@ -29,6 +30,12 @@ const COMPILE_CHECK_FLAG = '--allow-unconfigured-compile-check';
 const cliArgs = process.argv.slice(2);
 const allowCompileCheck = cliArgs.includes(COMPILE_CHECK_FLAG);
 const extraArgs = cliArgs.filter((arg) => arg !== COMPILE_CHECK_FLAG);
+try {
+  rejectUnsafeFlutterConfigArgs(extraArgs);
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
 
 let config;
 try {

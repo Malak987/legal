@@ -8,7 +8,7 @@ import '../../widgets/detailstext1.dart';
 import '../../widgets/detailstext2.dart';
 import 'chatdetailsscreen.dart';
 
-/// Conversation list backed by `GET /api/chats`.
+/// Conversation list backed by the caller-authorized Supabase chat query.
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 

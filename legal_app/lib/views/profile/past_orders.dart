@@ -12,7 +12,7 @@ import '../availablitycalendar/avaialblity_calendar.dart';
 import '../reviews/writereview.dart';
 
 /// User booking history opened from Profile -> "My Orders", backed by
-/// `GET /api/bookings`.
+/// the caller-authorized Supabase booking query.
 class PastOrders extends StatefulWidget {
   const PastOrders({super.key});
 

@@ -7,6 +7,8 @@ import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../config/supabase_config.dart';
 import 'api_service.dart';
+import 'auth_callback_url.dart';
+import 'recovery_callback.dart';
 
 /// Holds the signed-in internal-panel user's server-verified session.
 class AdminSession {
@@ -41,7 +43,7 @@ abstract interface class AdminSessionStore {
 
 class SecureAdminSessionStore implements AdminSessionStore {
   SecureAdminSessionStore({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   static const String _key = 'legal_admin_supabase_refresh_token_v1';
   final FlutterSecureStorage _storage;
@@ -101,6 +103,21 @@ class SupabaseAuthException implements Exception {
   String toString() => message;
 }
 
+enum RecoveryCallbackStatus { none, ready, invalid, unavailable }
+
+class RecoveryCallbackResult {
+  const RecoveryCallbackResult(this.status, {this.message});
+
+  const RecoveryCallbackResult.none() : this(RecoveryCallbackStatus.none);
+
+  const RecoveryCallbackResult.ready() : this(RecoveryCallbackStatus.ready);
+
+  final RecoveryCallbackStatus status;
+  final String? message;
+
+  bool get handled => status != RecoveryCallbackStatus.none;
+}
+
 /// Supabase Auth-backed internal-panel login and session restoration for the
 /// server-provisioned `admin`, `owner`, and read-only `lawyer` roles.
 ///
@@ -121,6 +138,7 @@ class AuthService {
     String? supabaseAnonKey,
     String? authRedirectUrl,
     AdminSessionStore? sessionStore,
+    void Function()? clearCallbackUrl,
   }) {
     final resolved = SupabaseConfig.select(
       config: config,
@@ -133,6 +151,7 @@ class AuthService {
       supabaseHttpClient: supabaseHttpClient,
       authRedirectUrl: authRedirectUrl,
       sessionStore: sessionStore,
+      clearCallbackUrl: clearCallbackUrl,
     );
   }
 
@@ -142,11 +161,12 @@ class AuthService {
     http.Client? supabaseHttpClient,
     String? authRedirectUrl,
     AdminSessionStore? sessionStore,
-  })  : _client = supabaseHttpClient ?? http.Client(),
-        _ownsClient = supabaseHttpClient == null,
-        _authRedirectUrl =
-            (authRedirectUrl ?? AppConfig.authRedirectUrl).trim(),
-        _sessionStore = sessionStore ?? SecureAdminSessionStore() {
+    void Function()? clearCallbackUrl,
+  }) : _client = supabaseHttpClient ?? http.Client(),
+       _ownsClient = supabaseHttpClient == null,
+       _authRedirectUrl = (authRedirectUrl ?? AppConfig.authRedirectUrl).trim(),
+       _clearCallbackUrl = clearCallbackUrl ?? clearAuthCallbackFromAddressBar,
+       _sessionStore = sessionStore ?? SecureAdminSessionStore() {
     _api.tokenProvider = freshToken;
     _api.forceRefreshTokenProvider = () => freshToken(forceRefresh: true);
   }
@@ -160,6 +180,7 @@ class AuthService {
   final SupabaseConfig _config;
   final String _authRedirectUrl;
   final AdminSessionStore _sessionStore;
+  final void Function() _clearCallbackUrl;
   final StreamController<AdminAuthUser?> _authController =
       StreamController<AdminAuthUser?>.broadcast();
 
@@ -168,6 +189,8 @@ class AuthService {
   String? _refreshToken;
   DateTime? _accessTokenExpiresAt;
   Future<void>? _refreshInFlight;
+  String? _recoveryAccessToken;
+  DateTime? _recoveryExpiresAt;
   bool _disposed = false;
 
   ApiService get api => _api;
@@ -183,7 +206,8 @@ class AuthService {
   Future<String?> freshToken({bool forceRefresh = false}) async {
     if (!isConfigured) return _accessToken ?? _api.token;
     final expiry = _accessTokenExpiresAt;
-    final isFresh = _accessToken != null &&
+    final isFresh =
+        _accessToken != null &&
         (expiry == null || DateTime.now().add(_refreshSkew).isBefore(expiry));
     if (!forceRefresh && isFresh) return _accessToken;
 
@@ -224,6 +248,197 @@ class AuthService {
     } on NotAdminException {
       await _clearSession(notify: false);
       rethrow;
+    }
+  }
+
+  /// Consumes an initial Supabase Auth redirect before persisted-session
+  /// restoration. Recovery tokens stay in memory only and the browser URL is
+  /// scrubbed before any network request is made.
+  Future<RecoveryCallbackResult> restoreRecoveryCallback(Uri? uri) async {
+    final callback = RecoveryCallback.parse(uri);
+    if (!callback.isAuthCallback) return const RecoveryCallbackResult.none();
+
+    try {
+      _clearCallbackUrl();
+    } catch (_) {
+      // Never include the callback URI or tokens in diagnostics.
+    }
+    _recoveryAccessToken = null;
+    _recoveryExpiresAt = null;
+    _authUser = null;
+    _accessToken = null;
+    _refreshToken = null;
+    _accessTokenExpiresAt = null;
+    _api.token = null;
+    try {
+      await _sessionStore.clear();
+    } catch (_) {}
+
+    if (!callback.isRecovery ||
+        callback.hasError ||
+        !_matchesAuthRedirect(uri) ||
+        callback.accessToken == null ||
+        callback.accessToken!.isEmpty) {
+      return const RecoveryCallbackResult(
+        RecoveryCallbackStatus.invalid,
+        message: 'This password-reset link is invalid or expired. Request a new link.',
+      );
+    }
+
+    final expiresAt = _callbackExpiry(callback, callback.accessToken!);
+    if (expiresAt == null || !expiresAt.isAfter(DateTime.now())) {
+      return const RecoveryCallbackResult(
+        RecoveryCallbackStatus.invalid,
+        message: 'This password-reset link is invalid or expired. Request a new link.',
+      );
+    }
+
+    _recoveryAccessToken = callback.accessToken;
+    _recoveryExpiresAt = expiresAt;
+    try {
+      final response = await _request(
+        'GET',
+        _authUri('user'),
+        bearerToken: callback.accessToken,
+      );
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final user = _decodeJson(response.body);
+        if ((user['id'] ?? '').toString().trim().isNotEmpty) {
+          return const RecoveryCallbackResult.ready();
+        }
+      }
+      _clearRecoveryCredentials();
+      if (response.statusCode == 401 ||
+          response.statusCode == 403 ||
+          response.statusCode == 400) {
+        return const RecoveryCallbackResult(
+          RecoveryCallbackStatus.invalid,
+          message: 'This password-reset link is invalid or expired. Request a new link.',
+        );
+      }
+      return const RecoveryCallbackResult(
+        RecoveryCallbackStatus.unavailable,
+        message: 'Could not verify this reset link. Reopen the email link when your connection is available.',
+      );
+    } on SupabaseAuthException {
+      _clearRecoveryCredentials();
+      return const RecoveryCallbackResult(
+        RecoveryCallbackStatus.unavailable,
+        message: 'Could not verify this reset link. Reopen the email link when your connection is available.',
+      );
+    } catch (_) {
+      _clearRecoveryCredentials();
+      return const RecoveryCallbackResult(
+        RecoveryCallbackStatus.unavailable,
+        message: 'Could not verify this reset link. Reopen the email link when your connection is available.',
+      );
+    }
+  }
+
+  /// Updates the password using the short-lived recovery access token. That
+  /// token and the companion refresh token are never persisted by this client.
+  Future<void> updatePasswordFromRecovery(String password) async {
+    if (password.length < 8) {
+      throw SupabaseAuthException(
+        'Use at least 8 characters for the new password.',
+      );
+    }
+    final token = _recoveryAccessToken;
+    final expiry = _recoveryExpiresAt;
+    if (token == null || expiry == null || !expiry.isAfter(DateTime.now())) {
+      _clearRecoveryCredentials();
+      throw SupabaseAuthException(
+        'This password-reset link is invalid or expired. Request a new link.',
+        code: 'recovery-link-invalid',
+      );
+    }
+
+    final response = await _request(
+      'PUT',
+      _authUri('user'),
+      bearerToken: token,
+      body: <String, dynamic>{'password': password},
+    );
+    if (response.statusCode == 401 ||
+        response.statusCode == 403 ||
+        response.statusCode == 400) {
+      _clearRecoveryCredentials();
+      throw SupabaseAuthException(
+        'This password-reset link is invalid or expired. Request a new link.',
+        code: 'recovery-link-invalid',
+      );
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw SupabaseAuthException(
+        response.statusCode == 429 ? 'Too many attempts. Wait and try again.' : 'Could not update the password. Try again or request a new reset link.',
+        code: response.statusCode == 429
+            ? 'too-many-requests'
+            : 'recovery-update-failed',
+      );
+    }
+
+    _clearRecoveryCredentials();
+    _authUser = null;
+    _accessToken = null;
+    _refreshToken = null;
+    _accessTokenExpiresAt = null;
+    _api.token = null;
+    try {
+      await _sessionStore.clear();
+    } catch (_) {}
+  }
+
+  void clearRecoveryState() => _clearRecoveryCredentials();
+
+  void _clearRecoveryCredentials() {
+    _recoveryAccessToken = null;
+    _recoveryExpiresAt = null;
+  }
+
+  bool _matchesAuthRedirect(Uri? incoming) {
+    final expected = Uri.tryParse(_authRedirectUrl);
+    if (incoming == null ||
+        expected == null ||
+        _authRedirectUrl.isEmpty ||
+        expected.hasQuery ||
+        expected.hasFragment ||
+        expected.userInfo.isNotEmpty) {
+      return false;
+    }
+    String base(Uri value) {
+      final path = value.path.isEmpty ? '/' : value.path;
+      final port = value.hasPort ? ':${value.port}' : '';
+      return '${value.scheme.toLowerCase()}://${value.host.toLowerCase()}$port$path';
+    }
+
+    return base(incoming) == base(expected);
+  }
+
+  static DateTime? _callbackExpiry(RecoveryCallback callback, String token) {
+    final absolute = callback.expiresAt;
+    if (absolute != null) {
+      return DateTime.fromMillisecondsSinceEpoch(absolute * 1000, isUtc: true);
+    }
+    final seconds = callback.expiresIn;
+    if (seconds != null) {
+      return seconds > 0
+          ? DateTime.now().add(Duration(seconds: seconds))
+          : DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    }
+    final parts = token.split('.');
+    if (parts.length != 3) return null;
+    try {
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+      );
+      final exp = payload is Map
+          ? int.tryParse(payload['exp']?.toString() ?? '')
+          : null;
+      return exp == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+    } catch (_) {
+      return null;
     }
   }
 
@@ -294,7 +509,9 @@ class AuthService {
   Future<AdminSession> _loadAdminSession(AdminAuthUser user) async {
     final token = await freshToken();
     if (token == null || token.isEmpty) {
-      throw ProfileReadException('Your Supabase session expired. Please sign in again.');
+      throw ProfileReadException(
+        'Your Supabase session expired. Please sign in again.',
+      );
     }
     final profile = await _readSupabaseProfile(user.uid, token);
     final role = (profile['role'] ?? 'client').toString();
@@ -340,9 +557,13 @@ class AuthService {
 
       final dynamic decoded;
       try {
-        decoded = response.body.isEmpty ? const <dynamic>[] : jsonDecode(response.body);
+        decoded = response.body.isEmpty
+            ? const <dynamic>[]
+            : jsonDecode(response.body);
       } catch (_) {
-        throw ProfileReadException('Supabase returned an invalid profile response.');
+        throw ProfileReadException(
+          'Supabase returned an invalid profile response.',
+        );
       }
       if (decoded is List) {
         if (decoded.length > 1) {
@@ -355,7 +576,9 @@ class AuthService {
         }
         return null;
       }
-      throw ProfileReadException('Supabase returned an invalid profile response.');
+      throw ProfileReadException(
+        'Supabase returned an invalid profile response.',
+      );
     }
 
     // A trusted auth_user_id mapping wins over a native UUID-shaped profile.
@@ -375,12 +598,16 @@ class AuthService {
     final access = (response['access_token'] ?? '').toString().trim();
     final refresh = (response['refresh_token'] ?? '').toString().trim();
     if (access.isEmpty || refresh.isEmpty) {
-      throw SupabaseAuthException('Sign-in failed: no active Supabase session was returned.');
+      throw SupabaseAuthException(
+        'Sign-in failed: no active Supabase session was returned.',
+      );
     }
     final rawUser = response['user'] is Map ? response['user'] : response;
     final user = Map<String, dynamic>.from(rawUser as Map);
     final uid = (user['id'] ?? '').toString().trim();
-    if (uid.isEmpty) throw SupabaseAuthException('Sign-in failed: no Auth UUID was returned.');
+    if (uid.isEmpty) {
+      throw SupabaseAuthException('Sign-in failed: no Auth UUID was returned.');
+    }
 
     try {
       await _sessionStore.writeRefreshToken(refresh);
@@ -425,7 +652,9 @@ class AuthService {
     final user = await _installTokenResponse(decoded, _authUser?.email ?? '');
     if (oldUid != null && oldUid != user.uid) {
       await _clearSession(notify: true);
-      throw SupabaseAuthException('The refreshed token belongs to a different account.');
+      throw SupabaseAuthException(
+        'The refreshed token belongs to a different account.',
+      );
     }
   }
 
@@ -468,6 +697,7 @@ class AuthService {
   }
 
   Future<void> _clearSession({required bool notify}) async {
+    _clearRecoveryCredentials();
     final token = _accessToken;
     _authUser = null;
     _accessToken = null;
@@ -513,14 +743,16 @@ class AuthService {
     final base = _supabaseUrl.endsWith('/')
         ? _supabaseUrl.substring(0, _supabaseUrl.length - 1)
         : _supabaseUrl;
-    return Uri.parse('$base$path').replace(
-      queryParameters: query == null || query.isEmpty ? null : query,
-    );
+    return Uri.parse(
+      '$base$path',
+    ).replace(queryParameters: query == null || query.isEmpty ? null : query);
   }
 
   static DateTime? _expiresAt(Object? raw) {
     final seconds = raw is int ? raw : int.tryParse(raw?.toString() ?? '');
-    return seconds == null ? null : DateTime.now().add(Duration(seconds: seconds));
+    return seconds == null
+        ? null
+        : DateTime.now().add(Duration(seconds: seconds));
   }
 
   static Map<String, dynamic> _decodeJson(String raw) {
@@ -539,17 +771,21 @@ class AuthService {
     final code = (body['error_code'] ?? body['code'] ?? body['error'] ?? '')
         .toString()
         .toLowerCase();
-    final message = (body['msg'] ??
-            body['error_description'] ??
-            body['message'] ??
-            '')
-        .toString();
+    final message =
+        (body['msg'] ?? body['error_description'] ?? body['message'] ?? '')
+            .toString();
     if (code.contains('invalid_credentials') ||
         message.toLowerCase().contains('invalid login credentials')) {
-      return SupabaseAuthException('Incorrect email or password.', code: 'invalid-credential');
+      return SupabaseAuthException(
+        'Incorrect email or password.',
+        code: 'invalid-credential',
+      );
     }
     if (statusCode == 429) {
-      return SupabaseAuthException('Too many attempts. Wait and try again.', code: 'too-many-requests');
+      return SupabaseAuthException(
+        'Too many attempts. Wait and try again.',
+        code: 'too-many-requests',
+      );
     }
     if (message.toLowerCase().contains('refresh token')) {
       return SupabaseAuthException(message, code: 'refresh_token_not_found');
@@ -565,6 +801,7 @@ class AuthService {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _clearRecoveryCredentials();
     _authController.close();
     if (_ownsClient) _client.close();
   }

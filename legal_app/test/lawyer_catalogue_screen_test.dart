@@ -2,10 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 import 'package:legalserviceapp/models/product_model.dart';
-import 'package:legalserviceapp/services/api_client.dart';
 import 'package:legalserviceapp/services/auth_service.dart';
+import 'package:legalserviceapp/services/app_repository.dart';
 import 'package:legalserviceapp/state/session_controller.dart';
 import 'package:legalserviceapp/state/session_scope.dart';
 import 'package:legalserviceapp/views/home/details.dart';
@@ -15,13 +14,13 @@ import 'package:legalserviceapp/views/search/search_screen.dart';
 import 'support/fakes.dart';
 
 Map<String, dynamic> _lawyer(String id, String name) => <String, dynamic>{
-      'id': id,
-      'name': name,
-      'price': 'EGP 500 / hour',
-      'rating': 4.6,
-      'location': 'Sohag',
-      'specialty': 'Family law',
-    };
+  'id': id,
+  'name': name,
+  'price': 'EGP 500 / hour',
+  'rating': 4.6,
+  'location': 'Sohag',
+  'specialty': 'Family law',
+};
 
 Map<String, dynamic> _page(
   List<Map<String, dynamic>> items, {
@@ -29,36 +28,32 @@ Map<String, dynamic> _page(
   required int total,
   int limit = 20,
   int? totalPages,
-}) =>
-    <String, dynamic>{
-      'items': items,
-      'page': page,
-      'limit': limit,
-      'total': total,
-      'totalPages': totalPages ?? (total == 0 ? 1 : ((total + limit - 1) ~/ limit)),
-    };
+}) => <String, dynamic>{
+  'items': items,
+  'page': page,
+  'limit': limit,
+  'total': total,
+  'totalPages': totalPages ?? (total == 0 ? 1 : ((total + limit - 1) ~/ limit)),
+};
 
 Future<void> _pumpWithApi(
   WidgetTester tester,
   Widget child, {
   required Future<http.Response> Function(http.Request request) handler,
 }) async {
-  final api = ApiClient(
-    client: MockClient((request) {
-      if (request.url.path == '/api/categories') {
-        return Future<http.Response>.value(jsonOk(<String, dynamic>{
-          'items': <Map<String, dynamic>>[
-            <String, dynamic>{
-              'id': 'family-law',
-              'name': 'Family law',
-              'slug': 'family-law',
-            },
-          ],
-        }));
+  final api = testApiClient(
+    handler: (request, _) async {
+      if (request.url.path == '/rest/v1/legal_categories') {
+        return supabaseOk(<Map<String, dynamic>>[
+          <String, dynamic>{
+            'id': 'family-law',
+            'name': 'Family law',
+            'slug': 'family-law',
+          },
+        ]);
       }
       return handler(request);
-    }),
-    currentUidProvider: () => null,
+    },
   );
   final gateway = FakeAuthGateway();
   final session = SessionController(
@@ -69,10 +64,7 @@ Future<void> _pumpWithApi(
   addTearDown(gateway.dispose);
 
   await tester.pumpWidget(
-    SessionScope(
-      controller: session,
-      child: MaterialApp(home: child),
-    ),
+    SessionScope(controller: session, child: MaterialApp(home: child)),
   );
   await tester.pump();
 }
@@ -81,30 +73,39 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('SearchScreen catalogue pagination', () {
-    testWidgets('debounces search and loads the next page for that query',
-        (tester) async {
+    testWidgets('debounces search and loads the next page for that query', (
+      tester,
+    ) async {
       final requests = <http.Request>[];
       await _pumpWithApi(
         tester,
         const SearchScreen(),
         handler: (request) async {
           requests.add(request);
-          final query = request.url.queryParameters['search'] ?? '';
-          final page = int.parse(request.url.queryParameters['page'] ?? '1');
+          final searchFilter = request.url.queryParameters['or'] ?? '';
+          final query = searchFilter.contains('Nour') ? 'Nour' : '';
+          final offset = int.parse(
+            request.url.queryParameters['offset'] ?? '0',
+          );
+          final page = offset ~/ AppRepository.lawyerPageSize + 1;
           if (query == 'Nour') {
-            return jsonOk(_page(
-              <Map<String, dynamic>>[
-                _lawyer('nour-$page', page == 1 ? 'Nour Hassan' : 'Nour Ali'),
-              ],
-              page: page,
-              total: 21,
-            ));
+            return jsonOk(
+              _page(
+                <Map<String, dynamic>>[
+                  _lawyer('nour-$page', page == 1 ? 'Nour Hassan' : 'Nour Ali'),
+                ],
+                page: page,
+                total: 21,
+              ),
+            );
           }
-          return jsonOk(_page(
-            <Map<String, dynamic>>[_lawyer('initial-1', 'Initial Lawyer')],
-            page: 1,
-            total: 1,
-          ));
+          return jsonOk(
+            _page(
+              <Map<String, dynamic>>[_lawyer('initial-1', 'Initial Lawyer')],
+              page: 1,
+              total: 1,
+            ),
+          );
         },
       );
       await tester.pumpAndSettle();
@@ -120,27 +121,33 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Nour Ali'), findsOneWidget);
-      expect(requests.map((request) => request.url.queryParameters['page']),
-          ['1', '1', '2']);
-      expect(requests.last.url.queryParameters['search'], 'Nour');
+      expect(requests.map((request) => request.url.queryParameters['offset']), [
+        '0',
+        '0',
+        '20',
+      ]);
+      expect(requests.last.url.queryParameters['or'], contains('Nour'));
     });
 
-    testWidgets('filters lawyers when a category chip is selected',
-        (tester) async {
+    testWidgets('filters lawyers when a category chip is selected', (
+      tester,
+    ) async {
       final lawyerRequests = <http.Request>[];
       await _pumpWithApi(
         tester,
         const SearchScreen(),
         handler: (request) async {
           lawyerRequests.add(request);
-          final categoryId = request.url.queryParameters['categoryId'];
-          final items = categoryId == 'family-law'
-              ? <Map<String, dynamic>>[
-                  _lawyer('family-lawyer', 'Filtered family lawyer'),
-                ]
-              : <Map<String, dynamic>>[
-                  _lawyer('general-lawyer', 'General lawyer'),
-                ];
+          final categoryId = request.url.queryParameters['category_id']
+              ?.replaceFirst('eq.', '');
+          final items =
+              categoryId == 'family-law'
+                  ? <Map<String, dynamic>>[
+                    _lawyer('family-lawyer', 'Filtered family lawyer'),
+                  ]
+                  : <Map<String, dynamic>>[
+                    _lawyer('general-lawyer', 'General lawyer'),
+                  ];
           return jsonOk(_page(items, page: 1, total: items.length));
         },
       );
@@ -151,11 +158,15 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Filtered family lawyer'), findsOneWidget);
-      expect(lawyerRequests.last.url.queryParameters['categoryId'], 'family-law');
+      expect(
+        lawyerRequests.last.url.queryParameters['category_id'],
+        'eq.family-law',
+      );
     });
 
-    testWidgets('renders loading, empty and retryable error states',
-        (tester) async {
+    testWidgets('renders loading, empty and retryable error states', (
+      tester,
+    ) async {
       final pending = Completer<http.Response>();
       var requests = 0;
       await _pumpWithApi(
@@ -164,19 +175,18 @@ void main() {
         handler: (request) async {
           requests++;
           if (requests == 1) return pending.future;
-          if (request.url.queryParameters['search'] == 'broken' && requests == 2) {
+          if ((request.url.queryParameters['or'] ?? '').contains('broken') &&
+              requests == 2) {
             return jsonError(403, 'Catalogue access denied.');
           }
-          return jsonOk(_page(
-            <Map<String, dynamic>>[],
-            page: 1,
-            total: 0,
-          ));
+          return jsonOk(_page(<Map<String, dynamic>>[], page: 1, total: 0));
         },
       );
 
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      pending.complete(jsonOk(_page(<Map<String, dynamic>>[], page: 1, total: 0)));
+      pending.complete(
+        jsonOk(_page(<Map<String, dynamic>>[], page: 1, total: 0)),
+      );
       await tester.pumpAndSettle();
       expect(find.text('No lawyers listed yet'), findsOneWidget);
 
@@ -194,22 +204,31 @@ void main() {
   });
 
   group('PopularLawyersScreen pagination', () {
-    testWidgets('keeps the popular filter while loading another page',
-        (tester) async {
+    testWidgets('keeps the popular filter while loading another page', (
+      tester,
+    ) async {
       final requests = <http.Request>[];
       await _pumpWithApi(
         tester,
         const PopularLawyersScreen(),
         handler: (request) async {
           requests.add(request);
-          final page = int.parse(request.url.queryParameters['page'] ?? '1');
-          return jsonOk(_page(
-            <Map<String, dynamic>>[
-              _lawyer('popular-$page', page == 1 ? 'Popular One' : 'Popular Two'),
-            ],
-            page: page,
-            total: 21,
-          ));
+          final offset = int.parse(
+            request.url.queryParameters['offset'] ?? '0',
+          );
+          final page = offset ~/ AppRepository.lawyerPageSize + 1;
+          return jsonOk(
+            _page(
+              <Map<String, dynamic>>[
+                _lawyer(
+                  'popular-$page',
+                  page == 1 ? 'Popular One' : 'Popular Two',
+                ),
+              ],
+              page: page,
+              total: 21,
+            ),
+          );
         },
       );
       await tester.pumpAndSettle();
@@ -219,27 +238,40 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Popular Two'), findsOneWidget);
-      expect(requests.map((request) => request.url.queryParameters['page']), ['1', '2']);
-      expect(requests.every((request) => request.url.queryParameters['isPopular'] == 'true'),
-          isTrue);
+      expect(requests.map((request) => request.url.queryParameters['offset']), [
+        '0',
+        '20',
+      ]);
+      expect(
+        requests.every(
+          (request) => request.url.queryParameters['is_popular'] == 'eq.true',
+        ),
+        isTrue,
+      );
     });
 
-    testWidgets('keeps the top-rated filter while loading another page',
-        (tester) async {
+    testWidgets('keeps the top-rated filter while loading another page', (
+      tester,
+    ) async {
       final requests = <http.Request>[];
       await _pumpWithApi(
         tester,
         const PopularLawyersScreen(onlyTop: true, title: 'Top Lawyers'),
         handler: (request) async {
           requests.add(request);
-          final page = int.parse(request.url.queryParameters['page'] ?? '1');
-          return jsonOk(_page(
-            <Map<String, dynamic>>[
-              _lawyer('top-$page', page == 1 ? 'Top One' : 'Top Two'),
-            ],
-            page: page,
-            total: 21,
-          ));
+          final offset = int.parse(
+            request.url.queryParameters['offset'] ?? '0',
+          );
+          final page = offset ~/ AppRepository.lawyerPageSize + 1;
+          return jsonOk(
+            _page(
+              <Map<String, dynamic>>[
+                _lawyer('top-$page', page == 1 ? 'Top One' : 'Top Two'),
+              ],
+              page: page,
+              total: 21,
+            ),
+          );
         },
       );
       await tester.pumpAndSettle();
@@ -249,15 +281,24 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Top Two'), findsOneWidget);
-      expect(requests.every((request) => request.url.queryParameters['isTop'] == 'true'),
-          isTrue);
-      expect(requests.every((request) => !request.url.queryParameters.containsKey('isPopular')),
-          isTrue);
+      expect(
+        requests.every(
+          (request) => request.url.queryParameters['is_top'] == 'eq.true',
+        ),
+        isTrue,
+      );
+      expect(
+        requests.every(
+          (request) => !request.url.queryParameters.containsKey('is_popular'),
+        ),
+        isTrue,
+      );
     });
   });
 
-  testWidgets('a missing detail does not keep rendering its passed list item',
-      (tester) async {
+  testWidgets('a missing detail does not keep rendering its passed list item', (
+    tester,
+  ) async {
     final lawyerRequests = <http.Request>[];
     await _pumpWithApi(
       tester,
@@ -271,9 +312,9 @@ void main() {
         lawyerId: 'removed-lawyer',
       ),
       handler: (request) async {
-        if (request.url.path == '/api/lawyers/removed-lawyer') {
+        if (request.url.path == '/rest/v1/lawyers') {
           lawyerRequests.add(request);
-          return jsonError(404, 'Lawyer not found');
+          return supabaseOk(<Map<String, dynamic>>[]);
         }
         return jsonOk(<Map<String, dynamic>>[]);
       },

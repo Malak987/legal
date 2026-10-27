@@ -1,4 +1,6 @@
-# Admin panel UI and functional completeness audit (2026-10-26)
+# Admin panel UI and functional completeness audit (historical snapshot)
+
+> **Superseded on 2026-10-26.** The current `main` commit is `42e431ab60ab8846f4feeefeb11b684b5a5d45ef`; the fresh live audit confirms all 16 migration versions are applied and the relevant dashboard/lawyer/review/case RPCs exist. The prior migration-gap claims below describe an earlier state. See [`../CURRENT_STATE_AUDIT_2026-10-26.md`](../CURRENT_STATE_AUDIT_2026-10-26.md) for the current screen-to-data map and live blockers.
 
 **Scope:** repo `Malak987/legal`, branch `main` @ `90bbda0` (nothing committed or pushed).
 

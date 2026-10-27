@@ -358,13 +358,12 @@ void main() {
           return fake;
         },
       );
-      events.add('restore:${fake.currentUserCalls}');
-
-      expect(events, ['create', 'restore:1']);
+      expect(events, ['create']);
       expect(identical(received, config), isTrue);
 
       await tester.pumpWidget(widget);
       await tester.pumpAndSettle();
+      expect(fake.currentUserCalls, 1);
       expect(find.byType(LoginScreen), findsOneWidget);
       expect(find.byKey(const Key('supabase-config-error')), findsNothing);
       expect(find.textContaining('not configured'), findsNothing);

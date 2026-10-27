@@ -1,10 +1,10 @@
 # Legal Services — Admin Web Panel
 
-Flutter Web administrative console for the Legal Services platform. The panel uses Supabase Auth and caller-JWT PostgREST/RPC operations; it has no dependency on the legacy Express API. Firebase Hosting is retained only as the static web host.
+Flutter Web administrative console for the Legal Services platform. The panel uses Supabase Auth and caller-JWT PostgREST/RPC operations; its UI calls Supabase directly rather than the legacy Express API. Firebase Hosting serves the static web app. The root VS Code launch profile prevalidates the ignored local Supabase file and passes it to Flutter; ordinary `flutter run` does not load that file automatically.
 
 ## Runtime architecture
 
-- **Hosted UI:** Firebase Hosting (`admin_panel/build/web`). Its `/api` rewrite has been removed; the panel makes browser requests directly to the configured Supabase project.
+- **Hosted UI:** Firebase Hosting serves the static bundle from `admin_panel/build/web`. The Admin UI's Auth and data requests go directly to the configured Supabase project.
 - **Authentication:** Supabase Auth password sign-in, with the application role read from the trusted `public.users` mapping under RLS. Registration is not exposed. Accounts must be provisioned and assigned a role by a trusted operator.
 - **Data access:** PostgREST queries use the caller's access token and database RLS. Operations that touch private lawyer-account links, administrative summaries, case assignments, booking states, and other privileged fields use narrow RPCs that verify the caller's stored role.
 - **Client credentials:** The web bundle contains only the Supabase project URL and public anon/publishable key. Never provide a service-role/secret key to Flutter, browser code, or build variables.
@@ -22,52 +22,51 @@ Flutter Web administrative console for the Legal Services platform. The panel us
 
 ### Supabase configuration (required)
 
-Flutter web cannot read shell or hosting environment variables at runtime. The URL and **public** anon/publishable key must be passed as `--dart-define` values when the app is compiled. Pick one of the following:
+The Flutter app sees only compile-time Dart defines. It does **not** read the shell or Hosting environment at runtime, and plain `flutter run` does not load a JSON file unless that file is explicitly passed to Flutter.
+
+Keep local values in the ignored `admin_panel/supabase.local.json`. If it does not exist, copy the example without overwriting an existing file:
 
 ```bash
 cd admin_panel
-flutter pub get
-
-# A) Helper scripts (recommended): read SUPABASE_ANON_KEY from the shell or
-#    from the git-ignored admin_panel/supabase.local.json.
-cp supabase.local.example.json supabase.local.json   # then paste the public key
-node scripts/run_web.mjs                              # flutter run -d chrome + defines
-node scripts/build_web.mjs                            # release build -> build/web
-
-# B) Plain Flutter commands
-flutter run -d chrome \
-  --dart-define=SUPABASE_URL=https://qqfzbecwhewswkyxgebu.supabase.co \
-  --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
-flutter build web --release \
-  --dart-define=SUPABASE_URL=https://qqfzbecwhewswkyxgebu.supabase.co \
-  --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
-
-# C) Flutter's own file option (also works from IDE launch configurations)
-flutter run -d chrome --dart-define-from-file=supabase.local.json
+[ -e supabase.local.json ] || cp supabase.local.example.json supabase.local.json
 ```
 
-Notes:
+Edit that local file with `SUPABASE_URL` and the real public `SUPABASE_ANON_KEY`. The example key is a placeholder and must be replaced. Add `SUPABASE_AUTH_REDIRECT_URL` only after its exact callback URL is approved and allow-listed in Supabase Auth. Never put a service-role/secret key in the file. The preflight also rejects server-only Supabase field names, without reading or printing their values, because IDE `--dart-define-from-file` passes every field to Flutter.
 
-- `export SUPABASE_ANON_KEY=...` on its own does **nothing** for `flutter run`/`flutter build`. It only works through the scripts above or when you pass it as `--dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"`.
-- Defines are compiled into the app. After you change one, quit `flutter run` and start it again. Hot restart does not apply new defines.
-- IDE runs need the same defines. In VS Code, add `"toolArgs": ["--dart-define-from-file=supabase.local.json"]` to the launch configuration. In Android Studio, put the same flag under *Additional run args*.
-- The key is printed only in redacted form (`sb_publishable_… (N chars)`). `build_web.mjs` confirms the compiled `main.dart.js` contains the configured values without printing them.
-- Only the public anon/publishable key is allowed. Secret (`sb_secret_…`) and service-role keys are refused by both the scripts and the app.
+### Normal Run / Debug
 
-### Checks and deployment
+Open the repository root in VS Code and select **Admin Web (local Supabase)** in Run and Debug. Its pre-launch task validates `admin_panel/supabase.local.json` without printing the key, then Flutter Web receives the same file through `--dart-define-from-file`.
+
+From a terminal, the equivalent validated run command is:
+
+```bash
+cd admin_panel
+node scripts/run_web.mjs
+```
+
+In Android Studio/IntelliJ, set the Flutter run configuration's working directory to `admin_panel`, entry point to `lib/main.dart`, and **Additional run args** to `--dart-define-from-file=supabase.local.json`. Add a Before Launch external tool that runs `node scripts/validate_supabase_config.mjs --file-only` with working directory `admin_panel`. Set `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_SECRET_KEY` to empty values in the Flutter Run configuration's environment so parent-process secrets cannot be inherited.
+
+Use the configured IDE profiles or validated wrapper as the supported entry points; do not bypass their preflight with a raw `flutter run`. A bare `flutter run -d chrome` cannot see `supabase.local.json`. Fully stop and relaunch after changing defines; hot restart does not rebuild them.
+
+### Release build
+
+```bash
+cd admin_panel
+node scripts/build_web.mjs --no-wasm-dry-run
+```
+
+The script resolves environment values first and then the ignored local file, validates the URL/public key before invoking Flutter, filters server-only environment variables, and verifies the output bundle without printing the key. It writes the normal release output to `build/web`. Never use `--allow-unconfigured-compile-check` for a release; the keyless compile-check output is not deployable.
+
+### Checks and Hosting deployment
 
 ```bash
 cd admin_panel
 flutter analyze
 flutter test
 node --test scripts/*.test.mjs
-
-# Deploy from the repository root. Firebase's predeploy hook runs
-# scripts/build_web.mjs, which fails unless a valid public key is configured.
-# Configure the Auth redirect allow-list and verify applied SQL migrations first.
-cd ..
-SUPABASE_ANON_KEY='<public anon/publishable key>' firebase deploy --only hosting --project legal-102026
 ```
+
+After a separately approved Hosting deployment and after the Firebase configuration is aligned to the confirmed project/site, the explicit project command is `firebase deploy --only hosting --project legal-dashboard-1`. Do not rely on the current default alias until it is corrected; no deployment is implied by this documentation.
 
 ### CI
 

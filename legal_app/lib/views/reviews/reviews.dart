@@ -13,7 +13,7 @@ import 'writereview.dart';
 /// Alias kept for existing callers (`drawer_widget.dart`) that construct `const Reviews()`.
 typedef Reviews = ReviewsScreen;
 
-/// Reviews list backed by `GET /api/reviews` and `DELETE /api/reviews/:id`.
+/// Reviews list backed by the public Supabase review projection and owner RPCs.
 class ReviewsScreen extends StatefulWidget {
   final String? lawyerId;
   final String? lawyerName;

@@ -7,8 +7,8 @@ import '../../../widgets/customapp_bar.dart';
 import '../../../widgets/detailstext1.dart';
 import '../../../widgets/detailstext2.dart';
 
-/// User notifications backed by `GET /api/notifications/:userId`,
-/// `PUT /api/notifications/:id/read`, and `DELETE /api/notifications/:id`.
+/// User notifications backed by the caller-authorized Supabase `notifications`
+/// query, `rpc_notification_update`, and owner-scoped deletion.
 class GroceryNotifications extends StatefulWidget {
   const GroceryNotifications({super.key});
 

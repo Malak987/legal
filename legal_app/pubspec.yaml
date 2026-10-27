@@ -59,6 +59,7 @@ dependencies:
   syncfusion_flutter_sliders: any
   flutter_markdown: ^0.7.6+2
   # Supabase authentication and secure storage
+  app_links: ^7.2.2
   flutter_secure_storage: ^10.3.4
   shared_preferences: ^2.3.3
 

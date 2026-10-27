@@ -48,7 +48,7 @@ abstract interface class AuthSessionStore {
 
 class SecureAuthSessionStore implements AuthSessionStore {
   SecureAuthSessionStore({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   static const String _key = 'legal_supabase_refresh_token_v1';
   final FlutterSecureStorage _storage;
@@ -116,18 +116,18 @@ class SupabaseAuthGateway implements AuthGateway {
     AuthSessionStore? sessionStore,
     String? authRedirectUrl,
     bool? allowClientSignup,
-  })  : _client = client ?? http.Client(),
-        _allowClientSignup =
-            allowClientSignup ?? SupabaseConfig.enableClientSignup,
-        _ownsClient = client == null,
-        _config = SupabaseClientConfig.select(
-          config: config,
-          url: supabaseUrl,
-          anonKey: supabaseAnonKey,
-        ),
-        _sessionStore = sessionStore ?? SecureAuthSessionStore(),
-        _authRedirectUrl =
-            (authRedirectUrl ?? SupabaseConfig.authRedirectUrl).trim();
+  }) : _client = client ?? http.Client(),
+       _allowClientSignup =
+           allowClientSignup ?? SupabaseConfig.enableClientSignup,
+       _ownsClient = client == null,
+       _config = SupabaseClientConfig.select(
+         config: config,
+         url: supabaseUrl,
+         anonKey: supabaseAnonKey,
+       ),
+       _sessionStore = sessionStore ?? SecureAuthSessionStore(),
+       _authRedirectUrl =
+           (authRedirectUrl ?? SupabaseConfig.authRedirectUrl).trim();
 
   static const Duration _requestTimeout = Duration(seconds: 20);
   static const Duration _refreshSkew = Duration(seconds: 60);
@@ -169,11 +169,14 @@ class SupabaseAuthGateway implements AuthGateway {
   /// Current bearer token, refreshed before expiry or on an explicit 401 retry.
   Future<String?> getAccessToken({bool forceRefresh = false}) async {
     final expiresAt = _accessTokenExpiresAt;
-    final stillFresh = _accessToken != null &&
-        (expiresAt == null || DateTime.now().add(_refreshSkew).isBefore(expiresAt));
+    final stillFresh =
+        _accessToken != null &&
+        (expiresAt == null ||
+            DateTime.now().add(_refreshSkew).isBefore(expiresAt));
     if (!forceRefresh && stillFresh) return _accessToken;
 
-    final refreshToken = _refreshToken ?? await _sessionStore.readRefreshToken();
+    final refreshToken =
+        _refreshToken ?? await _sessionStore.readRefreshToken();
     if (refreshToken == null || refreshToken.isEmpty) return _accessToken;
 
     try {
@@ -215,18 +218,39 @@ class SupabaseAuthGateway implements AuthGateway {
   }
 
   Future<AuthUser?> _restoreCallbackSession(Uri callbackUri) async {
+    if (!_matchesConfiguredRedirect(callbackUri)) return null;
+    // Do not let a previously cached recovery flag authorize a malformed or
+    // superseding callback while this callback is being validated.
+    _isPasswordRecovery = false;
+
     final callback = <String, String>{...callbackUri.queryParameters};
     if (callbackUri.fragment.isNotEmpty) {
       try {
         callback.addAll(Uri.splitQueryString(callbackUri.fragment));
       } catch (_) {
-        // A non-auth fragment is an ordinary in-app URL; ignore it.
+        throw _invalidRecoveryLink();
       }
+    }
+
+    // Supabase returns error details in callback parameters for expired,
+    // reused, or otherwise invalid links. Never surface the raw URL or tokens.
+    if ((callback['error_code'] ?? callback['error'] ?? '').isNotEmpty) {
+      throw _invalidRecoveryLink();
     }
 
     final accessToken = (callback['access_token'] ?? '').trim();
     final refreshToken = (callback['refresh_token'] ?? '').trim();
-    if (accessToken.isEmpty || refreshToken.isEmpty) return null;
+    if (accessToken.isEmpty || refreshToken.isEmpty) {
+      throw _invalidRecoveryLink();
+    }
+    final expiresIn = int.tryParse(callback['expires_in'] ?? '');
+    final expiresAt = int.tryParse(callback['expires_at'] ?? '');
+    if ((expiresIn != null && expiresIn <= 0) ||
+        (expiresAt != null &&
+            expiresAt <= DateTime.now().millisecondsSinceEpoch ~/ 1000) ||
+        _jwtIsExpired(accessToken)) {
+      throw _invalidRecoveryLink();
+    }
 
     final response = await _send(
       'GET',
@@ -235,6 +259,11 @@ class SupabaseAuthGateway implements AuthGateway {
     );
     final decoded = _decodeJson(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (response.statusCode == 400 ||
+          response.statusCode == 401 ||
+          response.statusCode == 403) {
+        throw _invalidRecoveryLink();
+      }
       throw _mapSupabaseError(decoded, response.statusCode);
     }
 
@@ -244,12 +273,43 @@ class SupabaseAuthGateway implements AuthGateway {
       accessToken: accessToken,
       refreshToken: refreshToken,
       user: _extractUser(decoded),
-      expiresIn: int.tryParse(callback['expires_in'] ?? ''),
+      expiresIn: expiresIn,
       emit: true,
       persistenceRequired: true,
       accountCreated: false,
     );
   }
+
+  bool _matchesConfiguredRedirect(Uri callbackUri) {
+    final expected = Uri.tryParse(_authRedirectUrl);
+    return expected != null &&
+        expected.hasScheme &&
+        callbackUri.scheme == expected.scheme &&
+        callbackUri.host == expected.host &&
+        callbackUri.port == expected.port &&
+        callbackUri.path == expected.path;
+  }
+
+  bool _jwtIsExpired(String token) {
+    final parts = token.split('.');
+    if (parts.length != 3) return false;
+    try {
+      final payload = utf8.decode(
+        base64Url.decode(base64Url.normalize(parts[1])),
+      );
+      final exp = (jsonDecode(payload) as Map<String, dynamic>)['exp'];
+      final expiry = exp is int ? exp : int.tryParse('$exp');
+      return expiry != null &&
+          expiry <= DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  AuthException _invalidRecoveryLink() => AuthException(
+    'This password-reset link is invalid or has expired. Request a new link.',
+    code: 'invalid-recovery-link',
+  );
 
   @override
   Future<AuthUser> signIn({
@@ -309,7 +369,8 @@ class SupabaseAuthGateway implements AuthGateway {
         // This is untrusted profile display data only. The client sends no role;
         // the trusted database Auth lifecycle creates the fixed `client` role.
         'data': <String, dynamic>{
-          if (displayName?.trim().isNotEmpty == true) 'name': displayName!.trim(),
+          if (displayName?.trim().isNotEmpty == true)
+            'name': displayName!.trim(),
         },
       },
     );
@@ -393,7 +454,9 @@ class SupabaseAuthGateway implements AuthGateway {
   @override
   Future<void> setPasswordFromRecovery(String newPassword) async {
     if (!_isPasswordRecovery || _currentUser == null) {
-      throw AuthException('Open the password-reset link from your email first.');
+      throw AuthException(
+        'Open the password-reset link from your email first.',
+      );
     }
     await _putPassword(newPassword);
     _isPasswordRecovery = false;
@@ -402,7 +465,9 @@ class SupabaseAuthGateway implements AuthGateway {
   Future<void> _putPassword(String newPassword) async {
     final token = await getAccessToken();
     if (token == null || token.isEmpty) {
-      throw AuthException('Your session expired. Request a new password-reset link.');
+      throw AuthException(
+        'Your session expired. Request a new password-reset link.',
+      );
     }
     final response = await _send(
       'PUT',
@@ -426,7 +491,9 @@ class SupabaseAuthGateway implements AuthGateway {
     final accessToken = (response['access_token'] ?? '').toString().trim();
     final refreshToken = (response['refresh_token'] ?? '').toString().trim();
     if (accessToken.isEmpty || refreshToken.isEmpty) {
-      throw AuthException('Authentication failed: no active session was returned.');
+      throw AuthException(
+        'Authentication failed: no active session was returned.',
+      );
     }
     final user = _extractUser(response, fallbackEmail: fallbackEmail);
     return _installSession(
@@ -466,9 +533,10 @@ class SupabaseAuthGateway implements AuthGateway {
     _accessToken = accessToken;
     _refreshToken = refreshToken;
     _currentUser = user;
-    _accessTokenExpiresAt = expiresIn == null
-        ? null
-        : DateTime.now().add(Duration(seconds: expiresIn));
+    _accessTokenExpiresAt =
+        expiresIn == null
+            ? null
+            : DateTime.now().add(Duration(seconds: expiresIn));
     if (emit && !_authController.isClosed) _authController.add(user);
     return user;
   }
@@ -504,7 +572,9 @@ class SupabaseAuthGateway implements AuthGateway {
     // Refreshes must not silently change account identity.
     if (previousUid != null && previousUid != renewedUser.uid) {
       await _clearSession(notify: true);
-      throw AuthException('The refreshed session belongs to a different account.');
+      throw AuthException(
+        'The refreshed session belongs to a different account.',
+      );
     }
   }
 
@@ -570,21 +640,19 @@ class SupabaseAuthGateway implements AuthGateway {
 
   void _ensureConfigured() {
     if (!_config.isValid) {
-      throw AuthException(
-        _config.errorMessage,
-        code: 'auth-not-configured',
-      );
+      throw AuthException(_config.errorMessage, code: 'auth-not-configured');
     }
   }
 
   Uri _authUri(String path, [Map<String, String>? query]) {
-    final base = _supabaseUrl.endsWith('/')
-        ? _supabaseUrl.substring(0, _supabaseUrl.length - 1)
-        : _supabaseUrl;
+    final base =
+        _supabaseUrl.endsWith('/')
+            ? _supabaseUrl.substring(0, _supabaseUrl.length - 1)
+            : _supabaseUrl;
     final clean = path.startsWith('/') ? path.substring(1) : path;
-    return Uri.parse('$base/auth/v1/$clean').replace(
-      queryParameters: query == null || query.isEmpty ? null : query,
-    );
+    return Uri.parse(
+      '$base/auth/v1/$clean',
+    ).replace(queryParameters: query == null || query.isEmpty ? null : query);
   }
 
   static Map<String, dynamic> _decodeJson(String raw) {
@@ -603,7 +671,9 @@ class SupabaseAuthGateway implements AuthGateway {
     final rawUser = response['user'] is Map ? response['user'] : response;
     final user = Map<String, dynamic>.from(rawUser as Map);
     final uid = (user['id'] ?? '').toString().trim();
-    if (uid.isEmpty) throw AuthException('Authentication failed: no user id returned.');
+    if (uid.isEmpty) {
+      throw AuthException('Authentication failed: no user id returned.');
+    }
     final email = (user['email'] ?? fallbackEmail).toString().trim();
     return AuthUser(uid: uid, email: email.isEmpty ? null : email);
   }
@@ -612,14 +682,13 @@ class SupabaseAuthGateway implements AuthGateway {
     Map<String, dynamic> body,
     int statusCode,
   ) {
-    final code = (body['error_code'] ?? body['code'] ?? body['error'] ?? '')
-        .toString()
-        .toLowerCase();
-    final message = (body['msg'] ??
-            body['error_description'] ??
-            body['message'] ??
-            '')
-        .toString();
+    final code =
+        (body['error_code'] ?? body['code'] ?? body['error'] ?? '')
+            .toString()
+            .toLowerCase();
+    final message =
+        (body['msg'] ?? body['error_description'] ?? body['message'] ?? '')
+            .toString();
     final combined = '$code ${message.toLowerCase()}';
 
     if (combined.contains('user_already_exists') ||
@@ -632,7 +701,10 @@ class SupabaseAuthGateway implements AuthGateway {
     }
     if (combined.contains('invalid_credentials') ||
         combined.contains('invalid login credentials')) {
-      return AuthException('Incorrect email or password.', code: 'invalid-credential');
+      return AuthException(
+        'Incorrect email or password.',
+        code: 'invalid-credential',
+      );
     }
     if (combined.contains('weak_password') ||
         combined.contains('password should be at least')) {
@@ -643,7 +715,10 @@ class SupabaseAuthGateway implements AuthGateway {
     }
     if (combined.contains('invalid email') ||
         combined.contains('email address is invalid')) {
-      return AuthException('Please enter a valid email address.', code: 'invalid-email');
+      return AuthException(
+        'Please enter a valid email address.',
+        code: 'invalid-email',
+      );
     }
     if (combined.contains('refresh token') &&
         (combined.contains('invalid') || combined.contains('not found'))) {
@@ -701,10 +776,9 @@ class AuthService {
   bool get isPasswordRecovery => gateway.isPasswordRecovery;
 
   /// Restores a persisted Supabase session and, when possible, consumes the
-  /// recovery/access-token fragment supplied by the configured email redirect.
-  Future<AuthUser?> restoreSession() => gateway.restoreSession(
-        callbackUri: kIsWeb ? Uri.base : null,
-      );
+  /// callback URI supplied by the web URL or native app-link stream.
+  Future<AuthUser?> restoreSession({Uri? callbackUri}) => gateway
+      .restoreSession(callbackUri: callbackUri ?? (kIsWeb ? Uri.base : null));
 
   Future<AppProfile> signIn({
     required String email,
@@ -738,9 +812,10 @@ class AuthService {
     try {
       return await loadProfile();
     } catch (error) {
-      final detail = error is AuthException || error is ApiException
-          ? ' ${error.toString()}'
-          : '';
+      final detail =
+          error is AuthException || error is ApiException
+              ? ' ${error.toString()}'
+              : '';
       throw AuthException(
         'Your account was created, but its client profile is not ready.$detail '
         'Retry sign-in later or contact support; do not register again.',
@@ -751,7 +826,9 @@ class AuthService {
   }
 
   Future<AppProfile> loadProfile() async {
-    if (gateway.currentUser == null) throw AuthException('You are not signed in.');
+    if (gateway.currentUser == null) {
+      throw AuthException('You are not signed in.');
+    }
 
     late final AppProfile profile;
     try {
@@ -799,11 +876,10 @@ class AuthService {
   Future<void> changePassword({
     required String currentPassword,
     required String newPassword,
-  }) =>
-      gateway.changePassword(
-        currentPassword: currentPassword,
-        newPassword: newPassword,
-      );
+  }) => gateway.changePassword(
+    currentPassword: currentPassword,
+    newPassword: newPassword,
+  );
 
   Future<void> setPasswordFromRecovery(String newPassword) =>
       gateway.setPasswordFromRecovery(newPassword);

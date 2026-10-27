@@ -9,7 +9,7 @@ import '../../../widgets/detailstext1.dart';
 import '../../../widgets/detailstext2.dart';
 import '../../availablitycalendar/avaialblity_calendar.dart';
 
-/// Cancelled bookings backed by `GET /api/bookings?status=Cancelled`.
+/// Cancelled bookings derived from the signed-in user's Supabase bookings.
 class CancelledOrders extends StatefulWidget {
   const CancelledOrders({super.key});
 

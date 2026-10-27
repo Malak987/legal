@@ -7,7 +7,7 @@ import '../../widgets/customapp_bar.dart';
 import '../../widgets/detailstext1.dart';
 import '../../widgets/detailstext2.dart';
 
-/// Displays wallet transactions from `GET /api/wallet/:userId`.
+/// Displays wallet transactions from the owner-scoped Supabase query.
 class TransactionHistoryScreen extends StatefulWidget {
   final List<Map<String, dynamic>>? transactions;
 

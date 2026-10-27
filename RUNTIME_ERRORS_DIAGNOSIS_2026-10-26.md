@@ -1,4 +1,6 @@
-# Admin panel Supabase runtime errors — diagnosis (2026-10-26)
+# Admin panel Supabase runtime errors — diagnosis (historical snapshot)
+
+> **Superseded on 2026-10-26.** A fresh audit of `main` at `42e431ab60ab8846f4feeefeb11b684b5a5d45ef` and the connected project `qqfzbecwhewswkyxgebu` confirms all 16 repository migration versions are applied, including `20261025140000`–`20261025144000`. The `public_reviews` view and admin RPCs are present. Do not use the pending-migration conclusions below as current state; see [`CURRENT_STATE_AUDIT_2026-10-26.md`](CURRENT_STATE_AUDIT_2026-10-26.md).
 
 Scope: three failures reported against `main` @ `90bbda0` ("update legal platform").
 Connected project: `legal` (`qqfzbecwhewswkyxgebu`, PostgreSQL 17, eu-west-1).

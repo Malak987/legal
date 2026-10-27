@@ -55,6 +55,12 @@ function readLocalFile(adminDir) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(`${LOCAL_CONFIG_FILE} must contain a JSON object of Dart defines.`);
   }
+  const serverOnlyFields = SERVER_ONLY_ENV.filter((name) => Object.hasOwn(parsed, name));
+  if (serverOnlyFields.length) {
+    throw new Error(
+      `${LOCAL_CONFIG_FILE} contains server-only Supabase field names (${serverOnlyFields.join(', ')}). Remove those fields; values are never read or printed.`,
+    );
+  }
   return { values: parsed, file };
 }
 
@@ -161,6 +167,23 @@ export function dartDefineArgs(defines) {
   return DEFINE_NAMES.filter((name) => defines[name] !== undefined).map(
     (name) => `--dart-define=${name}=${defines[name]}`,
   );
+}
+
+/** Prevent optional CLI args from bypassing the validated public config. */
+export function rejectUnsafeFlutterConfigArgs(args) {
+  const protectedNames = new Set([...DEFINE_NAMES, ...SERVER_ONLY_ENV]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--dart-define-from-file' || arg.startsWith('--dart-define-from-file=')) {
+      throw new Error('Do not pass --dart-define-from-file in extra Flutter arguments; use the validated local config.');
+    }
+    let define = '';
+    if (arg === '--dart-define') define = args[index + 1] || '';
+    else if (arg.startsWith('--dart-define=')) define = arg.slice('--dart-define='.length);
+    if (protectedNames.has(define.split('=', 1)[0])) {
+      throw new Error('Do not override Supabase defines in extra Flutter arguments; use the validated local config.');
+    }
+  }
 }
 
 /** Copy of the environment without server-only credentials. */

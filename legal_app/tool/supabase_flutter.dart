@@ -2,6 +2,7 @@
 // configuration compiled in, validated by the app's own rules.
 //
 //   cd legal_app
+//   dart run tool/supabase_flutter.dart validate --file-only
 //   dart run tool/supabase_flutter.dart run [-d <device>]
 //   dart run tool/supabase_flutter.dart build apk --release
 //   dart run tool/supabase_flutter.dart build appbundle --release
@@ -48,6 +49,11 @@ ResolvedDefines resolveDefines(
         '${SupabaseClientConfig.localDefinesFile} must be a JSON object.',
       );
     }
+    if (serverOnlyVariables.any(decoded.containsKey)) {
+      throw const FormatException(
+        'Do not store server-only Supabase key fields in the local config file.',
+      );
+    }
     fromFile = decoded;
   }
   final values = <String, String>{};
@@ -91,6 +97,25 @@ List<String> flutterArguments(
   ];
 }
 
+bool hasProtectedSupabaseDefine(List<String> args) {
+  final protectedNames = <String>{...defineNames, ...serverOnlyVariables};
+  for (var index = 0; index < args.length; index++) {
+    final arg = args[index];
+    if (arg == '--dart-define-from-file' ||
+        arg.startsWith('--dart-define-from-file=')) {
+      return true;
+    }
+    String define = '';
+    if (arg == '--dart-define' && index + 1 < args.length) {
+      define = args[index + 1];
+    } else if (arg.startsWith('--dart-define=')) {
+      define = arg.substring('--dart-define='.length);
+    }
+    if (protectedNames.contains(define.split('=').first)) return true;
+  }
+  return false;
+}
+
 Map<String, String> flutterEnvironment(Map<String, String> environment) =>
     Map<String, String>.of(environment)
       ..removeWhere((name, _) => serverOnlyVariables.contains(name));
@@ -112,22 +137,29 @@ Future<int> runTool(
   StringSink? out,
   StringSink? err,
 }) async {
-  final env = environment ?? Platform.environment;
+  final suppliedEnvironment = environment ?? Platform.environment;
   final dir = packageDir ?? Directory.current;
   final stdoutSink = out ?? stdout;
   final stderrSink = err ?? stderr;
 
-  if (cliArgs.isEmpty || !const {'run', 'build'}.contains(cliArgs.first)) {
+  if (cliArgs.isEmpty ||
+      !const {'run', 'build', 'validate'}.contains(cliArgs.first)) {
     stderrSink.writeln(
-      'Usage: dart run tool/supabase_flutter.dart <run|build <target>> [flutter args]',
+      'Usage: dart run tool/supabase_flutter.dart <validate [--file-only]|run|build <target>> [flutter args]',
     );
     return 64;
   }
-  if (cliArgs.any(
-    (arg) =>
-        arg.startsWith('--dart-define-from-file') ||
-        defineNames.any((name) => arg.contains('--dart-define=$name=')),
-  )) {
+  final validateOnly = cliArgs.first == 'validate';
+  final fileOnly = cliArgs.contains('--file-only');
+  // IDE launch configurations read this same local JSON directly through
+  // --dart-define-from-file, so their preflight validates the file alone.
+  final env = fileOnly ? const <String, String>{} : suppliedEnvironment;
+  if ((validateOnly && cliArgs.skip(1).any((arg) => arg != '--file-only')) ||
+      (!validateOnly && fileOnly)) {
+    stderrSink.writeln('The --file-only option is supported only by the validate command.');
+    return 64;
+  }
+  if (hasProtectedSupabaseDefine(cliArgs)) {
     stderrSink.writeln(
       'Do not pass Supabase defines to this helper; it supplies them. '
       'Use the environment or ${SupabaseClientConfig.localDefinesFile}.',
@@ -170,7 +202,6 @@ Future<int> runTool(
     return 1;
   }
 
-  final args = flutterArguments(cliArgs, resolved.values);
   stdoutSink
     ..writeln('Supabase configuration:')
     ..writeln(
@@ -183,8 +214,11 @@ Future<int> runTool(
       '  SUPABASE_AUTH_REDIRECT_URL '
       '${resolved.values['SUPABASE_AUTH_REDIRECT_URL']!.isEmpty ? '(not set)' : resolved.values['SUPABASE_AUTH_REDIRECT_URL']} '
       '[${resolved.sources['SUPABASE_AUTH_REDIRECT_URL']}]',
-    )
-    ..writeln('> ${printable(args, key)}');
+    );
+  if (validateOnly) return 0;
+
+  final args = flutterArguments(cliArgs, resolved.values);
+  stdoutSink.writeln('> ${printable(args, key)}');
 
   try {
     final process = await Process.start(

@@ -6,8 +6,7 @@ import '../../state/session_scope.dart';
 import '../../widgets/detailstext1.dart';
 import '../../widgets/detailstext2.dart';
 
-/// Conversation thread backed by `GET /api/chats/:id` and
-/// `POST /api/chats/:id/messages`.
+/// Conversation thread backed by Supabase chat/message queries and RPCs.
 class ChatDetailsScreen extends StatefulWidget {
   final String chatId;
   final String userName;

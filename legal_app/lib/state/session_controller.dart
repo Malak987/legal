@@ -21,6 +21,12 @@ enum SessionStatus {
   /// A Supabase session exists but the profile could not be loaded. Protected
   /// screens stay closed until the session/profile can be verified.
   profileUnavailable,
+
+  /// A valid recovery callback is awaiting the user's new password.
+  passwordRecovery,
+
+  /// A configured recovery callback was rejected or expired.
+  recoveryLinkInvalid,
 }
 
 /// Owns the authentication lifecycle for the whole app.
@@ -30,12 +36,18 @@ enum SessionStatus {
 /// generation counter discards results from superseded operations, which is
 /// what stops a slow profile read from overwriting a newer sign-out.
 class SessionController extends ChangeNotifier {
-  SessionController({required AuthService auth, AppRepository? repository})
-      : _auth = auth,
-        _repository = repository;
+  SessionController({
+    required AuthService auth,
+    AppRepository? repository,
+    Stream<Uri>? recoveryLinkStream,
+  }) : _auth = auth,
+       _repository = repository,
+       _recoveryLinkStream = recoveryLinkStream;
 
   final AuthService _auth;
+  final Stream<Uri>? _recoveryLinkStream;
   AppRepository? _repository;
+  StreamSubscription<Uri>? _recoveryLinkSubscription;
 
   /// The auth service this session drives (its gateway and API client share
   /// one validated Supabase config). Exposed for wiring tests only.
@@ -44,8 +56,7 @@ class SessionController extends ChangeNotifier {
 
   /// Read access to the backend collections, sharing this session's
   /// [ApiClient] so every request uses the same base URL and token handling.
-  AppRepository get repository =>
-      _repository ??= AppRepository(_auth.api);
+  AppRepository get repository => _repository ??= AppRepository(_auth.api);
 
   StreamSubscription<AuthUser?>? _subscription;
   int _generation = 0;
@@ -102,6 +113,13 @@ class SessionController extends ChangeNotifier {
           notifyListeners();
         },
       );
+      final links = _recoveryLinkStream;
+      if (links != null) {
+        _recoveryLinkSubscription = links.listen(
+          (uri) => unawaited(_handleRecoveryLink(uri)),
+          onError: (Object _) {},
+        );
+      }
       unawaited(_restoreSession());
     } catch (error) {
       _restoring = false;
@@ -119,21 +137,82 @@ class SessionController extends ChangeNotifier {
       final user = await _auth.restoreSession();
       if (generation != _generation) return;
       _restoring = false;
-      await _onAuthStateChanged(user);
+      if (user != null && _auth.isPasswordRecovery) {
+        _enterPasswordRecovery(user);
+      } else {
+        await _onAuthStateChanged(user);
+      }
     } catch (error) {
       if (generation != _generation) return;
       _restoring = false;
       _user = _auth.currentUser;
       _profile = null;
-      _status = _user == null
-          ? SessionStatus.signedOut
-          : SessionStatus.profileUnavailable;
-      _error = _describe(error);
+      if (error is AuthException && error.code == 'invalid-recovery-link') {
+        _status = SessionStatus.recoveryLinkInvalid;
+        _error = error.message;
+      } else {
+        _status =
+            _user == null
+                ? SessionStatus.signedOut
+                : SessionStatus.profileUnavailable;
+        _error = _describe(error);
+      }
       notifyListeners();
     }
   }
 
+  Future<void> _handleRecoveryLink(Uri uri) async {
+    final generation = ++_generation;
+    _restoring = true;
+    _status = SessionStatus.resolving;
+    _error = null;
+    notifyListeners();
+    try {
+      final user = await _auth.restoreSession(callbackUri: uri);
+      if (generation != _generation) return;
+      _restoring = false;
+      if (user == null) {
+        // Ignore unrelated app links; they are not Supabase callbacks.
+        if (_user == null) _status = SessionStatus.signedOut;
+        notifyListeners();
+        return;
+      }
+      if (_auth.isPasswordRecovery) {
+        _enterPasswordRecovery(user);
+      } else {
+        await _onAuthStateChanged(user);
+      }
+    } catch (error) {
+      if (generation != _generation) return;
+      _restoring = false;
+      _user = null;
+      _profile = null;
+      _status = SessionStatus.recoveryLinkInvalid;
+      _error =
+          error is AuthException
+              ? error.message
+              : 'This password-reset link is invalid or has expired. Request a new link.';
+      notifyListeners();
+    }
+  }
+
+  void _enterPasswordRecovery(AuthUser user) {
+    _user = user;
+    _profile = null;
+    _status = SessionStatus.passwordRecovery;
+    _error = null;
+    notifyListeners();
+  }
+
   Future<void> _onAuthStateChanged(AuthUser? user) async {
+    // Native link delivery and the callback's auth-state event can reach this
+    // listener in either order. Never profile-load a recovery-only session.
+    if (user != null && _auth.isPasswordRecovery) {
+      _restoring = false;
+      _generation++;
+      _enterPasswordRecovery(user);
+      return;
+    }
     if (user != null && _explicitOperation) return;
     // The same account reported again (a token refresh, say) must not trigger
     // another profile read.
@@ -261,7 +340,9 @@ class SessionController extends ChangeNotifier {
       // available for a later profile retry. Confirmation-pending accounts have
       // no session and remain signed out.
       final currentUser = _auth.currentUser;
-      if (error is AuthException && error.accountCreated && currentUser != null) {
+      if (error is AuthException &&
+          error.accountCreated &&
+          currentUser != null) {
         _user = currentUser;
         _profile = null;
         _status = SessionStatus.profileUnavailable;
@@ -291,9 +372,10 @@ class SessionController extends ChangeNotifier {
       _error = null;
     } catch (error) {
       if (generation != _generation) return;
-      _status = _user == null
-          ? SessionStatus.signedOut
-          : SessionStatus.profileUnavailable;
+      _status =
+          _user == null
+              ? SessionStatus.signedOut
+              : SessionStatus.profileUnavailable;
       _error = _describe(error);
     } finally {
       // Only the operation that still owns the state clears the flags; a
@@ -324,7 +406,9 @@ class SessionController extends ChangeNotifier {
     );
     // The profile row is authoritative. If the role changed away from client,
     // close the session immediately rather than leaving the client UI signed in.
-    if (!updated.hasValidRole || !updated.isClient || updated.uid.trim().isEmpty) {
+    if (!updated.hasValidRole ||
+        !updated.isClient ||
+        updated.uid.trim().isEmpty) {
       await signOut();
       throw AuthException(
         'This app is available to client accounts only.',
@@ -412,6 +496,8 @@ class SessionController extends ChangeNotifier {
   void dispose() {
     _subscription?.cancel();
     _subscription = null;
+    _recoveryLinkSubscription?.cancel();
+    _recoveryLinkSubscription = null;
     // Also closes the shared HTTP client, so a rebuilt app does not leak
     // sockets.
     _auth.dispose();

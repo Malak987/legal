@@ -58,7 +58,7 @@ class FakeRequest {
 /// another.
 class FakeApiService implements ApiService {
   FakeApiService({this.result, Map<String, Object?>? resultsByPath})
-      : _resultsByPath = resultsByPath ?? const <String, Object?>{};
+    : _resultsByPath = resultsByPath ?? const <String, Object?>{};
 
   /// The value returned by every verb that has no entry in [resultsByPath].
   final Object? result;
@@ -81,9 +81,8 @@ class FakeApiService implements ApiService {
   final List<String> calls = <String>[];
 
   /// Requests matching [method] and [path], newest last.
-  List<FakeRequest> requestsFor(String method, String path) => requests
-      .where((r) => r.method == method && r.path == path)
-      .toList();
+  List<FakeRequest> requestsFor(String method, String path) =>
+      requests.where((r) => r.method == method && r.path == path).toList();
 
   /// The body of the most recent [method] [path] request, if any.
   Object? lastBodyFor(String method, String path) {
@@ -109,7 +108,12 @@ class FakeApiService implements ApiService {
     return result;
   }
 
-  void _record(String method, String path, Map<String, String> query, Object? body) {
+  void _record(
+    String method,
+    String path,
+    Map<String, String> query,
+    Object? body,
+  ) {
     calls.add('$method $path');
     requests.add(
       FakeRequest(
@@ -182,8 +186,9 @@ class FakeApiService implements ApiService {
       final fresh = await provider();
       if (fresh != null && fresh.isNotEmpty) effective = fresh;
     }
-    lastAuthHeader =
-        effective == null || effective.isEmpty ? null : 'Bearer $effective';
+    lastAuthHeader = effective == null || effective.isEmpty
+        ? null
+        : 'Bearer $effective';
   }
 
   @override
@@ -229,6 +234,12 @@ class FakeAuthService implements AuthService {
   int signOutCalls = 0;
   int freshTokenCalls = 0;
   int resetPasswordCalls = 0;
+  int recoveryCallbackCalls = 0;
+  int recoveryUpdateCalls = 0;
+  int clearRecoveryCalls = 0;
+  RecoveryCallbackResult recoveryResult = const RecoveryCallbackResult.none();
+  Object? recoveryUpdateError;
+  String? lastRecoveryPassword;
   String? lastResetEmail;
   String? lastEmail;
   String? lastPassword;
@@ -278,6 +289,22 @@ class FakeAuthService implements AuthService {
   }
 
   @override
+  Future<RecoveryCallbackResult> restoreRecoveryCallback(Uri? uri) async {
+    recoveryCallbackCalls++;
+    return recoveryResult;
+  }
+
+  @override
+  Future<void> updatePasswordFromRecovery(String password) async {
+    recoveryUpdateCalls++;
+    lastRecoveryPassword = password;
+    if (recoveryUpdateError != null) throw recoveryUpdateError!;
+  }
+
+  @override
+  void clearRecoveryState() => clearRecoveryCalls++;
+
+  @override
   Future<void> signOut() async {
     signOutCalls++;
     api.token = null;
@@ -291,36 +318,36 @@ class FakeAuthService implements AuthService {
 
 /// A canonical administrator session used across the tests.
 AdminSession adminSession() => AdminSession(
-      uid: 'admin-uid',
-      email: 'admin@legalapp.com',
-      name: 'App Administrator',
-      role: 'admin',
-      idToken: 'fake-id-token',
-    );
+  uid: 'admin-uid',
+  email: 'admin@legalapp.com',
+  name: 'App Administrator',
+  role: 'admin',
+  idToken: 'fake-id-token',
+);
 
 /// A server-verified lawyer session for read-only workspace tests.
 AdminSession lawyerSession() => AdminSession(
-      uid: 'lawyer-001',
-      email: 'lawyer@legalapp.com',
-      name: 'Test Lawyer',
-      role: 'lawyer',
-      idToken: 'fake-lawyer-id-token',
-    );
+  uid: 'lawyer-001',
+  email: 'lawyer@legalapp.com',
+  name: 'Test Lawyer',
+  role: 'lawyer',
+  idToken: 'fake-lawyer-id-token',
+);
 
 /// A separately provisioned owner session for admin-shell tests.
 AdminSession ownerSession() => AdminSession(
-      uid: 'owner-001',
-      email: 'owner@legalapp.com',
-      name: 'Test Owner',
-      role: 'owner',
-      idToken: 'fake-owner-id-token',
-    );
+  uid: 'owner-001',
+  email: 'owner@legalapp.com',
+  name: 'Test Owner',
+  role: 'owner',
+  idToken: 'fake-owner-id-token',
+);
 
 /// A session for an account that must never reach the internal panel.
 AdminSession clientSession() => AdminSession(
-      uid: 'client-001',
-      email: 'client@example.com',
-      name: 'James Powell',
-      role: 'client',
-      idToken: 'fake-id-token',
-    );
+  uid: 'client-001',
+  email: 'client@example.com',
+  name: 'James Powell',
+  role: 'client',
+  idToken: 'fake-id-token',
+);

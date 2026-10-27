@@ -14,7 +14,8 @@
  */
 
 import assert from 'node:assert/strict';
-import admin from 'firebase-admin';
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 import net from 'node:net';
 import { describe, it } from 'node:test';
 
@@ -176,13 +177,12 @@ describe(
         `Refusing non-local Firestore host: ${firestoreHostname}`,
       );
 
-      const firestoreApp = admin.initializeApp(
+      const firestoreApp = initializeApp(
         { projectId: PROJECT_ID },
         `supabase-migration-check-${Date.now()}`,
       );
       try {
-        const profile = await admin
-          .firestore(firestoreApp)
+        const profile = await getFirestore(firestoreApp)
           .collection('users')
           .doc(authUser.localId)
           .get();

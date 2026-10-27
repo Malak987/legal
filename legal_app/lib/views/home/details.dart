@@ -162,8 +162,8 @@ class _LegalServiceDetailsScreenState extends State<LegalServiceDetailsScreen> {
       } else {
         var newFavId = await repo.addFavorite(lawyerId);
         if (newFavId == null) {
-          // The legacy API may not return the existing Firestore row from
-          // every response shape, so resolve it through the owner-scoped list.
+          // The Supabase RPC may omit the favorite ID in a compatible response;
+          // resolve it through the caller-scoped favorite list instead.
           final rows = await repo.fetchFavorites(repo.currentUid ?? '');
           for (final row in rows) {
             if (row['lawyerId']?.toString() == lawyerId) {

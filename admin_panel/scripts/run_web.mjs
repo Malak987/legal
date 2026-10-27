@@ -16,11 +16,19 @@ import {
   flutterEnv,
   loadSupabaseDefines,
   printableCommand,
+  rejectUnsafeFlutterConfigArgs,
   reportIssues,
   validateSupabaseDefines,
 } from './supabase_env.mjs';
 
 const extraArgs = process.argv.slice(2);
+try {
+  rejectUnsafeFlutterConfigArgs(extraArgs);
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
+
 let config;
 try {
   config = loadSupabaseDefines();

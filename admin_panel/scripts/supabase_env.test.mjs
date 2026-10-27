@@ -56,6 +56,23 @@ test('messages never include the key value', () => {
   }
 });
 
+test('local files containing server-only fields are rejected without exposing values', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'admin-cfg-secret-'));
+  const marker = 'sb_secret_private_TESTONLY_000000';
+  writeFileSync(
+    join(dir, 'supabase.local.json'),
+    JSON.stringify({ SUPABASE_ANON_KEY: KEY, SUPABASE_SERVICE_ROLE_KEY: marker }),
+  );
+  assert.throws(
+    () => loadSupabaseDefines({ env: {}, adminDir: dir }),
+    (error) => {
+      assert.match(error.message, /server-only Supabase field names/);
+      assert.ok(!error.message.includes(marker));
+      return true;
+    },
+  );
+});
+
 test('environment wins over the local file; URL falls back to the project', () => {
   const dir = mkdtempSync(join(tmpdir(), 'admin-cfg-'));
   assert.equal(loadSupabaseDefines({ env: {}, adminDir: dir }).defines.SUPABASE_URL, DEFAULT_SUPABASE_URL);
@@ -88,7 +105,7 @@ function sandbox() {
     `#!/usr/bin/env node
 const fs = require('fs'); const path = require('path');
 fs.writeFileSync(path.join(process.cwd(), 'flutter-args.json'), JSON.stringify({
-  argv: process.argv.slice(2), serviceRoleLeaked: 'SUPABASE_SERVICE_ROLE_KEY' in process.env }));
+  argv: process.argv.slice(2), serverOnlyLeaked: ['SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY'].some((name) => name in process.env) }));
 const out = process.argv.indexOf('--output');
 if (process.argv[2] === 'build' && out > 0) {
   const dir = path.join(process.cwd(), process.argv[out + 1]); fs.mkdirSync(dir, { recursive: true });
@@ -114,13 +131,17 @@ function runScript(box, script, { env = {}, args = [] } = {}) {
 test('build_web passes the defines, strips server-only env and never prints the key', () => {
   const box = sandbox();
   const r = runScript(box, 'build_web.mjs', {
-    env: { SUPABASE_ANON_KEY: KEY, SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_should_not_leak' },
+    env: {
+      SUPABASE_ANON_KEY: KEY,
+      SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_should_not_leak',
+      SUPABASE_SECRET_KEY: 'test-only-sentinel-not-a-key',
+    },
   });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(r.flutter.argv.slice(0, 3), ['build', 'web', '--release']);
   assert.ok(r.flutter.argv.includes(`--dart-define=SUPABASE_URL=${DEFAULT_SUPABASE_URL}`));
   assert.ok(r.flutter.argv.includes(`--dart-define=SUPABASE_ANON_KEY=${KEY}`));
-  assert.equal(r.flutter.serviceRoleLeaked, false);
+  assert.equal(r.flutter.serverOnlyLeaked, false);
   assert.ok(!r.stdout.includes(KEY) && !r.stderr.includes(KEY), 'key value printed');
   assert.match(r.stdout, /Verified: build\/web\/main\.dart\.js contains/);
 });
@@ -132,6 +153,22 @@ test('build_web fails before invoking flutter when the key is missing or a place
     assert.equal(r.status, 1);
     assert.equal(r.flutter, null, 'flutter must not run');
     assert.match(r.stderr, /Supabase configuration is invalid/);
+  }
+});
+
+test('run/build reject extra config-file and Supabase-define overrides before Flutter', () => {
+  const cases = [
+    ['run_web.mjs', ['--dart-define=SUPABASE_SECRET_KEY=sb_secret_PRIVATE_TESTONLY_0000']],
+    ['build_web.mjs', ['--dart-define', 'SUPABASE_SERVICE_ROLE_KEY=sb_secret_PRIVATE_TESTONLY_0000']],
+    ['build_web.mjs', ['--dart-define-from-file=other.json']],
+  ];
+  for (const [script, args] of cases) {
+    const box = sandbox();
+    const r = runScript(box, script, { env: { SUPABASE_ANON_KEY: KEY }, args });
+    assert.equal(r.status, 1);
+    assert.equal(r.flutter, null, 'unsafe args must stop before Flutter');
+    assert.ok(!r.stderr.includes('sb_secret_PRIVATE_TESTONLY_0000'));
+    assert.match(r.stderr, /Do not pass|Do not override/);
   }
 });
 

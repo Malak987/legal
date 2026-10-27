@@ -8,7 +8,7 @@ import '../../widgets/custombtn.dart';
 import '../../widgets/customtextfield.dart';
 import '../../widgets/detailstext1.dart';
 
-/// Changes the signed-in account's password through Firebase Authentication.
+/// Changes the signed-in account's password through Supabase Auth.
 ///
 /// This screen used to be three uncontrolled text fields whose button had an
 /// empty `onTap`: it looked like a working feature and did nothing. It now
@@ -18,7 +18,7 @@ import '../../widgets/detailstext1.dart';
 class ChangePassword extends StatefulWidget {
   const ChangePassword({super.key});
 
-  /// Firebase rejects anything shorter, and the sign-up form uses the same
+  /// Supabase Auth rejects anything shorter, and the sign-up form uses the same
   /// floor, so the two cannot disagree.
   static const int minPasswordLength = 6;
 
@@ -42,7 +42,7 @@ class _ChangePasswordState extends State<ChangePassword> {
     super.dispose();
   }
 
-  /// Client-side checks only. The authoritative rules live in Firebase, and a
+  /// Client-side checks only. The authoritative authentication rules live in Supabase, and a
   /// rejection from there is surfaced through [AuthException.message].
   String? _validate() {
     final current = _current.text;
@@ -79,7 +79,7 @@ class _ChangePasswordState extends State<ChangePassword> {
         newPassword: _next.text,
       );
       if (!mounted) return;
-      // The account stays signed in: Firebase re-authenticated the same user.
+      // The account stays signed in: Supabase Auth re-authenticated the same user.
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Your password has been changed.')),
       );

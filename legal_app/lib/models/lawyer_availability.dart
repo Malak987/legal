@@ -67,7 +67,7 @@ class LawyerAvailability {
     return hours * 60 + minutes;
   }
 
-  /// `'HH:MM'` — what `POST /api/bookings` expects.
+  /// `'HH:MM'` — the format accepted by the booking RPC.
   static String apiTime(int minutes) {
     final hours = (minutes ~/ 60).toString().padLeft(2, '0');
     final rest = (minutes % 60).toString().padLeft(2, '0');

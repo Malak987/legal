@@ -8,9 +8,8 @@ import '../../widgets/custombtn.dart';
 import '../../widgets/detailstext1.dart';
 import '../../widgets/detailstext2.dart';
 
-/// Subscription plans and membership backed by `GET /api/plans`,
-/// `GET /api/subscriptions`, `POST /api/subscriptions`, and
-/// `PUT /api/subscriptions/:id`.
+/// Subscription plans and membership backed by Supabase plan queries and
+/// caller-authorized subscription RPCs.
 class SubscriptionScreen extends StatefulWidget {
   const SubscriptionScreen({super.key});
 

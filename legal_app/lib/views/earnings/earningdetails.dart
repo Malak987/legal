@@ -7,7 +7,7 @@ import '../../widgets/customapp_bar.dart';
 import '../../widgets/detailstext1.dart';
 import '../../widgets/detailstext2.dart';
 
-/// Detailed earnings breakdown backed by `GET /api/earnings/:userId`.
+/// Detailed earnings breakdown backed by the caller-authorized Supabase query.
 class EarningDetailsScreen extends StatefulWidget {
   final Map<String, dynamic>? initialData;
 

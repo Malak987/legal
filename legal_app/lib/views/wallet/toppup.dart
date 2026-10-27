@@ -9,7 +9,7 @@ import '../../widgets/customtextfield.dart';
 import '../../widgets/detailstext1.dart';
 import '../../widgets/detailstext2.dart';
 
-/// Submits a wallet transaction through `POST /api/wallet/transactions`.
+/// Submits a wallet transaction through the authenticated Supabase wallet RPC.
 ///
 /// Does not fake a client-side balance update: the server enforces that wallet
 /// credits require administrator authorization (`403 Only admins can credit

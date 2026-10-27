@@ -276,7 +276,7 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 }
 
-/// Dialog for editing a user's profile (`PUT /api/users/:id`).
+/// Dialog for editing an application profile through Supabase.
 class UserEditDialog extends StatefulWidget {
   const UserEditDialog({super.key, required this.user});
   final AppUser user;

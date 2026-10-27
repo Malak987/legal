@@ -16,17 +16,22 @@ class SplashScreen extends StatefulWidget {
   SplashScreenState createState() => SplashScreenState();
 }
 
-class SplashScreenState extends State<SplashScreen> with TickerProviderStateMixin {
+class SplashScreenState extends State<SplashScreen>
+    with TickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _scaleAnimation;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 2));
-    _scaleAnimation = Tween<double>(begin: 0.9, end: 1.1).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
     );
+    _scaleAnimation = Tween<double>(
+      begin: 0.9,
+      end: 1.1,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
     _controller.repeat(reverse: true);
 
     _bootstrap();
@@ -46,16 +51,20 @@ class SplashScreenState extends State<SplashScreen> with TickerProviderStateMixi
     await _awaitResolution(session);
     if (!mounted) return;
 
-    // A Firebase session that exists but whose profile could not be loaded is
+    // A Supabase session that exists but whose profile could not be loaded is
     // usually a transient failure (offline start, backend restart). Retrying
     // once here is the difference between "signed in" and being dropped on the
     // onboarding screen for no app-level reason.
     await _recoverProfileOnce(session);
     if (!mounted) return;
 
-    final Widget destination = session.isPasswordRecovery
-        ? const ResetPasswordScreen()
-        : startScreenFor(session.status) == StartScreen.home
+    final recoveryStatus =
+        session.status == SessionStatus.passwordRecovery ||
+        session.status == SessionStatus.recoveryLinkInvalid;
+    final Widget destination =
+        recoveryStatus
+            ? const ResetPasswordScreen()
+            : startScreenFor(session.status) == StartScreen.home
             ? HomePage()
             : OnboardingScreen();
     Navigator.pushReplacement(
@@ -66,7 +75,7 @@ class SplashScreenState extends State<SplashScreen> with TickerProviderStateMixi
 
   /// One bounded recovery attempt for a session whose profile failed to load.
   ///
-  /// Skipped entirely when there is no Firebase session, and never retried in a
+  /// Skipped entirely when there is no Supabase session, and never retried in a
   /// loop: a second failure falls through to the unauthenticated flow, which
   /// still lets the user sign in again.
   Future<void> _recoverProfileOnce(SessionController session) async {
@@ -76,7 +85,7 @@ class SplashScreenState extends State<SplashScreen> with TickerProviderStateMixi
 
   /// Waits (briefly) for auth state to resolve.
   ///
-  /// Bounded so a Firebase that never answers cannot trap the user on the
+  /// Bounded so a Supabase request that never answers cannot trap the user on the
   /// splash screen: after the timeout the app falls through to the
   /// unauthenticated flow, which is the safe default.
   Future<void> _awaitResolution(SessionController session) async {

@@ -7,7 +7,7 @@ import '../../state/session_scope.dart';
 import '../../widgets/customapp_bar.dart';
 import '../../widgets/detailstext1.dart';
 
-/// User tasks backed by `GET / POST / PUT / DELETE /api/tasks`.
+/// User tasks backed by Supabase `tasks` queries and authenticated task RPCs.
 class TasksScreen extends StatefulWidget {
   const TasksScreen({super.key});
 

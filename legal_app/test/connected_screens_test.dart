@@ -40,7 +40,7 @@ Future<SessionController> _pumpSignedIn(
   WidgetTester tester,
   Widget child, {
   required Future<http.Response> Function(http.Request request, int attempt)
-      handler,
+  handler,
   String role = 'client',
 }) async {
   final gateway = FakeAuthGateway();
@@ -62,10 +62,7 @@ Future<SessionController> _pumpSignedIn(
   await _drain(tester);
 
   await tester.pumpWidget(
-    SessionScope(
-      controller: session,
-      child: MaterialApp(home: child),
-    ),
+    SessionScope(controller: session, child: MaterialApp(home: child)),
   );
   await _drain(tester);
   return session;
@@ -75,16 +72,16 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('CaseDetailsScreen', () {
-    testWidgets('loads a caller-authorized case by its stable ID',
-        (tester) async {
+    testWidgets('loads a caller-authorized case by its stable ID', (
+      tester,
+    ) async {
       final requests = <String>[];
       await _pumpSignedIn(
         tester,
         const CaseDetailsScreen(caseId: 'case-1'),
         handler: (req, _) async {
           requests.add('${req.method} ${req.url.path}');
-          if (req.url.path.contains('/cases') &&
-              req.method == 'GET') {
+          if (req.url.path.contains('/cases') && req.method == 'GET') {
             return jsonOk({
               'id': 'case-1',
               'title': 'Contract dispute',
@@ -105,15 +102,19 @@ void main() {
       expect(find.textContaining('Contract dispute'), findsOneWidget);
       expect(find.textContaining('Commercial Law'), findsOneWidget);
       expect(find.textContaining('Mona Fahmy'), findsOneWidget);
-      expect(find.textContaining('Review disputed termination terms.'), findsOneWidget);
+      expect(
+        find.textContaining('Review disputed termination terms.'),
+        findsOneWidget,
+      );
       expect(find.text('Evidence'), findsNothing);
       expect(find.text('Last Hearing'), findsNothing);
     });
   });
 
   group('Booking history screens', () {
-    testWidgets('OrdersHistory builds sections from GET /api/bookings',
-        (tester) async {
+    testWidgets('OrdersHistory builds sections from GET /api/bookings', (
+      tester,
+    ) async {
       await _pumpSignedIn(
         tester,
         const OrdersHistory(),
@@ -151,57 +152,59 @@ void main() {
       expect(find.text('Karim Nassar'), findsOneWidget);
     });
 
-    testWidgets('ActiveOrders cancels an existing booking via PUT /api/bookings/:id',
-        (tester) async {
-      var status = 'Pending';
-      final calls = <String>[];
-      await _pumpSignedIn(
-        tester,
-        const ActiveOrders(),
-        handler: (req, _) async {
-          calls.add('${req.method} ${req.url.path}');
-          if (req.url.path.contains('/bookings') && req.method == 'GET') {
-            return jsonOk({
-              'items': [
-                {
-                  'id': 'booking-1',
-                  'lawyerName': 'Mona Fahmy',
-                  'date': '2026-11-10',
-                  'time': '09:00',
-                  'hours': 1,
-                  'totalPrice': 150,
-                  'status': status,
-                },
-              ],
-              'total': 1,
-            });
-          }
-          if (req.url.path.contains('/bookings') &&
-              req.method == 'PUT') {
-            final body = jsonDecode(req.body) as Map<String, dynamic>;
-            status = body['status']?.toString() ?? status;
-            return jsonOk({'id': 'booking-1', 'status': status});
-          }
-          return jsonOk(<String, dynamic>{});
-        },
-      );
+    testWidgets(
+      'ActiveOrders cancels an existing booking through the Supabase RPC',
+      (tester) async {
+        var status = 'Pending';
+        final calls = <String>[];
+        await _pumpSignedIn(
+          tester,
+          const ActiveOrders(),
+          handler: (req, _) async {
+            calls.add('${req.method} ${req.url.path}');
+            if (req.url.path.contains('/bookings') && req.method == 'GET') {
+              return jsonOk({
+                'items': [
+                  {
+                    'id': 'booking-1',
+                    'lawyerName': 'Mona Fahmy',
+                    'date': '2026-11-10',
+                    'time': '09:00',
+                    'hours': 1,
+                    'totalPrice': 150,
+                    'status': status,
+                  },
+                ],
+                'total': 1,
+              });
+            }
+            if (req.url.path.endsWith('/rpc/rpc_cancel_booking') &&
+                req.method == 'POST') {
+              status = 'Cancelled';
+              return jsonOk({'id': 'booking-1', 'status': status});
+            }
+            return jsonOk(<String, dynamic>{});
+          },
+        );
 
-      expect(find.textContaining('Mona Fahmy'), findsOneWidget);
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Cancel booking'));
-      await tester.pumpAndSettle();
-      await _drain(tester);
+        expect(find.textContaining('Mona Fahmy'), findsOneWidget);
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Cancel booking'));
+        await tester.pumpAndSettle();
+        await _drain(tester);
 
-      expect(status, 'Cancelled');
-      expect(calls, contains('PUT /api/bookings/booking-1'));
-      expect(find.textContaining('No active bookings'), findsOneWidget);
-    });
+        expect(status, 'Cancelled');
+        expect(calls, contains('POST /rest/v1/rpc/rpc_cancel_booking'));
+        expect(find.textContaining('No active bookings'), findsOneWidget);
+      },
+    );
   });
 
   group('TasksScreen', () {
-    testWidgets('loads tasks from GET /api/tasks and creates a new task',
-        (tester) async {
+    testWidgets('loads tasks from GET /api/tasks and creates a new task', (
+      tester,
+    ) async {
       final createdBodies = <Map<String, dynamic>>[];
       await _pumpSignedIn(
         tester,
@@ -250,8 +253,9 @@ void main() {
   });
 
   group('ChatScreen and ChatDetailsScreen', () {
-    testWidgets('ChatScreen lists conversations from GET /api/chats',
-        (tester) async {
+    testWidgets('ChatScreen lists conversations from GET /api/chats', (
+      tester,
+    ) async {
       await _pumpSignedIn(
         tester,
         const ChatScreen(),
@@ -274,72 +278,89 @@ void main() {
       );
 
       expect(find.text('Counsel Karim'), findsOneWidget);
-      expect(
-        find.text('Please bring the signed affidavit.'),
-        findsOneWidget,
-      );
+      expect(find.text('Please bring the signed affidavit.'), findsOneWidget);
     });
 
     testWidgets(
-        'ChatDetailsScreen loads messages and posts replies via POST /api/chats/:id/messages',
-        (tester) async {
-      final sentBodies = <Map<String, dynamic>>[];
-      await _pumpSignedIn(
-        tester,
-        const ChatDetailsScreen(chatId: 'chat-1', userName: 'Counsel Karim'),
-        handler: (req, _) async {
-          if (req.url.path.endsWith('/chats/chat-1') && req.method == 'GET') {
-            return jsonOk({
-              'id': 'chat-1',
-              'participantNames': {
-                'uid-1': 'Sara Ali',
-                'lawyer-u1': 'Counsel Karim',
-              },
-              'messages': [
-                {
-                  'id': 'm-1',
-                  'senderId': 'lawyer-u1',
-                  'senderName': 'Counsel Karim',
-                  'text': 'Hello Sara, I reviewed your case.',
+      'ChatDetailsScreen loads messages and posts replies via POST /api/chats/:id/messages',
+      (tester) async {
+        final sentBodies = <Map<String, dynamic>>[];
+        await _pumpSignedIn(
+          tester,
+          const ChatDetailsScreen(chatId: 'chat-1', userName: 'Counsel Karim'),
+          handler: (req, _) async {
+            if (req.url.path.endsWith('/chats') && req.method == 'GET') {
+              return jsonOk({
+                'id': 'chat-1',
+                'participants': ['uid-1', 'lawyer-u1'],
+                'participant_names': {
+                  'uid-1': 'Sara Ali',
+                  'lawyer-u1': 'Counsel Karim',
                 },
-              ],
-            });
-          }
-          if (req.url.path.endsWith('/chats/chat-1/messages') &&
-              req.method == 'POST') {
-            final body = jsonDecode(req.body) as Map<String, dynamic>;
-            sentBodies.add(body);
-            return jsonOk({'id': 'm-2', ...body}, status: 201);
-          }
-          return jsonOk(<String, dynamic>{});
-        },
-      );
+                'last_message': 'Hello Sara, I reviewed your case.',
+              });
+            }
+            if (req.url.path.endsWith('/chat_messages') &&
+                req.method == 'GET') {
+              return jsonOk({
+                'items': [
+                  {
+                    'id': 'm-1',
+                    'chat_id': 'chat-1',
+                    'sender_id': 'lawyer-u1',
+                    'sender_name': 'Counsel Karim',
+                    'text': 'Hello Sara, I reviewed your case.',
+                  },
+                ],
+                'total': 1,
+              });
+            }
+            if (req.url.path.endsWith('/rpc/rpc_chat_send_message') &&
+                req.method == 'POST') {
+              final body = jsonDecode(req.body) as Map<String, dynamic>;
+              sentBodies.add(body);
+              return jsonOk({
+                'id': 'm-2',
+                'chat_id': body['p_chat_id'],
+                'sender_id': 'uid-1',
+                'sender_name': 'Sara Ali',
+                'text': body['p_text'],
+              });
+            }
+            return jsonOk(<String, dynamic>{});
+          },
+        );
 
-      expect(find.textContaining('Hello Sara, I reviewed your case.'), findsOneWidget);
+        expect(
+          find.textContaining('Hello Sara, I reviewed your case.'),
+          findsOneWidget,
+        );
 
-      await tester.enterText(
-        find.byType(TextField),
-        'Thank you, sending the documents now.',
-      );
-      await tester.tap(find.byIcon(Icons.send));
-      await _drain(tester);
+        await tester.enterText(
+          find.byType(TextField),
+          'Thank you, sending the documents now.',
+        );
+        await tester.tap(find.byIcon(Icons.send));
+        await _drain(tester);
 
-      expect(sentBodies, hasLength(1));
-      expect(
-        sentBodies.single['text'],
-        'Thank you, sending the documents now.',
-      );
-    });
+        expect(sentBodies, hasLength(1));
+        expect(
+          sentBodies.single['p_text'],
+          'Thank you, sending the documents now.',
+        );
+      },
+    );
   });
 
   group('ReviewsScreen and WriteReviewScreen', () {
-    testWidgets('ReviewsScreen renders live reviews and average rating',
-        (tester) async {
+    testWidgets('ReviewsScreen renders live reviews and average rating', (
+      tester,
+    ) async {
       await _pumpSignedIn(
         tester,
         const ReviewsScreen(lawyerId: 'lawyer-1', lawyerName: 'Mona Fahmy'),
         handler: (req, _) async {
-          if (req.url.path.endsWith('/reviews') && req.method == 'GET') {
+          if (req.url.path.endsWith('/public_reviews') && req.method == 'GET') {
             return jsonOk({
               'items': [
                 {
@@ -369,59 +390,79 @@ void main() {
       expect(find.text('5.0'), findsOneWidget);
     });
 
-    testWidgets('WriteReviewScreen submits rating and comment to POST /api/reviews',
-        (tester) async {
-      final submitted = <Map<String, dynamic>>[];
-      await _pumpSignedIn(
-        tester,
-        const WriteReviewScreen(
-          initialLawyerId: 'lawyer-1',
-          initialLawyerName: 'Mona Fahmy',
-        ),
-        handler: (req, _) async {
-          if (req.url.path.endsWith('/reviews') && req.method == 'POST') {
-            final body = jsonDecode(req.body) as Map<String, dynamic>;
-            submitted.add(body);
-            return jsonOk({'id': 'rev-new', ...body}, status: 201);
-          }
-          return jsonOk(<String, dynamic>{});
-        },
-      );
+    testWidgets(
+      'WriteReviewScreen submits rating and comment through the Supabase review RPC',
+      (tester) async {
+        final submitted = <Map<String, dynamic>>[];
+        await _pumpSignedIn(
+          tester,
+          const WriteReviewScreen(
+            initialLawyerId: 'lawyer-1',
+            initialLawyerName: 'Mona Fahmy',
+          ),
+          handler: (req, _) async {
+            if (req.url.path.endsWith('/rpc/rpc_review_submit') &&
+                req.method == 'POST') {
+              final body = jsonDecode(req.body) as Map<String, dynamic>;
+              submitted.add(body);
+              return jsonOk({'id': 'rev-new', ...body}, status: 201);
+            }
+            return jsonOk(<String, dynamic>{});
+          },
+        );
 
-      await tester.enterText(
-        find.byType(TextField),
-        'Great legal advice on our contract.',
-      );
-      await tester.tap(find.text('Submit Review'));
-      await _drain(tester);
+        await tester.enterText(
+          find.byType(TextField),
+          'Great legal advice on our contract.',
+        );
+        await tester.tap(find.text('Submit Review'));
+        await _drain(tester);
 
-      expect(submitted, hasLength(1));
-      expect(submitted.single['lawyerId'], 'lawyer-1');
-      expect(submitted.single['rating'], 5.0);
-      expect(submitted.single['comment'], 'Great legal advice on our contract.');
-    });
+        expect(submitted, hasLength(1));
+        expect(submitted.single['p_lawyer_id'], 'lawyer-1');
+        expect(submitted.single['p_rating'], 5.0);
+        expect(
+          submitted.single['p_comment'],
+          'Great legal advice on our contract.',
+        );
+      },
+    );
   });
 
   group('WalletScreen and TopUpScreen', () {
-    testWidgets('WalletScreen renders live balance and transactions',
-        (tester) async {
+    testWidgets('WalletScreen renders live balance and transactions', (
+      tester,
+    ) async {
       await _pumpSignedIn(
         tester,
         const WalletScreen(),
         handler: (req, _) async {
-          if (req.url.path.endsWith('/wallet/uid-1') && req.method == 'GET') {
+          if (req.url.path.endsWith('/wallets') && req.method == 'GET') {
             return jsonOk({
-              'id': 'uid-1',
-              'userId': 'uid-1',
-              'balance': 340.5,
-              'transactions': [
+              'items': [
+                {
+                  'id': 'wallet-1',
+                  'user_id': 'uid-1',
+                  'balance': 340.5,
+                  'currency': 'USD',
+                },
+              ],
+              'total': 1,
+            });
+          }
+          if (req.url.path.endsWith('/wallet_transactions') &&
+              req.method == 'GET') {
+            return jsonOk({
+              'items': [
                 {
                   'id': 'tx-1',
+                  'user_id': 'uid-1',
                   'type': 'debit',
                   'amount': 50,
                   'description': 'Retainer payment',
                 },
               ],
+              'total': 1,
             });
           }
           return jsonOk(<String, dynamic>{});
@@ -434,81 +475,85 @@ void main() {
     });
 
     testWidgets(
-        'TopUpScreen surfaces server 403 error on client credit attempt without faking success',
-        (tester) async {
-      var callbackCalled = false;
-      await _pumpSignedIn(
-        tester,
-        TopUpScreen(onTopUp: (_) => callbackCalled = true),
-        handler: (req, _) async {
-          if (req.url.path.endsWith('/wallet/transactions') &&
-              req.method == 'POST') {
-            return jsonError(403, 'Only admins can credit wallets');
-          }
-          return jsonOk(<String, dynamic>{});
-        },
-      );
+      'TopUpScreen surfaces server 403 error on client credit attempt without faking success',
+      (tester) async {
+        var callbackCalled = false;
+        await _pumpSignedIn(
+          tester,
+          TopUpScreen(onTopUp: (_) => callbackCalled = true),
+          handler: (req, _) async {
+            if (req.url.path.endsWith('/rpc/rpc_wallet_mutate') &&
+                req.method == 'POST') {
+              return jsonError(403, 'Only admins can credit wallets');
+            }
+            return jsonOk(<String, dynamic>{});
+          },
+        );
 
-      await tester.enterText(find.byType(TextField).first, '100');
-      await tester.tap(find.text('Submit Transaction'));
-      await _drain(tester);
+        await tester.enterText(find.byType(TextField).first, '100');
+        await tester.tap(find.text('Submit Transaction'));
+        await _drain(tester);
 
-      expect(callbackCalled, isFalse);
-      expect(find.textContaining('Only admins can credit wallets'), findsWidgets);
-    });
+        expect(callbackCalled, isFalse);
+        expect(
+          find.textContaining('Only admins can credit wallets'),
+          findsWidgets,
+        );
+      },
+    );
   });
 
   group('SubscriptionScreen', () {
     testWidgets(
-        'loads plans from GET /api/plans and submits subscription request via POST /api/subscriptions',
-        (tester) async {
-      final subPosts = <Map<String, dynamic>>[];
-      await _pumpSignedIn(
-        tester,
-        const SubscriptionScreen(),
-        handler: (req, _) async {
-          if (req.url.path.endsWith('/plans') && req.method == 'GET') {
-            return jsonOk({
-              'items': [
-                {
-                  'id': 'plan-pro',
-                  'title': 'Professional Counsel',
-                  'price': '\$49/mo',
-                  'features': ['Unlimited Case Tracking', 'Priority Booking'],
-                },
-              ],
-              'total': 1,
-            });
-          }
-          if (req.url.path.endsWith('/subscriptions') && req.method == 'GET') {
-            return jsonOk({'items': const <Object>[], 'total': 0});
-          }
-          if (req.url.path.endsWith('/subscriptions') && req.method == 'POST') {
-            final body = jsonDecode(req.body) as Map<String, dynamic>;
-            subPosts.add(body);
-            return jsonOk(
-              {
+      'loads plans from Supabase and submits through the subscription RPC',
+      (tester) async {
+        final subPosts = <Map<String, dynamic>>[];
+        await _pumpSignedIn(
+          tester,
+          const SubscriptionScreen(),
+          handler: (req, _) async {
+            if (req.url.path.endsWith('/plans') && req.method == 'GET') {
+              return jsonOk({
+                'items': [
+                  {
+                    'id': 'plan-pro',
+                    'title': 'Professional Counsel',
+                    'price': '\$49/mo',
+                    'features': ['Unlimited Case Tracking', 'Priority Booking'],
+                  },
+                ],
+                'total': 1,
+              });
+            }
+            if (req.url.path.endsWith('/subscriptions') &&
+                req.method == 'GET') {
+              return jsonOk({'items': const <Object>[], 'total': 0});
+            }
+            if (req.url.path.endsWith('/rpc/rpc_subscription_create') &&
+                req.method == 'POST') {
+              final body = jsonDecode(req.body) as Map<String, dynamic>;
+              subPosts.add(body);
+              return jsonOk({
                 'id': 'sub-1',
-                'planId': body['planId'],
+                'plan_id': body['p_plan_id'],
                 'planTitle': 'Professional Counsel',
                 'status': 'Pending',
-              },
-              status: 201,
-            );
-          }
-          return jsonOk(<String, dynamic>{});
-        },
-      );
+              }, status: 201);
+            }
+            return jsonOk(<String, dynamic>{});
+          },
+        );
 
-      expect(find.text('Professional Counsel'), findsOneWidget);
-      expect(find.text('\$49/mo'), findsOneWidget);
+        expect(find.text('Professional Counsel'), findsOneWidget);
+        expect(find.text('\$49/mo'), findsOneWidget);
 
-      await tester.tap(find.text('Subscribe to Professional Counsel'));
-      await _drain(tester);
+        await tester.tap(find.text('Subscribe to Professional Counsel'));
+        await _drain(tester);
 
-      expect(subPosts, hasLength(1));
-      expect(subPosts.single['planId'], 'plan-pro');
-    });
+        expect(subPosts, hasLength(1));
+        expect(subPosts.single['p_plan_id'], 'plan-pro');
+      },
+    );
   });
 
   group('EarningsScreen', () {
@@ -518,19 +563,27 @@ void main() {
         const EarningsScreen(),
         role: 'lawyer',
         handler: (req, _) async {
-          if (req.url.path.endsWith('/earnings/uid-1') && req.method == 'GET') {
+          if (req.url.path.endsWith('/earnings') && req.method == 'GET') {
             return jsonOk({
-              'totalEarnings': 1250,
-              'pendingPayout': 300,
-              'monthly': {'2026-10': 1250},
-              'history': [
+              'items': [
                 {
                   'id': 'earn-1',
-                  'amount': 1250,
-                  'status': 'paid',
-                  'description': 'Commercial Arbitration Consultation',
+                  'user_id': 'uid-1',
+                  'balance': 300,
+                  'total_earnings': 1250,
+                  'breakdown': {
+                    'history': [
+                      {
+                        'id': 'earning-1',
+                        'amount': 1250,
+                        'status': 'paid',
+                        'description': 'Commercial Arbitration Consultation',
+                      },
+                    ],
+                  },
                 },
               ],
+              'total': 1,
             });
           }
           return jsonOk(<String, dynamic>{});
@@ -538,33 +591,33 @@ void main() {
       );
 
       expect(find.textContaining('\$1250.00'), findsWidgets);
-      expect(
-        find.text('Commercial Arbitration Consultation'),
-        findsOneWidget,
-      );
+      expect(find.text('Commercial Arbitration Consultation'), findsOneWidget);
     });
 
-    testWidgets('shows authorization notice when server returns 403 for client',
-        (tester) async {
-      await _pumpSignedIn(
-        tester,
-        const EarningsScreen(),
-        role: 'client',
-        handler: (req, _) async {
-          if (req.url.path.endsWith('/earnings/uid-1') && req.method == 'GET') {
-            return jsonError(403, 'Forbidden');
-          }
-          return jsonOk(<String, dynamic>{});
-        },
-      );
+    testWidgets(
+      'shows authorization notice when server returns 403 for client',
+      (tester) async {
+        await _pumpSignedIn(
+          tester,
+          const EarningsScreen(),
+          role: 'client',
+          handler: (req, _) async {
+            if (req.url.path.endsWith('/earnings') && req.method == 'GET') {
+              return jsonError(403, 'Forbidden');
+            }
+            return jsonOk(<String, dynamic>{});
+          },
+        );
 
-      expect(find.textContaining('Lawyer Account Required'), findsOneWidget);
-    });
+        expect(find.textContaining('Lawyer Account Required'), findsOneWidget);
+      },
+    );
   });
 
   group('CompletedOrders, CancelledOrders, and GroceryNotifications', () {
-    testWidgets('CompletedOrders renders completed bookings from the API',
-        (tester) async {
+    testWidgets('CompletedOrders renders completed bookings from the API', (
+      tester,
+    ) async {
       await _pumpSignedIn(
         tester,
         const CompletedOrders(),
@@ -594,8 +647,9 @@ void main() {
       expect(find.text('\$500'), findsOneWidget);
     });
 
-    testWidgets('CancelledOrders renders cancelled bookings from the API',
-        (tester) async {
+    testWidgets('CancelledOrders renders cancelled bookings from the API', (
+      tester,
+    ) async {
       await _pumpSignedIn(
         tester,
         const CancelledOrders(),
@@ -626,51 +680,55 @@ void main() {
     });
 
     testWidgets(
-        'GroceryNotifications renders notifications and marks them read',
-        (tester) async {
-      var markReadCalled = false;
-      await _pumpSignedIn(
-        tester,
-        const GroceryNotifications(),
-        handler: (req, _) async {
-          if (req.url.path.contains('/notifications') && req.method == 'GET') {
-            return jsonOk({
-              'items': [
-                {
-                  'id': 'notif-1',
-                  'userId': 'uid-1',
-                  'title': 'Booking Confirmed',
-                  'content': 'Your appointment with Mona Fahmy is confirmed.',
-                  'type': 'booking',
-                  'read': false,
-                },
-              ],
-              'total': 1,
-            });
-          }
-          if (req.url.path.contains('/notifications') && req.method == 'PUT') {
-            markReadCalled = true;
-            return jsonOk({'id': 'notif-1', 'read': true});
-          }
-          return jsonOk(<String, dynamic>{});
-        },
-      );
+      'GroceryNotifications renders notifications and marks them read',
+      (tester) async {
+        var markReadCalled = false;
+        await _pumpSignedIn(
+          tester,
+          const GroceryNotifications(),
+          handler: (req, _) async {
+            if (req.url.path.contains('/notifications') &&
+                req.method == 'GET') {
+              return jsonOk({
+                'items': [
+                  {
+                    'id': 'notif-1',
+                    'userId': 'uid-1',
+                    'title': 'Booking Confirmed',
+                    'content': 'Your appointment with Mona Fahmy is confirmed.',
+                    'type': 'booking',
+                    'read': false,
+                  },
+                ],
+                'total': 1,
+              });
+            }
+            if (req.url.path.endsWith('/rpc/rpc_notification_update') &&
+                req.method == 'POST') {
+              markReadCalled = true;
+              return jsonOk({'id': 'notif-1', 'read': true});
+            }
+            return jsonOk(<String, dynamic>{});
+          },
+        );
 
-      expect(find.textContaining('Booking Confirmed'), findsOneWidget);
-      expect(
-        find.text('Your appointment with Mona Fahmy is confirmed.'),
-        findsOneWidget,
-      );
+        expect(find.textContaining('Booking Confirmed'), findsOneWidget);
+        expect(
+          find.text('Your appointment with Mona Fahmy is confirmed.'),
+          findsOneWidget,
+        );
 
-      await tester.tap(find.text('Booking Confirmed'));
-      await _drain(tester);
-      expect(markReadCalled, isTrue);
-    });
+        await tester.tap(find.text('Booking Confirmed'));
+        await _drain(tester);
+        expect(markReadCalled, isTrue);
+      },
+    );
   });
 
   group('LegalServiceDetailsScreen', () {
-    testWidgets('loads lawyer details, availability count, and reviews',
-        (tester) async {
+    testWidgets('loads lawyer details, availability count, and reviews', (
+      tester,
+    ) async {
       await _pumpSignedIn(
         tester,
         const LegalServiceDetailsScreen(lawyerId: 'lawyer-1'),
@@ -688,7 +746,7 @@ void main() {
               'bio': 'Senior family law counsel.',
             });
           }
-          if (req.url.path.contains('/reviews') && req.method == 'GET') {
+          if (req.url.path.endsWith('/public_reviews') && req.method == 'GET') {
             return jsonOk({
               'items': [
                 {

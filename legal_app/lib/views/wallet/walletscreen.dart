@@ -9,7 +9,7 @@ import '../../widgets/detailstext2.dart';
 import 'toppup.dart';
 import 'transactions.dart';
 
-/// User wallet balance and transaction history backed by `GET /api/wallet/:userId`.
+/// User wallet balance and transaction history backed by owner-scoped Supabase queries.
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
 
