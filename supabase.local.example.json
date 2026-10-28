@@ -1,5 +1,5 @@
 {
-  "SUPABASE_URL": "https://qqfzbecwhewswkyxgebu.supabase.co",
-  "SUPABASE_ANON_KEY": "<public anon/publishable key — sb_publishable_...>",
-  "SUPABASE_AUTH_REDIRECT_URL": ""
+  "SUPABASE_URL": "https://YOUR_PROJECT_REF.supabase.co",
+  "SUPABASE_ANON_KEY": "YOUR_SUPABASE_ANON_KEY",
+  "SUPABASE_AUTH_REDIRECT_URL": "YOUR_AUTH_REDIRECT_URL"
 }
